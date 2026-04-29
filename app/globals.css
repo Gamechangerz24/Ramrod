@@ -945,6 +945,117 @@ img {
   padding: 12px;
 }
 
+@media (min-width: 1181px) {
+  .workspace {
+    gap: 14px;
+    padding: 20px 24px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .topbar h1 {
+    font-size: clamp(32px, 3.1vw, 46px);
+    max-width: 760px;
+  }
+
+  .topbar-actions {
+    flex-basis: 610px;
+    padding-top: 10px;
+  }
+
+  .metrics {
+    gap: 10px;
+  }
+
+  .metric {
+    min-height: 66px;
+    padding: 12px;
+  }
+
+  .metric > span {
+    flex-basis: 34px;
+    height: 34px;
+    width: 34px;
+  }
+
+  .metric strong {
+    font-size: 19px;
+  }
+
+  .inventory-layout {
+    align-items: stretch;
+    grid-template-columns: minmax(360px, 0.43fr) minmax(720px, 1fr);
+    height: calc(100vh - 284px);
+    min-height: 580px;
+  }
+
+  .inventory-list {
+    max-height: none;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px;
+  }
+
+  .item-row {
+    grid-template-columns: 56px minmax(0, 1fr) auto;
+    min-height: 68px;
+  }
+
+  .item-row img {
+    height: 56px;
+    width: 56px;
+  }
+
+  .inspector {
+    grid-template-columns: minmax(420px, 0.95fr) minmax(440px, 1.05fr);
+    height: 100%;
+    min-height: 0;
+  }
+
+  .inspector-media {
+    align-items: center;
+    background: #f1f4f7;
+    border-right: 1px solid var(--line);
+    display: flex;
+    justify-content: center;
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .inspector-media img {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: inset 0 0 0 1px rgba(23, 33, 58, 0.08);
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    object-fit: contain;
+    width: 100%;
+  }
+
+  .inspector-content {
+    align-content: start;
+    gap: 14px;
+    overflow: auto;
+    padding: 18px 18px 22px;
+  }
+
+  .inspector-title h2 {
+    font-size: clamp(24px, 2.1vw, 34px);
+  }
+
+  .detail-grid,
+  .price-grid {
+    gap: 8px;
+  }
+
+  .suggestion {
+    padding: 10px;
+  }
+}
+
 @media (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 86px minmax(0, 1fr);
@@ -982,6 +1093,7 @@ img {
   .inspector-media img {
     max-height: 420px;
     min-height: 320px;
+    object-fit: contain;
   }
 }
 
@@ -1076,6 +1188,22 @@ img {
 
   .ship-row img {
     height: 120px;
+    width: 100%;
+  }
+
+  .inspector {
+    overflow: visible;
+  }
+
+  .inspector-media {
+    min-height: 0;
+  }
+
+  .inspector-media img {
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    object-fit: contain;
     width: 100%;
   }
 
