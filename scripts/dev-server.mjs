@@ -157,7 +157,9 @@ function mapAnalysisToItem(analysis, body) {
     })),
     whatnotScript: dominant.whatnotScript,
     listingDraft: dominant.listingDraft,
-    otherVisibleItems: analysis.otherVisibleItems
+    otherVisibleItems: analysis.otherVisibleItems,
+    sourceType: "live_openai",
+    analysisModel: model
   };
 }
 

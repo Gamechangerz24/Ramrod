@@ -42,7 +42,9 @@ const items = data.results.map((result, index) => {
     listingDraft: item.listingDraft,
     otherVisibleItems: result.analysis.otherVisibleItems,
     sourceFile: result.source.name,
-    sourceDriveUrl: result.source.driveUrl
+    sourceDriveUrl: result.source.driveUrl,
+    sourceType: "batch_openai",
+    analysisModel: data.model
   };
 });
 

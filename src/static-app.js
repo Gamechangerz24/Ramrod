@@ -23,6 +23,7 @@ const seedItems = [
     weight: 0.42,
     image: "https://images.unsplash.com/photo-1609372332255-611485350f25?auto=format&fit=crop&w=900&q=80",
     notes: "Preisanker ueber verkaufte Displays pruefen. Fotos von Siegeln sind entscheidend.",
+    sourceType: "demo",
     research: [["eBay", "Aehnliche aktive Listings", 169, "heute"], ["eBay Solds", "Verkaufte Displays", 149, "14 Tage"], ["Collector Signal", "Nachfrage stabil", 158, "30 Tage"]]
   },
   {
@@ -43,6 +44,7 @@ const seedItems = [
     weight: 0.08,
     image: "https://images.unsplash.com/photo-1605901309584-818e25960a8f?auto=format&fit=crop&w=900&q=80",
     notes: "Als schneller Live-Artikel geeignet. Zustand zeigen, Funktionstest nennen.",
+    sourceType: "demo",
     research: [["eBay", "Lose Cartridges", 24, "7 Tage"], ["PriceCharting", "Loose average", 27, "30 Tage"], ["Whatnot", "Live-Startpreise", 15, "manuell"]]
   },
   {
@@ -63,6 +65,7 @@ const seedItems = [
     weight: 0.82,
     image: "https://images.unsplash.com/photo-1608889825103-eb5ed706fc64?auto=format&fit=crop&w=900&q=80",
     notes: "Variante muss validiert werden. Potenziell wertvoll, nicht automatisch listen.",
+    sourceType: "demo",
     research: [["eBay", "Unklare Varianten", 80, "21 Tage"], ["Forum", "Limitierte Serie erwaehnt", 90, "alt"], ["CREATORS Regel", "Confidence unter 65", 0, "jetzt"]]
   }
 ];
@@ -125,6 +128,7 @@ function analyze(draft = state.draft) {
     weight: Number(draft.weight) || 0.25,
     image: draft.photo || "https://images.unsplash.com/photo-1611996575749-79a3a250f948?auto=format&fit=crop&w=900&q=80",
     notes: confidence < 65 ? "KI ist unsicher. Variante, Zustand und Vergleichspreise vor Listing manuell pruefen." : "Listing-Entwurf bereit. Titel, Zustand und Versandgewicht vor Publikation bestaetigen.",
+    sourceType: "mock",
     research: [["eBay", "Aktive Vergleichsartikel", fair + 12, "simuliert"], ["eBay Solds", "Verkaufte Vergleichsartikel", fair - 8, "simuliert"], ["CREATORS", "Routing-Regel", fair, "jetzt"]]
   };
 }
@@ -236,7 +240,7 @@ function inventoryView(selected) {
 }
 
 function itemRow(item) {
-  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${item.category}</small></span><em>${euro(item.fair)}</em></button>`;
+  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${item.category}</small><small>${sourceBadge(item)}</small></span><em>${euro(item.fair)}</em></button>`;
 }
 
 function inspector(item) {
@@ -252,6 +256,7 @@ function inspector(item) {
     <div class="inspector-media"><img src="${item.image}" alt="${escapeHtml(item.title)}" /></div>
     <div class="inspector-content">
       <div class="inspector-title"><div><p>${item.sku}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${item.channel.toLowerCase()}">${item.channel}</span></div>
+      <div class="source-strip">${sourceBadge(item)}</div>
       <div class="price-grid">${suggestion("Low", euro(item.low))}${suggestion("Fair", euro(item.fair))}${suggestion("Aggressiv", euro(item.aggressive))}${suggestion("Confidence", `${item.confidence}%`)}</div>
       <div class="segment-control" aria-label="Plattformrouting">${["Pruefen", "eBay", "Whatnot", "Bundle", "Problemfall"].map((channel) => `<button class="${item.channel === channel ? "selected" : ""}" data-route="${channel}" data-id="${item.id}" type="button">${channel}</button>`).join("")}</div>
       <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollstaendigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
@@ -382,7 +387,7 @@ function bindEvents() {
       state.importStatus = usedLiveAi ? "Live-KI Artikelkarte erzeugt." : "Mock-Artikelkarte erzeugt.";
       save();
     } catch (error) {
-      state.importStatus = `Live-KI fehlgeschlagen: ${error.message}. Mock-Vorschau bleibt verfuegbar.`;
+      state.importStatus = `Live-KI fehlgeschlagen: ${error.message}. Es wurde kein Live-Artikel erzeugt.`;
     } finally {
       state.analyzing = false;
       render();
@@ -453,6 +458,18 @@ async function analyzeWithApi() {
     throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
   }
   return payload.item;
+}
+
+function sourceBadge(item) {
+  const source = item.sourceType || (item.sourceFile ? "batch_openai" : "unknown");
+  const labels = {
+    live_openai: "Quelle: Live-OpenAI",
+    batch_openai: "Quelle: Drive-Batch OpenAI",
+    mock: "Quelle: Mock/Simulation",
+    demo: "Quelle: Demo-Daten",
+    unknown: "Quelle: unbekannt"
+  };
+  return labels[source] || labels.unknown;
 }
 
 function makeId() {

@@ -608,6 +608,16 @@ img {
   margin-top: 5px;
 }
 
+.source-strip {
+  background: #f7f9fb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+
 .item-row em {
   color: var(--green);
   font-style: normal;
