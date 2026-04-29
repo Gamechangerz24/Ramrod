@@ -47,6 +47,7 @@ for (const file of files) {
                 "Analysiere dieses Foto aus einer wilden Strongvision-Kiste.",
                 "Ein Foto kann einen dominanten Artikel und weitere Nebenartikel zeigen.",
                 "Erkenne nur, was visuell begruendbar ist. Erfinde keine Barcodes, Seriennummern oder Editionen.",
+                "Nutze sichtbare Initialen, Farb-Codierungen und Beschriftungen zur Charakteridentifikation. Bei Teenage Mutant Ninja Turtles gilt: orange Maske oder M am Guertel = Michelangelo, blau oder L = Leonardo, rot oder R = Raphael, lila oder D = Donatello. Wenn sichtbare Hinweise einem bekannten Namen widersprechen, priorisiere die sichtbaren Hinweise und senke die Confidence.",
                 "Gib eine operative Artikelkarte fuer den Verkauf aus.",
                 "Preise sind nur grobe Vor-Recherche-Startwerte in EUR, keine finale Bewertung."
               ].join(" ")
