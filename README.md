@@ -21,22 +21,22 @@ npm run dev
 Open:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:3001
 ```
 
 For another device on the same Wi-Fi, use the Mac hostname:
 
 ```text
-http://MacBook-Pro-von-MICHAEL.local:3000
+http://MacBook-Pro-von-MICHAEL.local:3001
 ```
 
-If that does not resolve on iPhone, start a server bound to all interfaces:
+If that does not resolve on iPhone, use the Mac's local network IP:
 
-```bash
-python3 -m http.server 3000 --bind 0.0.0.0
+```text
+http://172.16.100.14:3001
 ```
 
-Then open the Mac's local network IP on the iPhone.
+The local server exposes `/api/analyze-image` for live OpenAI image analysis.
 
 ## Sensitive Data
 

@@ -79,6 +79,7 @@ const state = {
   search: "",
   importStatus: "",
   channelPlan: null,
+  analyzing: false,
   draft: {
     query: "",
     boxId: "SV-001",
@@ -209,7 +210,7 @@ function scanView() {
         ${field("Gewicht kg", `<div class="input-with-icon">${icon("KG")}<input id="weight" value="${escapeHtml(state.draft.weight)}" inputmode="decimal" /></div>`)}
         ${field("Vollstaendigkeit", `<input id="completeness" value="${escapeHtml(state.draft.completeness)}" />`)}
       </div>
-      <button class="primary-action" id="add-item" type="button">${icon("AI")}KI-Vorschlag erzeugen</button>
+      <button class="primary-action" id="add-item" type="button">${icon("AI")}${state.analyzing ? "Analysiere Foto..." : "KI-Vorschlag erzeugen"}</button>
     </div>
     <div class="ai-panel">
       <div class="panel-heading"><div><p>AI Copilot</p><h2>Vorschau</h2></div>${icon("AI")}</div>
@@ -366,14 +367,26 @@ function bindEvents() {
   });
 
   const add = document.querySelector("#add-item");
-  if (add) add.addEventListener("click", () => {
-    const item = analyze();
-    state.items.unshift(item);
-    state.selected = item.id;
-    state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprueft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
-    state.view = "inventory";
-    save();
+  if (add) add.addEventListener("click", async () => {
+    if (state.analyzing) return;
+    const usedLiveAi = Boolean(state.draft.photo);
+    state.analyzing = true;
+    state.importStatus = usedLiveAi ? "OpenAI analysiert das Foto..." : "Kein Foto vorhanden, nutze lokalen Mock-Vorschlag.";
     render();
+    try {
+      const item = usedLiveAi ? await analyzeWithApi() : analyze();
+      state.items.unshift(item);
+      state.selected = item.id;
+      state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprueft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
+      state.view = "inventory";
+      state.importStatus = usedLiveAi ? "Live-KI Artikelkarte erzeugt." : "Mock-Artikelkarte erzeugt.";
+      save();
+    } catch (error) {
+      state.importStatus = `Live-KI fehlgeschlagen: ${error.message}. Mock-Vorschau bleibt verfuegbar.`;
+    } finally {
+      state.analyzing = false;
+      render();
+    }
   });
 
   const reset = document.querySelector("#reset");
@@ -420,6 +433,26 @@ function bindEvents() {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
+}
+
+async function analyzeWithApi() {
+  const response = await fetch("/api/analyze-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      imageDataUrl: state.draft.photo,
+      boxId: state.draft.boxId,
+      condition: state.draft.condition,
+      completeness: state.draft.completeness,
+      barcode: state.draft.barcode,
+      weight: state.draft.weight
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+  }
+  return payload.item;
 }
 
 function makeId() {
