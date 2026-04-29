@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "channels": [
+    {
+      "id": "ebay",
+      "name": "eBay",
+      "type": "marketplace",
+      "automationLevel": "api-first",
+      "priority": 1,
+      "bestFor": [
+        "collectibles with searchable demand",
+        "retro games",
+        "action figures",
+        "fixed price listings",
+        "auction tests"
+      ],
+      "requiresHumanApproval": false,
+      "connectorStatus": "planned",
+      "saleDetection": "webhook-or-polling",
+      "delistSupported": true
+    },
+    {
+      "id": "whatnot",
+      "name": "Whatnot",
+      "type": "live-commerce",
+      "automationLevel": "semi-automatic",
+      "priority": 2,
+      "bestFor": [
+        "live show batches",
+        "low to mid value nerd items",
+        "games and pop culture bundles",
+        "items needing storytelling"
+      ],
+      "requiresHumanApproval": true,
+      "connectorStatus": "manual-export-first",
+      "saleDetection": "csv-or-manual-import",
+      "delistSupported": false
+    },
+    {
+      "id": "strongvision_web",
+      "name": "Strongvision Webseite",
+      "type": "client-system",
+      "automationLevel": "sync",
+      "priority": 3,
+      "bestFor": [
+        "client inventory mirror",
+        "owned shop listings",
+        "public archive",
+        "customer reporting"
+      ],
+      "requiresHumanApproval": false,
+      "connectorStatus": "needs-website-stack",
+      "saleDetection": "depends-on-stack",
+      "delistSupported": true
+    },
+    {
+      "id": "creators_shop",
+      "name": "CREATORS Shop",
+      "type": "owned-commerce",
+      "automationLevel": "api-first",
+      "priority": 4,
+      "bestFor": [
+        "owned margin",
+        "SEO inventory",
+        "bundles",
+        "items not urgent to liquidate"
+      ],
+      "requiresHumanApproval": false,
+      "connectorStatus": "planned",
+      "saleDetection": "webhook",
+      "delistSupported": true
+    },
+    {
+      "id": "kleinanzeigen",
+      "name": "Kleinanzeigen",
+      "type": "classifieds",
+      "automationLevel": "manual-or-browser",
+      "priority": 5,
+      "bestFor": [
+        "bulky items",
+        "local pickup",
+        "low value bundles",
+        "console lots"
+      ],
+      "requiresHumanApproval": true,
+      "connectorStatus": "research",
+      "saleDetection": "manual",
+      "delistSupported": "manual"
+    },
+    {
+      "id": "cardmarket",
+      "name": "Cardmarket",
+      "type": "specialized-marketplace",
+      "automationLevel": "api-possible",
+      "priority": 6,
+      "bestFor": [
+        "trading cards",
+        "sealed TCG",
+        "single cards",
+        "graded cards"
+      ],
+      "requiresHumanApproval": true,
+      "connectorStatus": "later",
+      "saleDetection": "api-or-polling",
+      "delistSupported": true
+    },
+    {
+      "id": "discogs",
+      "name": "Discogs",
+      "type": "specialized-marketplace",
+      "automationLevel": "api-possible",
+      "priority": 7,
+      "bestFor": [
+        "vinyl",
+        "music media",
+        "rare physical releases"
+      ],
+      "requiresHumanApproval": true,
+      "connectorStatus": "later",
+      "saleDetection": "api-or-polling",
+      "delistSupported": true
+    },
+    {
+      "id": "liquidation_buyers",
+      "name": "Liquidation Buyer Basket",
+      "type": "fallback",
+      "automationLevel": "quote-or-manual",
+      "priority": 8,
+      "bestFor": [
+        "very low value media",
+        "bulk games",
+        "damaged items",
+        "fast cash floor"
+      ],
+      "requiresHumanApproval": true,
+      "connectorStatus": "later",
+      "saleDetection": "manual",
+      "delistSupported": false
+    }
+  ]
+}

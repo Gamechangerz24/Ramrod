@@ -1,0 +1,18 @@
+.next
+node_modules
+out
+dist
+.env
+.env.local
+npm-debug.log*
+.DS_Store
+
+# Local client imports and generated analysis outputs
+imports/
+data/drive-demo-files.json
+data/drive-demo-analysis.json
+data/app-import-items.json
+data/channel-listing-plan.json
+
+# Keep shareable configuration files in git
+!data/channel-config.json

@@ -1,0 +1,12 @@
+{
+  "name": "scanapp",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "python3 -m http.server 3000 --bind 127.0.0.1",
+    "build": "node scripts/verify-static.mjs",
+    "start": "python3 -m http.server 3000 --bind 127.0.0.1",
+    "normalize:drive": "node scripts/normalize-import-images.mjs data/drive-demo-files.json",
+    "analyze:drive": "node scripts/analyze-drive-images.mjs data/drive-demo-files.json"
+  }
+}
