@@ -76,12 +76,36 @@ const hints = [
   { tokens: ["funko", "figur", "anime", "statue", "collectible"], category: "Collectibles", franchise: "Pop Culture", low: 18, fair: 49, aggressive: 89, channel: "Pruefen", confidence: 62 }
 ];
 
+const primaryChannels = [
+  { id: "eBay", label: "eBay", status: "bereit", note: "API geplant" },
+  { id: "Whatnot", label: "Whatnot", status: "bereit", note: "Show-Batch" },
+  { id: "Strongvision", label: "Strongvision", status: "bereit", note: "Website/DB" }
+];
+
+const futureChannels = [
+  "Shopify Hub",
+  "WooCommerce",
+  "Kaufland",
+  "Amazon",
+  "Hood.de",
+  "Etsy",
+  "BrickLink",
+  "Cardmarket",
+  "Discogs",
+  "Kleinanzeigen",
+  "Facebook Marketplace",
+  "Vinted",
+  "Catawiki",
+  "Liquidation Basket"
+].map((label) => ({ id: label, label, status: "noch nicht verfuegbar", note: "Roadmap" }));
+
 const state = {
   view: "scan",
   selected: "itm-001",
   search: "",
   importStatus: "",
   channelPlan: null,
+  showAllChannels: false,
   analyzing: false,
   draft: {
     query: "",
@@ -258,7 +282,7 @@ function inspector(item) {
       <div class="inspector-title"><div><p>${item.sku}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${item.channel.toLowerCase()}">${item.channel}</span></div>
       <div class="source-strip">${sourceBadge(item)}</div>
       <div class="price-grid">${suggestion("Low", euro(item.low))}${suggestion("Fair", euro(item.fair))}${suggestion("Aggressiv", euro(item.aggressive))}${suggestion("Confidence", `${item.confidence}%`)}</div>
-      <div class="segment-control" aria-label="Plattformrouting">${["Pruefen", "eBay", "Whatnot", "Bundle", "Problemfall"].map((channel) => `<button class="${item.channel === channel ? "selected" : ""}" data-route="${channel}" data-id="${item.id}" type="button">${channel}</button>`).join("")}</div>
+      ${channelPicker(item)}
       <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollstaendigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
       <section class="research"><h3>Preisquellen</h3>${research.map((comp) => `<div class="research-row"><span>${comp[0]}</span><strong>${comp[1]}</strong><em>${comp[2] ? euro(comp[2]) : "Regel"}</em><small>${comp[3]}</small></div>`).join("")}</section>
       <section class="script-box"><h3>Whatnot Skript</h3><p>${script}</p></section>
@@ -267,9 +291,26 @@ function inspector(item) {
   </div>`;
 }
 
+function channelPicker(item) {
+  const options = state.showAllChannels ? [...primaryChannels, ...futureChannels] : primaryChannels;
+  const moreLabel = state.showAllChannels ? "Weniger anzeigen" : "Mehr anzeigen";
+  return `<section class="channel-picker" aria-label="Plattformrouting">
+    <div class="channel-picker-head"><span>Plattformrouting</span><button data-toggle-channels type="button">${moreLabel}</button></div>
+    <div class="segment-control">${options.map((channel) => channelButton(channel, item)).join("")}</div>
+    <p>${state.showAllChannels ? "Weitere Kanaele sind als Roadmap sichtbar und noch gesperrt." : "Die drei operativen Optionen fuer den aktuellen Demo-Flow."}</p>
+  </section>`;
+}
+
+function channelButton(channel, item) {
+  const disabled = channel.status !== "bereit";
+  const selected = item.channel === channel.id;
+  const attrs = disabled ? "disabled aria-disabled=\"true\"" : `data-route="${channel.id}" data-id="${item.id}"`;
+  return `<button class="${selected ? "selected" : ""} ${disabled ? "locked" : ""}" ${attrs} type="button"><strong>${escapeHtml(channel.label)}</strong><small>${escapeHtml(channel.status)}</small></button>`;
+}
+
 function routingView() {
   if (state.channelPlan) return channelPlanView();
-  return `<section class="routing-board">${["Pruefen", "eBay", "Whatnot", "Bundle", "Problemfall"].map((channel) => `<div class="route-column"><div class="route-heading"><span>${channel}</span><strong>${channel}</strong><span>${state.items.filter((item) => item.channel === channel).length}</span></div>${state.items.filter((item) => item.channel === channel).map((item) => `<button class="route-item" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% sicher</small></span></button>`).join("")}</div>`).join("")}</section>`;
+  return `<section class="routing-board">${["Pruefen", "eBay", "Whatnot", "Strongvision", "Bundle", "Problemfall"].map((channel) => `<div class="route-column"><div class="route-heading"><span>${channel}</span><strong>${channel}</strong><span>${state.items.filter((item) => item.channel === channel).length}</span></div>${state.items.filter((item) => item.channel === channel).map((item) => `<button class="route-item" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% sicher</small></span></button>`).join("")}</div>`).join("")}</section>`;
 }
 
 function channelPlanView() {
@@ -327,6 +368,10 @@ function bindEvents() {
     const item = state.items.find((entry) => entry.id === button.dataset.id);
     item.channel = button.dataset.route;
     save();
+    render();
+  }));
+  document.querySelectorAll("[data-toggle-channels]").forEach((button) => button.addEventListener("click", () => {
+    state.showAllChannels = !state.showAllChannels;
     render();
   }));
   document.querySelectorAll("[data-ship]").forEach((button) => button.addEventListener("click", () => {

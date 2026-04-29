@@ -735,10 +735,69 @@ img {
   box-shadow: 0 6px 18px rgba(23, 33, 58, 0.1);
 }
 
+.segment-control button.locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .segment-control span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.segment-control strong,
+.segment-control small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segment-control small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+.channel-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.channel-picker-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.channel-picker-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.channel-picker-head button {
+  background: transparent;
+  border: 0;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 900;
+  padding: 0;
+}
+
+.channel-picker .segment-control {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.channel-picker p {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
 }
 
 .research,
