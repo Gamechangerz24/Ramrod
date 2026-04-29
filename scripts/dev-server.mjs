@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 
 loadDotEnv(".env.local");
@@ -8,6 +8,7 @@ const root = resolve(".");
 const port = Number(process.env.PORT || 3001);
 const host = process.env.HOST || "0.0.0.0";
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
+const liveImageDetail = process.env.OPENAI_LIVE_IMAGE_DETAIL || process.env.OPENAI_IMAGE_DETAIL || "low";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -91,7 +92,7 @@ async function handleAnalyzeImage(request, response) {
             {
               type: "input_image",
               image_url: body.imageDataUrl,
-              detail: process.env.OPENAI_IMAGE_DETAIL || "high"
+              detail: liveImageDetail
             }
           ]
         }
@@ -274,7 +275,7 @@ function serveStatic(request, response) {
     return;
   }
 
-  createReadStream(filePath).pipe(response);
+  response.end(readFileSync(filePath));
 }
 
 function readRequestBody(request, limit) {

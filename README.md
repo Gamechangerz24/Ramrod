@@ -37,6 +37,7 @@ http://172.16.100.14:3001
 ```
 
 The local server exposes `/api/analyze-image` for live OpenAI image analysis.
+Live scan uploads are resized in the browser and use low image detail by default to keep mobile scans fast and cheap.
 
 ## Sensitive Data
 

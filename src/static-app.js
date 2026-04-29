@@ -360,15 +360,20 @@ function bindEvents() {
   });
 
   const photo = document.querySelector("#photo");
-  if (photo) photo.addEventListener("change", (event) => {
+  if (photo) photo.addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      state.draft.photo = String(reader.result);
-      render();
-    };
-    reader.readAsDataURL(file);
+    state.importStatus = `Foto wird vorbereitet (${formatBytes(file.size)})...`;
+    render();
+    try {
+      const prepared = await prepareImageForAi(file);
+      state.draft.photo = prepared.dataUrl;
+      state.importStatus = `Foto bereit fuer Live-KI (${prepared.width}x${prepared.height}, ${formatBytes(prepared.bytes)}).`;
+    } catch (error) {
+      state.importStatus = `Bildoptimierung fehlgeschlagen: ${error.message}. Nutze Originalbild.`;
+      state.draft.photo = await readFileAsDataUrl(file);
+    }
+    render();
   });
 
   const add = document.querySelector("#add-item");
@@ -438,6 +443,54 @@ function bindEvents() {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
+}
+
+async function prepareImageForAi(file) {
+  const image = await loadImage(file);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("Canvas nicht verfuegbar");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+  URL.revokeObjectURL(image.src);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+  return {
+    dataUrl,
+    width,
+    height,
+    bytes: Math.round((dataUrl.length * 3) / 4)
+  };
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Bild konnte nicht gelesen werden"));
+    image.src = URL.createObjectURL(file);
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Datei konnte nicht gelesen werden"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "unbekannt";
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 async function analyzeWithApi() {
