@@ -107,7 +107,7 @@ function analyze(draft = state.draft) {
   const confidence = Math.max(38, hint.confidence - (incomplete ? 18 : 0));
   const fair = Math.round(hint.fair * (draft.condition === "Sehr gut" ? 1.18 : 1));
   return {
-    id: crypto.randomUUID(),
+    id: makeId(),
     sku: nextSku(draft.boxId),
     boxId: draft.boxId,
     title: draft.query.trim() || "Unbekannter Sammlerartikel",
@@ -420,6 +420,11 @@ function bindEvents() {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char]);
+}
+
+function makeId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 render();
