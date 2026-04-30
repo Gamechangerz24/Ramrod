@@ -7,6 +7,7 @@
     "build": "node scripts/verify-static.mjs",
     "start": "node scripts/dev-server.mjs",
     "normalize:drive": "node scripts/normalize-import-images.mjs data/drive-demo-files.json",
-    "analyze:drive": "node scripts/analyze-drive-images.mjs data/drive-demo-files.json"
+    "analyze:drive": "node scripts/analyze-drive-images.mjs data/drive-demo-files.json",
+    "ebay:token": "node scripts/ebay-token-doctor.mjs"
   }
 }

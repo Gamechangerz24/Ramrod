@@ -29,12 +29,33 @@ EBAY_ENV=sandbox
 EBAY_CLIENT_ID=
 EBAY_CLIENT_SECRET=
 EBAY_REDIRECT_URI=
+EBAY_OAUTH_USER_TOKEN=
+EBAY_AUTH_N_AUTH_TOKEN=
 EBAY_MARKETPLACE_ID=EBAY_DE
 EBAY_PAYMENT_POLICY_ID=
 EBAY_FULFILLMENT_POLICY_ID=
 EBAY_RETURN_POLICY_ID=
 EBAY_MERCHANT_LOCATION_KEY=creators-warehouse-01
 ```
+
+## Token Types
+
+eBay exposes two token families that are easy to confuse:
+
+- OAuth access tokens: required for the modern REST/Sell APIs RAMROD should use for Inventory, Offers, Fulfillment and Orders.
+- Auth'n'Auth user tokens: legacy tokens for traditional APIs such as Trading API.
+
+The developer portal's "User Tokens" page can produce Auth'n'Auth tokens. They are useful for legacy Trading API tests, but they are not the primary path for RAMROD's planned connector.
+
+Use:
+
+```bash
+npm run ebay:token
+```
+
+to classify the locally configured token without sending it to eBay.
+
+For the Sell API connector, generate an OAuth User Access Token in Sandbox with at least the scopes needed by Inventory and Fulfillment calls.
 
 ## API Flow
 
