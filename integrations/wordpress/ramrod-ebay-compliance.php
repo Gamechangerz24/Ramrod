@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RAMROD eBay Compliance
  * Description: Provides RAMROD eBay OAuth placeholder and marketplace account deletion endpoints.
- * Version: 0.1.0
+ * Version: 0.1.1
  * Author: Gamechangerz UG
  */
 
@@ -70,7 +70,7 @@ function ramrod_ebay_account_deletion()
 {
     $challenge_code = isset($_GET['challenge_code']) ? sanitize_text_field(wp_unslash($_GET['challenge_code'])) : '';
     $token = ramrod_ebay_verification_token();
-    $endpoint = home_url('/ramrod/ebay/account-deletion');
+    $endpoint = home_url('/ramrod/ebay/account-deletion/');
 
     if ($_SERVER['REQUEST_METHOD'] === 'GET' && $challenge_code !== '') {
         $response_hash = hash('sha256', $challenge_code . $token . $endpoint);
@@ -143,7 +143,7 @@ function ramrod_ebay_settings_page()
         return;
     }
 
-    $endpoint = home_url('/ramrod/ebay/account-deletion');
+    $endpoint = home_url('/ramrod/ebay/account-deletion/');
     $token = ramrod_ebay_verification_token();
     $last = get_option(RAMROD_EBAY_OPTION_LOG, array());
     ?>
