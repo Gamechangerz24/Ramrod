@@ -103,6 +103,8 @@ The local app can already generate:
 
 This does not publish anything and does not transmit item data to eBay.
 
+Set `EBAY_PRICE_PROVIDER=ebay-browse` only when a real eBay price-check test is intended. In that mode RAMROD sends the generated search query to the configured eBay environment and reads active listing summaries through the Browse API.
+
 ## What We Need For Real Price Tests
 
 Minimum useful test:

@@ -9,6 +9,8 @@ const port = Number(process.env.PORT || 3001);
 const host = process.env.HOST || "0.0.0.0";
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 const liveImageDetail = process.env.OPENAI_LIVE_IMAGE_DETAIL || process.env.OPENAI_IMAGE_DETAIL || "low";
+const ebayPriceProvider = (process.env.EBAY_PRICE_PROVIDER || "local").toLowerCase();
+let ebayAppTokenCache = null;
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -152,13 +154,14 @@ async function handlePriceCheck(request, response) {
     return;
   }
 
-  const priceCheck = buildLocalPriceCheck(item);
+  const priceCheck = await buildPriceCheck(item);
   const ebayDraft = buildEbayDraft(item, priceCheck);
 
   sendJson(response, 200, {
-    provider: "local-evidence",
+    provider: priceCheck.method,
     liveProviderAvailable: {
       ebayBrowse: Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET),
+      ebayBrowseEnabled: ebayPriceProvider === "ebay-browse",
       serpApi: Boolean(process.env.SERPAPI_API_KEY)
     },
     priceCheck,
@@ -184,6 +187,30 @@ async function handleEbayDraft(request, response) {
   });
 }
 
+async function buildPriceCheck(item) {
+  if (ebayPriceProvider === "ebay-browse") {
+    try {
+      const evidence = await fetchEbayBrowseEvidence(item);
+      if (evidence.length) {
+        return buildPriceCheckFromEvidence(item, evidence, "ebay-browse", [
+          "Live-eBay-Browse-Preischeck aus aktiven Sandbox/Marketplace-Angeboten.",
+          "Sold-Prices sind hier noch nicht enthalten.",
+          "Finaler Preis bleibt Review-pflichtig."
+        ]);
+      }
+      const fallback = buildLocalPriceCheck(item);
+      fallback.notes.unshift("eBay Browse lieferte keine verwertbaren Treffer; lokaler Fallback genutzt.");
+      return fallback;
+    } catch (error) {
+      const fallback = buildLocalPriceCheck(item);
+      fallback.notes.unshift(`eBay Browse nicht verfuegbar: ${redactSecret(error.message)}. Lokaler Fallback genutzt.`);
+      return fallback;
+    }
+  }
+
+  return buildLocalPriceCheck(item);
+}
+
 function buildLocalPriceCheck(item) {
   const evidence = normalizeResearch(item)
     .filter((entry) => Number(entry.price) > 0)
@@ -204,6 +231,14 @@ function buildLocalPriceCheck(item) {
     );
   }
 
+  return buildPriceCheckFromEvidence(item, evidence, "local-evidence", [
+    "Lokaler Preischeck aus vorhandenen RAMROD-Hinweisen.",
+    "Noch keine Live-eBay-Abfrage.",
+    "Live-Provider wird spaeter ueber eBay Browse oder SerpApi aktiviert."
+  ]);
+}
+
+function buildPriceCheckFromEvidence(item, evidence, method, notes) {
   const prices = evidence.map((entry) => entry.price).sort((a, b) => a - b);
   const median = prices[Math.floor(prices.length / 2)];
   const average = Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length);
@@ -220,12 +255,91 @@ function buildLocalPriceCheck(item) {
     aggressive: Math.max(fair, Math.round(Math.max(...prices) * 1.08)),
     confidence,
     evidence: evidence.slice(0, 6),
-    notes: [
-      "Lokaler Preischeck aus vorhandenen RAMROD-Hinweisen.",
-      "Noch keine Live-eBay-Abfrage.",
-      "Live-Provider wird spaeter ueber eBay Browse oder SerpApi aktiviert."
-    ]
+    notes
   };
+}
+
+async function fetchEbayBrowseEvidence(item) {
+  const token = await getEbayAppToken();
+  const baseUrl = ebayApiBaseUrl();
+  const marketplaceId = process.env.EBAY_MARKETPLACE_ID || "EBAY_DE";
+  const query = buildSearchQuery(item);
+  const url = new URL(`${baseUrl}/buy/browse/v1/item_summary/search`);
+  url.searchParams.set("q", query);
+  url.searchParams.set("limit", "10");
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-EBAY-C-MARKETPLACE-ID": marketplaceId,
+      "Accept-Language": "de-DE"
+    }
+  });
+  const body = await response.json();
+
+  if (!response.ok) {
+    throw new Error(body.errors?.[0]?.message || body.message || `eBay Browse HTTP ${response.status}`);
+  }
+
+  return (body.itemSummaries || [])
+    .filter((entry) => Number(entry.price?.value) > 0)
+    .map((entry, index) => ({
+      source: "eBay Browse",
+      title: entry.title || item.title,
+      price: Math.round(Number(entry.price.value)),
+      status: "active_listing",
+      age: entry.itemCreationDate ? new Date(entry.itemCreationDate).toLocaleDateString("de-DE") : "live",
+      matchScore: Math.max(48, Math.min(94, Math.round((Number(item.confidence) || 70) - index * 4))),
+      url: entry.itemWebUrl || ""
+    }));
+}
+
+async function getEbayAppToken() {
+  const now = Date.now();
+  if (ebayAppTokenCache && ebayAppTokenCache.expiresAt > now + 60_000) {
+    return ebayAppTokenCache.token;
+  }
+
+  const clientId = process.env.EBAY_CLIENT_ID;
+  const clientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error("EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are required for eBay Browse.");
+  }
+
+  const baseUrl = ebayApiBaseUrl();
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    scope: "https://api.ebay.com/oauth/api_scope"
+  });
+
+  const response = await fetch(`${baseUrl}/identity/v1/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error_description || result.error || `eBay OAuth HTTP ${response.status}`);
+  }
+
+  ebayAppTokenCache = {
+    token: result.access_token,
+    expiresAt: now + Number(result.expires_in || 7200) * 1000
+  };
+
+  return ebayAppTokenCache.token;
+}
+
+function ebayApiBaseUrl() {
+  return (process.env.EBAY_ENV || "sandbox").toLowerCase() === "production"
+    ? "https://api.ebay.com"
+    : "https://api.sandbox.ebay.com";
 }
 
 function buildEbayDraft(item, priceCheck = null) {
