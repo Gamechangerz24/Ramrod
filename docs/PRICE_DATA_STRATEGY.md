@@ -105,6 +105,8 @@ This does not publish anything and does not transmit item data to eBay.
 
 Set `EBAY_PRICE_PROVIDER=ebay-browse` only when a real eBay price-check test is intended. In that mode RAMROD sends the generated search query to the configured eBay environment and reads active listing summaries through the Browse API.
 
+Sandbox limitation: eBay Sandbox can verify the OAuth/client-credentials and Browse API plumbing, but it should not be treated as a real price dataset. In our first AI-import test, Sandbox Browse was reachable but returned no usable active listing results, so RAMROD correctly fell back to local evidence. Real price validation needs Production Browse API access or a third-party search provider.
+
 ## What We Need For Real Price Tests
 
 Minimum useful test:

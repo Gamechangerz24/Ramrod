@@ -199,11 +199,18 @@ async function buildPriceCheck(item) {
         ]);
       }
       const fallback = buildLocalPriceCheck(item);
-      fallback.notes.unshift("eBay Browse lieferte keine verwertbaren Treffer; lokaler Fallback genutzt.");
+      fallback.notes = [
+        "eBay Browse wurde abgefragt, lieferte aber keine verwertbaren Treffer; lokaler Fallback genutzt.",
+        "Das ist in der Sandbox erwartbar, weil dort keine echten Marketplace-Daten liegen.",
+        "Fuer echte eBay-Preise brauchen wir Production Browse API oder einen Fallback wie SerpApi."
+      ];
       return fallback;
     } catch (error) {
       const fallback = buildLocalPriceCheck(item);
-      fallback.notes.unshift(`eBay Browse nicht verfuegbar: ${redactSecret(error.message)}. Lokaler Fallback genutzt.`);
+      fallback.notes = [
+        `eBay Browse nicht verfuegbar: ${redactSecret(error.message)}. Lokaler Fallback genutzt.`,
+        "Fuer echte eBay-Preise brauchen wir einen gueltigen Live-Provider."
+      ];
       return fallback;
     }
   }

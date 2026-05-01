@@ -8,6 +8,7 @@
     "start": "node scripts/dev-server.mjs",
     "normalize:drive": "node scripts/normalize-import-images.mjs data/drive-demo-files.json",
     "analyze:drive": "node scripts/analyze-drive-images.mjs data/drive-demo-files.json",
-    "ebay:token": "node scripts/ebay-token-doctor.mjs"
+    "ebay:token": "node scripts/ebay-token-doctor.mjs",
+    "test:price-import": "node scripts/test-price-check-ai-import.mjs"
   }
 }
