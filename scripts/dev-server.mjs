@@ -193,7 +193,7 @@ async function buildPriceCheck(item) {
       const evidence = await fetchEbayBrowseEvidence(item);
       if (evidence.length) {
         return buildPriceCheckFromEvidence(item, evidence, "ebay-browse", [
-          "Live-eBay-Browse-Preischeck aus aktiven Sandbox/Marketplace-Angeboten.",
+          "Live-eBay-Browse-Preischeck aus aktiven eBay-Angeboten.",
           "Sold-Prices sind hier noch nicht enthalten.",
           "Finaler Preis bleibt Review-pflichtig."
         ]);
@@ -201,8 +201,8 @@ async function buildPriceCheck(item) {
       const fallback = buildLocalPriceCheck(item);
       fallback.notes = [
         "eBay Browse wurde abgefragt, lieferte aber keine verwertbaren Treffer; lokaler Fallback genutzt.",
-        "Das ist in der Sandbox erwartbar, weil dort keine echten Marketplace-Daten liegen.",
-        "Fuer echte eBay-Preise brauchen wir Production Browse API oder einen Fallback wie SerpApi."
+        "Die Query kann zu eng sein oder eBay hat fuer diesen Artikel keine passenden aktiven Angebote geliefert.",
+        "Weitere Quellen wie SerpApi, PriceCharting oder Kategorie-spezifische Adapter koennen die Trefferquote verbessern."
       ];
       return fallback;
     } catch (error) {
@@ -246,24 +246,55 @@ function buildLocalPriceCheck(item) {
 }
 
 function buildPriceCheckFromEvidence(item, evidence, method, notes) {
-  const prices = evidence.map((entry) => entry.price).sort((a, b) => a - b);
+  const markedEvidence = markPriceOutliers(evidence);
+  const usableEvidence = markedEvidence.filter((entry) => !entry.outlier);
+  const prices = usableEvidence.map((entry) => entry.price).sort((a, b) => a - b);
   const median = prices[Math.floor(prices.length / 2)];
   const average = Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length);
   const fair = Math.round((median * 0.6) + (average * 0.4));
   const variance = Math.max(...prices) - Math.min(...prices);
-  const confidence = Math.max(35, Math.min(94, Math.round((Number(item.confidence) || 65) + Math.min(12, evidence.length * 3) - Math.min(22, variance / Math.max(1, fair) * 20))));
+  const baseConfidence = Math.round((Number(item.confidence) || 65) + Math.min(12, evidence.length * 3) - Math.min(22, variance / Math.max(1, fair) * 20));
+  const evidenceCap = method === "ebay-browse"
+    ? (usableEvidence.length === 1 ? 62 : usableEvidence.length === 2 ? 72 : 94)
+    : 94;
+  const confidence = Math.max(35, Math.min(evidenceCap, baseConfidence));
+  const finalNotes = [
+    ...notes,
+    ...(method === "ebay-browse" && usableEvidence.length < 3
+      ? ["Nur wenige eBay-Treffer gefunden; Preis als Indikation, nicht als belastbarer Marktwert."]
+      : []),
+    ...(markedEvidence.some((entry) => entry.outlier)
+      ? ["Ausreisser wurden in der Preisberechnung markiert und nicht gewichtet."]
+      : [])
+  ];
 
   return {
     checkedAt: new Date().toISOString(),
-    method: "local-evidence",
+    method,
     query: buildSearchQuery(item),
     low: Math.max(1, Math.round(Math.min(...prices) * 0.88)),
     fair,
     aggressive: Math.max(fair, Math.round(Math.max(...prices) * 1.08)),
     confidence,
-    evidence: evidence.slice(0, 6),
-    notes
+    evidence: markedEvidence.slice(0, 6),
+    notes: finalNotes
   };
+}
+
+function markPriceOutliers(evidence) {
+  if (evidence.length < 4) return evidence;
+
+  const prices = evidence.map((entry) => entry.price).filter((price) => Number(price) > 0).sort((a, b) => a - b);
+  const median = prices[Math.floor(prices.length / 2)];
+  const lower = Math.max(1, median / 3);
+  const upper = Math.max(median * 3, median + 40);
+
+  return evidence.map((entry) => {
+    const outlier = entry.price < lower || entry.price > upper;
+    return outlier
+      ? { ...entry, status: `${entry.status}_outlier`, matchScore: Math.min(entry.matchScore, 35), outlier: true }
+      : entry;
+  });
 }
 
 async function fetchEbayBrowseEvidence(item) {
