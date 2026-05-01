@@ -29,6 +29,16 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && request.url === "/api/price-check") {
+      await handlePriceCheck(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/ebay-draft") {
+      await handleEbayDraft(request, response);
+      return;
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
       sendJson(response, 405, { error: "method_not_allowed" });
       return;
@@ -128,6 +138,192 @@ async function handleAnalyzeImage(request, response) {
     analysis,
     item
   });
+}
+
+async function handlePriceCheck(request, response) {
+  const body = JSON.parse(await readRequestBody(request, 8 * 1024 * 1024));
+  const item = body.item;
+
+  if (!item?.sku || !item?.title) {
+    sendJson(response, 400, {
+      error: "missing_item",
+      message: "item with sku and title is required."
+    });
+    return;
+  }
+
+  const priceCheck = buildLocalPriceCheck(item);
+  const ebayDraft = buildEbayDraft(item, priceCheck);
+
+  sendJson(response, 200, {
+    provider: "local-evidence",
+    liveProviderAvailable: {
+      ebayBrowse: Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET),
+      serpApi: Boolean(process.env.SERPAPI_API_KEY)
+    },
+    priceCheck,
+    ebayDraft
+  });
+}
+
+async function handleEbayDraft(request, response) {
+  const body = JSON.parse(await readRequestBody(request, 8 * 1024 * 1024));
+  const item = body.item;
+
+  if (!item?.sku || !item?.title) {
+    sendJson(response, 400, {
+      error: "missing_item",
+      message: "item with sku and title is required."
+    });
+    return;
+  }
+
+  sendJson(response, 200, {
+    provider: "local-draft",
+    ebayDraft: buildEbayDraft(item, item.priceCheck || null)
+  });
+}
+
+function buildLocalPriceCheck(item) {
+  const evidence = normalizeResearch(item)
+    .filter((entry) => Number(entry.price) > 0)
+    .map((entry, index) => ({
+      source: entry.source || "RAMROD",
+      title: entry.label || item.title,
+      price: Math.round(Number(entry.price)),
+      status: entry.source?.toLowerCase().includes("sold") ? "sold_hint" : "active_or_hint",
+      age: entry.age || "unbekannt",
+      matchScore: Math.max(52, Math.min(96, Math.round((Number(item.confidence) || 70) - index * 7)))
+    }));
+
+  if (!evidence.length) {
+    evidence.push(
+      { source: "RAMROD", title: "KI Low Estimate", price: Math.round(Number(item.low) || 1), status: "model_hint", age: "jetzt", matchScore: 56 },
+      { source: "RAMROD", title: "KI Fair Estimate", price: Math.round(Number(item.fair) || 1), status: "model_hint", age: "jetzt", matchScore: 62 },
+      { source: "RAMROD", title: "KI Aggressive Estimate", price: Math.round(Number(item.aggressive) || Number(item.fair) || 1), status: "model_hint", age: "jetzt", matchScore: 50 }
+    );
+  }
+
+  const prices = evidence.map((entry) => entry.price).sort((a, b) => a - b);
+  const median = prices[Math.floor(prices.length / 2)];
+  const average = Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length);
+  const fair = Math.round((median * 0.6) + (average * 0.4));
+  const variance = Math.max(...prices) - Math.min(...prices);
+  const confidence = Math.max(35, Math.min(94, Math.round((Number(item.confidence) || 65) + Math.min(12, evidence.length * 3) - Math.min(22, variance / Math.max(1, fair) * 20))));
+
+  return {
+    checkedAt: new Date().toISOString(),
+    method: "local-evidence",
+    query: buildSearchQuery(item),
+    low: Math.max(1, Math.round(Math.min(...prices) * 0.88)),
+    fair,
+    aggressive: Math.max(fair, Math.round(Math.max(...prices) * 1.08)),
+    confidence,
+    evidence: evidence.slice(0, 6),
+    notes: [
+      "Lokaler Preischeck aus vorhandenen RAMROD-Hinweisen.",
+      "Noch keine Live-eBay-Abfrage.",
+      "Live-Provider wird spaeter ueber eBay Browse oder SerpApi aktiviert."
+    ]
+  };
+}
+
+function buildEbayDraft(item, priceCheck = null) {
+  const fair = Number(priceCheck?.fair || item.fair || 1);
+  const title = clampText(cleanTitle(item.title), 80);
+  const description = [
+    `<p><strong>${escapeHtml(title)}</strong></p>`,
+    `<p>Zustand: ${escapeHtml(item.condition || "Gebraucht")}</p>`,
+    `<p>Vollstaendigkeit: ${escapeHtml(item.completeness || "siehe Fotos")}</p>`,
+    item.notes ? `<p>Hinweise: ${escapeHtml(item.notes)}</p>` : "",
+    `<p>SKU: ${escapeHtml(item.sku)}</p>`,
+    "<p>Bitte Fotos genau pruefen. Verkauf erfolgt aus dem CREATORS RAMROD Intake.</p>"
+  ].filter(Boolean).join("");
+
+  return {
+    status: "draft_only",
+    sku: item.sku,
+    marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_DE",
+    inventoryItem: {
+      sku: item.sku,
+      availability: {
+        shipToLocationAvailability: { quantity: 1 }
+      },
+      condition: mapEbayCondition(item.condition),
+      product: {
+        title,
+        description,
+        imageUrls: item.image?.startsWith("http") ? [item.image] : [],
+        aspects: {
+          Brand: [item.franchise || "Unbekannt"],
+          Type: [item.category || "Collectible"],
+          ConditionNotes: [item.completeness || item.condition || "siehe Fotos"]
+        }
+      }
+    },
+    offerDraft: {
+      marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_DE",
+      format: "FIXED_PRICE",
+      availableQuantity: 1,
+      categoryId: "TODO_TAXONOMY_LOOKUP",
+      merchantLocationKey: process.env.EBAY_MERCHANT_LOCATION_KEY || "creators-warehouse-01",
+      listingDescription: description,
+      pricingSummary: {
+        price: { value: fair.toFixed(2), currency: "EUR" }
+      },
+      listingPolicies: {
+        paymentPolicyId: process.env.EBAY_PAYMENT_POLICY_ID || "TODO_PAYMENT_POLICY_ID",
+        fulfillmentPolicyId: process.env.EBAY_FULFILLMENT_POLICY_ID || "TODO_FULFILLMENT_POLICY_ID",
+        returnPolicyId: process.env.EBAY_RETURN_POLICY_ID || "TODO_RETURN_POLICY_ID"
+      }
+    },
+    warnings: [
+      "Noch nicht an eBay gesendet.",
+      "Kategorie und Business Policies muessen vor Publish gesetzt sein.",
+      "Bilder als Data-URL muessen vor eBay Upload extern gehostet oder per Media API verarbeitet werden."
+    ]
+  };
+}
+
+function normalizeResearch(item) {
+  return (item.research || []).map((entry) => {
+    if (Array.isArray(entry)) {
+      return { source: entry[0], label: entry[1], price: entry[2], age: entry[3] };
+    }
+    return entry;
+  });
+}
+
+function buildSearchQuery(item) {
+  return [item.franchise, item.title, item.category].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+function cleanTitle(value) {
+  return String(value || "Sammlerartikel").replace(/\s+/g, " ").trim();
+}
+
+function clampText(value, maxLength) {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 3).trim()}...`;
+}
+
+function mapEbayCondition(value = "") {
+  const text = value.toLowerCase();
+  if (text.includes("neu")) return "NEW";
+  if (text.includes("defekt")) return "FOR_PARTS_OR_NOT_WORKING";
+  if (text.includes("sehr gut")) return "USED_EXCELLENT";
+  if (text.includes("gut")) return "USED_GOOD";
+  return "USED_ACCEPTABLE";
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  })[char]);
 }
 
 function mapAnalysisToItem(analysis, body) {

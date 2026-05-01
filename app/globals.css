@@ -687,6 +687,11 @@ img {
   color: var(--violet);
 }
 
+.channel-badge.strongvision {
+  background: #e7f5ed;
+  color: var(--green);
+}
+
 .channel-badge.pruefen,
 .channel-badge.bundle {
   background: #fff6df;
@@ -704,6 +709,17 @@ img {
 
 .detail-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.draft-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.draft-actions .secondary-action {
+  justify-content: center;
+  min-height: 42px;
 }
 
 .segment-control {
@@ -803,6 +819,18 @@ img {
 .research,
 .script-box {
   padding: 14px;
+}
+
+.research.compact p {
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.price-check-card,
+.ebay-draft-card {
+  display: grid;
+  gap: 10px;
 }
 
 .research h3,

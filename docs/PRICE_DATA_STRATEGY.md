@@ -91,6 +91,36 @@ Output:
 5. Add MacMini worker that processes queued research jobs overnight.
 6. Add category-specific adapters only after we see enough inventory volume.
 
+## Current Prototype
+
+The local app can already generate:
+
+- a local price evidence card from RAMROD's existing research hints,
+- a safe eBay draft payload for the selected item,
+- Inventory API shaped data,
+- Offer API shaped data,
+- warnings for missing category, policies and media upload.
+
+This does not publish anything and does not transmit item data to eBay.
+
+## What We Need For Real Price Tests
+
+Minimum useful test:
+
+- eBay Sandbox client ID and client secret,
+- eBay Browse API app access token flow,
+- 5-10 real scanned items with known expected identities,
+- permission to send item title/category/franchise to eBay for comparable search.
+
+Better test:
+
+- access to eBay Marketplace Insights or Terapeak-style sold data,
+- SerpApi key as temporary fallback,
+- PriceCharting key/feed for retro games,
+- BrickLink credentials for LEGO-specific checks.
+
+Without those keys, RAMROD can still test the full UI and draft flow using local evidence only.
+
 ## Sources Checked
 
 - eBay Browse API search: https://developer.ebay.com/api-docs/buy/browse/resources/item_summary/methods/search

@@ -107,6 +107,8 @@ const state = {
   channelPlan: null,
   showAllChannels: false,
   analyzing: false,
+  priceChecking: "",
+  ebayDrafting: "",
   draft: {
     query: "",
     boxId: "SV-001",
@@ -282,6 +284,12 @@ function inspector(item) {
       <div class="inspector-title"><div><p>${item.sku}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${item.channel.toLowerCase()}">${item.channel}</span></div>
       <div class="source-strip">${sourceBadge(item)}</div>
       <div class="price-grid">${suggestion("Low", euro(item.low))}${suggestion("Fair", euro(item.fair))}${suggestion("Aggressiv", euro(item.aggressive))}${suggestion("Confidence", `${item.confidence}%`)}</div>
+      <div class="draft-actions">
+        <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Pruefe..." : "Preise checken"}</button>
+        <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Baue..." : "eBay Draft"}</button>
+      </div>
+      ${priceCheckCard(item)}
+      ${ebayDraftCard(item)}
       ${channelPicker(item)}
       <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollstaendigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
       <section class="research"><h3>Preisquellen</h3>${research.map((comp) => `<div class="research-row"><span>${comp[0]}</span><strong>${comp[1]}</strong><em>${comp[2] ? euro(comp[2]) : "Regel"}</em><small>${comp[3]}</small></div>`).join("")}</section>
@@ -289,6 +297,30 @@ function inspector(item) {
       ${otherVisible}
     </div>
   </div>`;
+}
+
+function priceCheckCard(item) {
+  const check = item.priceCheck;
+  if (!check) {
+    return `<section class="research compact"><h3>Preischeck</h3><p>Noch nicht geprueft. Erstellt lokale Evidence; Live-eBay folgt, sobald API-Zugang steht.</p></section>`;
+  }
+  return `<section class="research price-check-card">
+    <h3>Preischeck</h3>
+    <div class="price-grid">${suggestion("Low", euro(check.low))}${suggestion("Fair", euro(check.fair))}${suggestion("Aggressiv", euro(check.aggressive))}${suggestion("Confidence", `${check.confidence}%`)}</div>
+    <div class="source-strip">Methode: ${escapeHtml(check.method)} · Query: ${escapeHtml(check.query)}</div>
+    ${check.evidence.map((entry) => `<div class="research-row"><span>${escapeHtml(entry.source)}</span><strong>${escapeHtml(entry.title)}</strong><em>${euro(entry.price)}</em><small>${entry.matchScore}% Match</small></div>`).join("")}
+  </section>`;
+}
+
+function ebayDraftCard(item) {
+  const draft = item.ebayDraft;
+  if (!draft) return "";
+  return `<section class="script-box ebay-draft-card">
+    <h3>eBay Draft</h3>
+    <div class="detail-grid">${suggestion("Status", draft.status)}${suggestion("SKU", draft.sku)}${suggestion("Marktplatz", draft.marketplaceId)}${suggestion("Preis", euro(Number(draft.offerDraft?.pricingSummary?.price?.value || item.fair)))}</div>
+    <p>${escapeHtml(draft.inventoryItem?.product?.title || item.title)}</p>
+    <div class="source-strip">Kategorie: ${escapeHtml(draft.offerDraft?.categoryId || "TODO")} · Location: ${escapeHtml(draft.offerDraft?.merchantLocationKey || "-")}</div>
+  </section>`;
 }
 
 function channelPicker(item) {
@@ -373,6 +405,49 @@ function bindEvents() {
   document.querySelectorAll("[data-toggle-channels]").forEach((button) => button.addEventListener("click", () => {
     state.showAllChannels = !state.showAllChannels;
     render();
+  }));
+  document.querySelectorAll("[data-price-check]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.priceCheck);
+    if (!item || state.priceChecking) return;
+    state.priceChecking = item.id;
+    state.importStatus = "Lokaler Preischeck laeuft...";
+    render();
+    try {
+      const result = await postJson("/api/price-check", { item });
+      item.priceCheck = result.priceCheck;
+      item.ebayDraft = result.ebayDraft;
+      item.low = result.priceCheck.low;
+      item.fair = result.priceCheck.fair;
+      item.aggressive = result.priceCheck.aggressive;
+      item.confidence = Math.max(item.confidence, result.priceCheck.confidence);
+      state.importStatus = result.liveProviderAvailable?.ebayBrowse || result.liveProviderAvailable?.serpApi
+        ? "Preischeck erzeugt. Live-Provider ist konfiguriert, aber noch nicht aktiv geschaltet."
+        : "Lokaler Preischeck erzeugt. Fuer echte Live-Preise brauchen wir eBay Browse oder SerpApi.";
+      save();
+    } catch (error) {
+      state.importStatus = `Preischeck fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.priceChecking = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-ebay-draft]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.ebayDraft);
+    if (!item || state.ebayDrafting) return;
+    state.ebayDrafting = item.id;
+    state.importStatus = "eBay Draft wird lokal erzeugt...";
+    render();
+    try {
+      const result = await postJson("/api/ebay-draft", { item });
+      item.ebayDraft = result.ebayDraft;
+      state.importStatus = "eBay Draft erzeugt. Noch nicht an eBay gesendet.";
+      save();
+    } catch (error) {
+      state.importStatus = `eBay Draft fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.ebayDrafting = "";
+      render();
+    }
   }));
   document.querySelectorAll("[data-ship]").forEach((button) => button.addEventListener("click", () => {
     const item = state.items.find((entry) => entry.id === button.dataset.ship);
@@ -484,6 +559,17 @@ function bindEvents() {
     }
     render();
   });
+}
+
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message || result.error || `HTTP ${response.status}`);
+  return result;
 }
 
 function escapeHtml(value) {
