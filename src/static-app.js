@@ -76,6 +76,90 @@ const hints = [
   { tokens: ["funko", "figur", "anime", "statue", "collectible"], category: "Collectibles", franchise: "Pop Culture", low: 18, fair: 49, aggressive: 89, channel: "Pruefen", confidence: 62 }
 ];
 
+const whatnotChannels = [
+  {
+    id: "pokemon-cards",
+    label: "Pokemon Cards",
+    description: "Sealed, Singles, Promos und Pokemon TCG Lots",
+    tokens: ["pokemon", "tcg", "booster pack", "booster box", "pikachu", "charizard"],
+    defaultCampaign: "Pokemon Singles & Sealed",
+    icon: "PK",
+    priority: 1
+  },
+  {
+    id: "playstation-games",
+    label: "PlayStation Games",
+    description: "PS4, PS5, PS3 und passende Sony-Spiele",
+    tokens: ["ps4", "ps5", "ps3", "playstation", "sony"],
+    defaultCampaign: "PlayStation Games Batch",
+    icon: "PS",
+    priority: 2
+  },
+  {
+    id: "xbox-games",
+    label: "Xbox Games",
+    description: "Xbox, Xbox 360, Xbox One und Series Spiele",
+    tokens: ["xbox", "xbox 360", "xbox one", "series x", "microsoft xbox"],
+    defaultCampaign: "Xbox Games Batch",
+    icon: "XB",
+    priority: 3
+  },
+  {
+    id: "retro-games",
+    label: "Retro Games",
+    description: "Dreamcast, Atari, Nintendo DS, Game Boy, Sega und Retro-Software",
+    tokens: ["dreamcast", "atari", "gameboy", "game boy", "nintendo ds", "sega", "snes", "mega drive", "cartridge", "modul", "soulcalibur", "ecco"],
+    defaultCampaign: "Retro Games Show",
+    icon: "RG",
+    priority: 4
+  },
+  {
+    id: "comics",
+    label: "Comics",
+    description: "Comics, Hefte, Taschenbuecher und Marvel/DC Lots",
+    tokens: ["comic", "comics", "marvel", "dc comics", "jahrbuch", "pocket", "manga"],
+    defaultCampaign: "Comics & Hefte",
+    icon: "CO",
+    priority: 5
+  },
+  {
+    id: "action-figures",
+    label: "Action Figures",
+    description: "Turtles, Star Wars, Superhelden, Toy Lines und lose Figuren",
+    tokens: ["figure", "figur", "action", "tmnt", "turtle", "star wars", "star trek", "mario", "jakks", "superman", "muhammad ali"],
+    defaultCampaign: "Action Figures & Toys",
+    icon: "AF",
+    priority: 6
+  },
+  {
+    id: "anime-figures",
+    label: "Anime Figures",
+    description: "Anime-, Manga- und Japan-Figuren",
+    tokens: ["anime", "manga", "dragon ball", "dragonball", "one piece", "naruto"],
+    defaultCampaign: "Anime Figures",
+    icon: "AN",
+    priority: 7
+  },
+  {
+    id: "premium-collectibles",
+    label: "Premium Collectibles",
+    description: "Hoeherwertige Einzelstuecke mit Review vor Live-Verkauf",
+    tokens: [],
+    defaultCampaign: "Premium Review",
+    icon: "PR",
+    priority: 98
+  },
+  {
+    id: "low-value-bundles",
+    label: "Low Value Bundles",
+    description: "Kleine Artikel, Becher, Hefte und schnelle Bundle-Lots",
+    tokens: ["becher", "heft", "magazin", "vhs", "deko", "lampe", "zubehoer"],
+    defaultCampaign: "Bundle Night",
+    icon: "LB",
+    priority: 99
+  }
+];
+
 const primaryChannels = [
   { id: "eBay", label: "eBay", status: "bereit", note: "API geplant" },
   { id: "Whatnot", label: "Whatnot", status: "bereit", note: "Show-Batch" },
@@ -118,7 +202,7 @@ const state = {
     photo: "",
     weight: "0.25"
   },
-  items: JSON.parse(localStorage.getItem("creators-scanapp-items") || "null") || seedItems
+  items: normalizeItems(JSON.parse(localStorage.getItem("creators-scanapp-items") || "null") || seedItems)
 };
 
 const app = document.querySelector("#app");
@@ -136,7 +220,7 @@ function analyze(draft = state.draft) {
   const incomplete = draft.condition === "Unvollstaendig" || draft.condition === "Defekt";
   const confidence = Math.max(38, hint.confidence - (incomplete ? 18 : 0));
   const fair = Math.round(hint.fair * (draft.condition === "Sehr gut" ? 1.18 : 1));
-  return {
+  return enrichWorkflow({
     id: makeId(),
     sku: nextSku(draft.boxId),
     boxId: draft.boxId,
@@ -156,7 +240,140 @@ function analyze(draft = state.draft) {
     notes: confidence < 65 ? "KI ist unsicher. Variante, Zustand und Vergleichspreise vor Listing manuell pruefen." : "Listing-Entwurf bereit. Titel, Zustand und Versandgewicht vor Publikation bestaetigen.",
     sourceType: "mock",
     research: [["eBay", "Aktive Vergleichsartikel", fair + 12, "simuliert"], ["eBay Solds", "Verkaufte Vergleichsartikel", fair - 8, "simuliert"], ["CREATORS", "Routing-Regel", fair, "jetzt"]]
+  });
+}
+
+function normalizeItems(items) {
+  return (items || []).map((item) => enrichWorkflow(item));
+}
+
+function enrichWorkflow(item) {
+  const whatnot = classifyWhatnot(item);
+  const shouldBeWhatnot = item.channel === "Whatnot" || item.whatnotEligible === true;
+  const showLotType = item.showLotType || inferShowLotType(item, whatnot);
+  const campaignId = shouldBeWhatnot ? campaignIdFor(whatnot, item) : "";
+
+  return {
+    ...item,
+    whatnotEligible: shouldBeWhatnot,
+    whatnotChannel: shouldBeWhatnot ? whatnot.id : "",
+    whatnotChannelLabel: shouldBeWhatnot ? whatnot.label : "",
+    campaignId,
+    campaignSuggestion: shouldBeWhatnot ? campaignTitleFor(whatnot, item) : "",
+    showLotType,
+    sortOrderScore: Number(item.sortOrderScore ?? scoreShowLot(item, whatnot, showLotType)),
+    bundleSuggestion: item.bundleSuggestion || bundleSuggestionFor(item, whatnot, showLotType),
+    whatnotScript: item.whatnotScript || scriptForWhatnot(item, whatnot, showLotType)
   };
+}
+
+function classifyWhatnot(item) {
+  const text = [
+    item.title,
+    item.category,
+    item.franchise,
+    item.completeness,
+    item.notes
+  ].filter(Boolean).join(" ").toLowerCase();
+  const fair = Number(item.fair) || 0;
+
+  if (fair >= 100 && !text.includes("pokemon")) {
+    return whatnotChannels.find((channel) => channel.id === "premium-collectibles");
+  }
+
+  const direct = whatnotChannels
+    .filter((channel) => channel.tokens.length)
+    .find((channel) => channel.tokens.some((token) => text.includes(token)));
+
+  if (direct) return direct;
+  if (fair <= 12) return whatnotChannels.find((channel) => channel.id === "low-value-bundles");
+  return whatnotChannels.find((channel) => channel.id === "action-figures");
+}
+
+function inferShowLotType(item, whatnot) {
+  const fair = Number(item.fair) || 0;
+  const text = [item.title, item.category, item.completeness].filter(Boolean).join(" ").toLowerCase();
+  if (fair >= 100 || whatnot.id === "premium-collectibles") return "premium";
+  if (fair <= 12 || text.includes("lose") || text.includes("heft") || text.includes("becher")) return "bundle";
+  return "single";
+}
+
+function scoreShowLot(item, whatnot, showLotType) {
+  const base = Math.round(Number(item.confidence) || 50);
+  const valueBoost = Math.min(18, Math.round((Number(item.fair) || 0) / 10));
+  const typeBoost = showLotType === "premium" ? 16 : showLotType === "single" ? 8 : 2;
+  return Math.max(1, Math.min(100, base + valueBoost + typeBoost - whatnot.priority / 20));
+}
+
+function campaignIdFor(whatnot, item) {
+  const boxSuffix = String(item.boxId || "SV").replace(/[^A-Z0-9-]/gi, "").toUpperCase();
+  return `WN-${whatnot.id.toUpperCase()}-${boxSuffix || "MIX"}`;
+}
+
+function campaignTitleFor(whatnot, item) {
+  const box = item.boxId || "Batch";
+  return `${whatnot.defaultCampaign} · ${box}`;
+}
+
+function bundleSuggestionFor(item, whatnot, showLotType) {
+  if (showLotType === "premium") return "Vor Live-Verkauf durch Reviewer bestaetigen und als Highlight spaeter in der Show platzieren.";
+  if (showLotType === "bundle") return `Mit aehnlichen Artikeln aus ${whatnot.label} buendeln, wenn Fair Value unter 12 EUR bleibt.`;
+  return `Als Einzel-Lot in ${whatnot.label}; thematisch neben aehnliche Artikel sortieren.`;
+}
+
+function scriptForWhatnot(item, whatnot, showLotType) {
+  const start = Math.max(1, Math.round((Number(item.low) || Number(item.fair) || 1) * 0.65));
+  const type = showLotType === "premium" ? "Highlight-Lot" : showLotType === "bundle" ? "Bundle-Lot" : "Einzel-Lot";
+  return `${type} fuer ${whatnot.label}. Start bei ${euro(start)}. Fair Value ${euro(Number(item.fair) || 0)}. Zustand: ${item.condition || "siehe Fotos"}. ${item.completeness || "Vollstaendigkeit pruefen."} Besonderheiten kurz zeigen und bei Unsicherheit als Review-Hinweis nennen.`;
+}
+
+function buildWhatnotCampaigns(items) {
+  const grouped = new Map();
+  normalizeItems(items)
+    .filter((item) => item.whatnotEligible || item.channel === "Whatnot")
+    .forEach((item) => {
+      const key = item.campaignId || campaignIdFor(classifyWhatnot(item), item);
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          id: key,
+          title: item.campaignSuggestion || campaignTitleFor(classifyWhatnot(item), item),
+          channelId: item.whatnotChannel,
+          channelLabel: item.whatnotChannelLabel,
+          items: []
+        });
+      }
+      grouped.get(key).items.push(item);
+    });
+
+  return [...grouped.values()]
+    .map((campaign) => ({
+      ...campaign,
+      fairValue: campaign.items.reduce((sum, item) => sum + (Number(item.fair) || 0), 0),
+      startValue: campaign.items.reduce((sum, item) => sum + Math.max(1, Math.round((Number(item.low) || Number(item.fair) || 1) * 0.65)), 0),
+      reviewCount: campaign.items.filter((item) => item.confidence < 70 || item.showLotType === "premium").length,
+      durationMinutes: Math.max(10, Math.round(campaign.items.length * 2.5)),
+      items: campaign.items.sort((a, b) => b.sortOrderScore - a.sortOrderScore)
+    }))
+    .sort((a, b) => {
+      const priorityA = whatnotChannels.find((channel) => channel.id === a.channelId)?.priority || 50;
+      const priorityB = whatnotChannels.find((channel) => channel.id === b.channelId)?.priority || 50;
+      return priorityA - priorityB || b.fairValue - a.fairValue;
+    });
+}
+
+function isWhatnotCandidate(item) {
+  if (item.channel === "Problemfall" || item.channel === "Pruefen") return false;
+  const text = [item.title, item.category, item.franchise].filter(Boolean).join(" ").toLowerCase();
+  const tokens = ["pokemon", "karte", "tcg", "game", "spiel", "dreamcast", "atari", "xbox", "ps4", "ps5", "ps3", "comic", "figur", "figure", "star wars", "star trek", "anime", "mario"];
+  return tokens.some((token) => text.includes(token));
+}
+
+function markWhatnotCandidates() {
+  state.items = state.items.map((item) => isWhatnotCandidate(item)
+    ? enrichWorkflow({ ...item, channel: "Whatnot", whatnotEligible: true, whatnotChannel: "", whatnotChannelLabel: "", campaignId: "", campaignSuggestion: "" })
+    : enrichWorkflow({ ...item, whatnotEligible: item.channel === "Whatnot" })
+  );
+  save();
 }
 
 function metric(iconLabel, label, value) {
@@ -174,7 +391,8 @@ function render() {
     value: state.items.reduce((sum, item) => sum + item.fair, 0),
     auto: state.items.filter((item) => item.confidence >= 70).length,
     review: state.items.filter((item) => item.channel === "Pruefen").length,
-    whatnot: state.items.filter((item) => item.channel === "Whatnot").length
+    whatnot: state.items.filter((item) => item.whatnotEligible || item.channel === "Whatnot").length,
+    campaigns: buildWhatnotCampaigns(state.items).length
   };
 
   app.innerHTML = `
@@ -184,6 +402,7 @@ function render() {
         ${navButton("scan", "SC", "Scan")}
         ${navButton("inventory", "BX", "Bestand")}
         ${navButton("routing", "RT", "Routing")}
+        ${navButton("campaigns", "WN", "Kampagnen")}
         ${navButton("shipping", "VS", "Versand")}
       </nav>
       <div class="box-stack"><div class="section-label">Kisten</div>${boxes.map(boxButton).join("")}</div>
@@ -202,7 +421,7 @@ function render() {
         ${metric("AR", "Artikel", stats.count)}
         ${metric("AI", "KI-Autoquote", `${Math.round((stats.auto / stats.count) * 100)}%`)}
         ${metric("PR", "Pruefen", stats.review)}
-        ${metric("WN", "Whatnot", stats.whatnot)}
+        ${metric("WN", "Whatnot", `${stats.whatnot}/${stats.campaigns}`)}
         ${metric("EU", "Fair Value", euro(stats.value))}
       </section>
       ${viewMarkup(selected)}
@@ -222,6 +441,7 @@ function boxButton(box) {
 function viewMarkup(selected) {
   if (state.view === "scan") return scanView();
   if (state.view === "routing") return routingView();
+  if (state.view === "campaigns") return campaignsView();
   if (state.view === "shipping") return shippingView();
   return inventoryView(selected);
 }
@@ -258,7 +478,7 @@ function field(label, control) {
 
 function inventoryView(selected) {
   const needle = state.search.toLowerCase();
-  const filtered = state.items.filter((item) => [item.title, item.sku, item.category, item.channel, item.boxId].join(" ").toLowerCase().includes(needle));
+  const filtered = state.items.filter((item) => [item.title, item.sku, item.category, item.channel, item.boxId, item.whatnotChannelLabel, item.campaignSuggestion].join(" ").toLowerCase().includes(needle));
   return `<section class="inventory-layout">
     <div class="inventory-list"><div class="panel-heading"><div><p>Bestand</p><h2>Artikelkarten</h2></div><button class="icon-button" data-view="scan" title="Artikel hinzufuegen">${icon("PL")}</button></div>${filtered.map(itemRow).join("")}</div>
     ${selected ? inspector(selected) : ""}
@@ -291,12 +511,40 @@ function inspector(item) {
       ${priceCheckCard(item)}
       ${ebayDraftCard(item)}
       ${channelPicker(item)}
+      ${whatnotRoutingCard(item)}
       <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollstaendigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
       <section class="research"><h3>Preisquellen</h3>${research.map((comp) => `<div class="research-row"><span>${comp[0]}</span><strong>${comp[1]}</strong><em>${comp[2] ? euro(comp[2]) : "Regel"}</em><small>${comp[3]}</small></div>`).join("")}</section>
       <section class="script-box"><h3>Whatnot Skript</h3><p>${script}</p></section>
       ${otherVisible}
     </div>
   </div>`;
+}
+
+function whatnotRoutingCard(item) {
+  if (!(item.whatnotEligible || item.channel === "Whatnot")) {
+    return `<section class="script-box"><h3>Whatnot Sorter</h3><p>Nicht fuer Whatnot markiert. Bei Bedarf im Plattformrouting auf Whatnot setzen, dann wird automatisch ein Kanal und eine Kampagne vorgeschlagen.</p></section>`;
+  }
+  return `<section class="whatnot-card">
+    <div class="whatnot-card-head">
+      <span>${icon("WN")}Whatnot Sorter</span>
+      <strong>${escapeHtml(item.whatnotChannelLabel || "Unsortiert")}</strong>
+    </div>
+    <div class="detail-grid">
+      ${suggestion("Kampagne", item.campaignSuggestion || "-")}
+      ${suggestion("Lot-Typ", lotTypeLabel(item.showLotType))}
+      ${suggestion("Show Score", `${item.sortOrderScore}/100`)}
+      ${suggestion("Bundle", item.bundleSuggestion || "-")}
+    </div>
+  </section>`;
+}
+
+function lotTypeLabel(value) {
+  return {
+    single: "Einzel-Lot",
+    bundle: "Bundle",
+    premium: "Premium Review",
+    problem: "Problemfall"
+  }[value] || value || "-";
 }
 
 function priceCheckCard(item) {
@@ -342,7 +590,75 @@ function channelButton(channel, item) {
 
 function routingView() {
   if (state.channelPlan) return channelPlanView();
-  return `<section class="routing-board">${["Pruefen", "eBay", "Whatnot", "Strongvision", "Bundle", "Problemfall"].map((channel) => `<div class="route-column"><div class="route-heading"><span>${channel}</span><strong>${channel}</strong><span>${state.items.filter((item) => item.channel === channel).length}</span></div>${state.items.filter((item) => item.channel === channel).map((item) => `<button class="route-item" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% sicher</small></span></button>`).join("")}</div>`).join("")}</section>`;
+  const whatnotBuckets = whatnotChannels
+    .map((channel) => ({
+      channel,
+      items: state.items.filter((item) => (item.whatnotEligible || item.channel === "Whatnot") && item.whatnotChannel === channel.id)
+    }))
+    .filter((bucket) => bucket.items.length);
+  const columns = [
+    routeColumn("Pruefen", state.items.filter((item) => item.channel === "Pruefen")),
+    routeColumn("eBay", state.items.filter((item) => item.channel === "eBay")),
+    ...whatnotBuckets.map((bucket) => routeColumn(`Whatnot: ${bucket.channel.label}`, bucket.items, bucket.channel.icon)),
+    routeColumn("Strongvision", state.items.filter((item) => item.channel === "Strongvision")),
+    routeColumn("Bundle", state.items.filter((item) => item.channel === "Bundle")),
+    routeColumn("Problemfall", state.items.filter((item) => item.channel === "Problemfall"))
+  ];
+  return `<section class="routing-board">${columns.join("")}</section>`;
+}
+
+function routeColumn(title, items, iconLabel = title.slice(0, 2).toUpperCase()) {
+  return `<div class="route-column">
+    <div class="route-heading"><span>${escapeHtml(iconLabel)}</span><strong>${escapeHtml(title)}</strong><span>${items.length}</span></div>
+    ${items.map((item) => `<button class="route-item" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% sicher${item.campaignSuggestion ? ` · ${escapeHtml(item.campaignSuggestion)}` : ""}</small></span></button>`).join("")}
+  </div>`;
+}
+
+function campaignsView() {
+  const campaigns = buildWhatnotCampaigns(state.items);
+  if (!campaigns.length) {
+    return `<section class="empty-state"><h2>Keine Whatnot-Kampagnen</h2><p>Setze Artikel im Plattformrouting auf Whatnot. RAMROD sortiert sie danach automatisch in Kanaele und Kampagnen.</p><button class="primary-action inline-action" id="auto-whatnot" type="button">${icon("WN")}Kandidaten sortieren</button></section>`;
+  }
+  return `<section class="campaigns-layout">
+    <div class="campaigns-list">
+      <div class="panel-heading"><div><p>Whatnot</p><h2>Kampagnen</h2></div><div class="panel-actions"><button class="secondary-action" id="auto-whatnot" type="button">${icon("WN")}Kandidaten sortieren</button><button class="secondary-action" type="button">${icon("EX")}Export spaeter</button></div></div>
+      ${campaigns.map(campaignCard).join("")}
+    </div>
+    <div class="show-console">
+      <div class="panel-heading"><div><p>Show-Modus</p><h2>Naechste Kampagne</h2></div>${icon("WN")}</div>
+      ${showModePreview(campaigns[0])}
+    </div>
+  </section>`;
+}
+
+function campaignCard(campaign) {
+  return `<article class="campaign-card">
+    <div class="campaign-card-head">
+      <span>${icon(whatnotChannels.find((channel) => channel.id === campaign.channelId)?.icon || "WN")}</span>
+      <div><strong>${escapeHtml(campaign.title)}</strong><small>${escapeHtml(campaign.channelLabel)} · ${campaign.items.length} Artikel · ca. ${campaign.durationMinutes} Min.</small></div>
+      <em>${euro(campaign.fairValue)}</em>
+    </div>
+    <div class="campaign-stats">
+      ${suggestion("Startsumme", euro(campaign.startValue))}
+      ${suggestion("Review", campaign.reviewCount)}
+      ${suggestion("Status", campaign.reviewCount ? "Entwurf" : "Bereit")}
+    </div>
+    <div class="campaign-items">${campaign.items.map((item, index) => `<button class="campaign-item" data-select="${item.id}" data-view-after="inventory" type="button"><span>${index + 1}</span><img src="${item.image}" alt="" /><strong>${escapeHtml(item.title)}</strong><em>${euro(item.fair)}</em></button>`).join("")}</div>
+  </article>`;
+}
+
+function showModePreview(campaign) {
+  const first = campaign.items[0];
+  return `<div class="show-preview">
+    <div class="show-hero"><img src="${first.image}" alt="" /><div><small>${escapeHtml(campaign.channelLabel)}</small><h3>${escapeHtml(first.title)}</h3><p>${escapeHtml(first.whatnotScript || "")}</p></div></div>
+    <div class="detail-grid">
+      ${suggestion("Start", euro(Math.max(1, Math.round((Number(first.low) || Number(first.fair) || 1) * 0.65))))}
+      ${suggestion("Fair", euro(first.fair))}
+      ${suggestion("Lot", lotTypeLabel(first.showLotType))}
+      ${suggestion("Naechste Lots", campaign.items.length - 1)}
+    </div>
+    <div class="show-runlist">${campaign.items.slice(0, 8).map((item, index) => `<button class="show-runlist-row" data-select="${item.id}" data-view-after="inventory" type="button"><span>${index + 1}</span><strong>${escapeHtml(item.title)}</strong><em>${euro(item.fair)}</em></button>`).join("")}</div>
+  </div>`;
 }
 
 function channelPlanView() {
@@ -397,8 +713,13 @@ function bindEvents() {
     render();
   }));
   document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => {
-    const item = state.items.find((entry) => entry.id === button.dataset.id);
-    item.channel = button.dataset.route;
+    const index = state.items.findIndex((entry) => entry.id === button.dataset.id);
+    if (index === -1) return;
+    state.items[index] = enrichWorkflow({
+      ...state.items[index],
+      channel: button.dataset.route,
+      whatnotEligible: button.dataset.route === "Whatnot" ? true : false
+    });
     save();
     render();
   }));
@@ -504,7 +825,7 @@ function bindEvents() {
     state.importStatus = usedLiveAi ? "OpenAI analysiert das Foto..." : "Kein Foto vorhanden, nutze lokalen Mock-Vorschlag.";
     render();
     try {
-      const item = usedLiveAi ? await analyzeWithApi() : analyze();
+      const item = enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
       state.items.unshift(item);
       state.selected = item.id;
       state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprueft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
@@ -533,7 +854,7 @@ function bindEvents() {
       const response = await fetch("/data/app-import-items.json", { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
-      state.items = payload.items;
+      state.items = normalizeItems(payload.items);
       state.selected = payload.items[0]?.id || "";
       state.view = "inventory";
       state.importStatus = `${payload.count} OpenAI-Artikel aus ${payload.model} geladen.`;
@@ -557,6 +878,14 @@ function bindEvents() {
     } catch (error) {
       state.importStatus = `Channel Plan fehlgeschlagen: ${error.message}`;
     }
+    render();
+  });
+
+  const autoWhatnot = document.querySelector("#auto-whatnot");
+  if (autoWhatnot) autoWhatnot.addEventListener("click", () => {
+    markWhatnotCandidates();
+    state.importStatus = "Whatnot-Kandidaten wurden nach Kanaelen und Kampagnen sortiert.";
+    state.view = "campaigns";
     render();
   });
 }

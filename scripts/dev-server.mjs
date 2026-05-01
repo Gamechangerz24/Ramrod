@@ -99,6 +99,7 @@ async function handleAnalyzeImage(request, response) {
                 "Erfinde keine Barcodes, Seriennummern oder Editionen.",
                 "Nutze sichtbare Initialen, Farb-Codierungen und Beschriftungen zur Charakteridentifikation. Bei Teenage Mutant Ninja Turtles gilt: orange Maske oder M am Guertel = Michelangelo, blau oder L = Leonardo, rot oder R = Raphael, lila oder D = Donatello. Wenn sichtbare Hinweise einem bekannten Namen widersprechen, priorisiere die sichtbaren Hinweise und senke die Confidence.",
                 "Gib eine operative Artikelkarte fuer Weiterverkauf, Plattformrouting und Whatnot-Vorbereitung aus.",
+                "Wenn Whatnot geeignet ist, sortiere den Artikel in einen konkreten Show-Kanal. Halte zusammenpassende Artikel zusammen: Pokemon Cards separat, PlayStation Games separat, Retro Games separat, Comics separat, Action Figures separat.",
                 "Preise sind nur Vorbewertung in EUR ohne Webrecherche."
               ].join(" ")
             },
@@ -495,6 +496,13 @@ function mapAnalysisToItem(analysis, body) {
     fair: dominant.estimatedPriceFair,
     aggressive: dominant.estimatedPriceHigh,
     channel: dominant.recommendedChannel,
+    whatnotEligible: dominant.whatnotEligible,
+    whatnotChannel: dominant.whatnotChannel,
+    whatnotChannelLabel: dominant.whatnotChannelLabel,
+    campaignSuggestion: dominant.campaignSuggestion,
+    showLotType: dominant.showLotType,
+    sortOrderScore: dominant.sortOrderScore,
+    bundleSuggestion: dominant.bundleSuggestion,
     stage: analysis.workflow.needsHumanReview ? "Gescannt" : "Freigabe",
     weight: Number(body.weight) || 0,
     image: body.imageDataUrl,
@@ -542,6 +550,13 @@ function itemAnalysisSchema() {
           "estimatedPriceFair",
           "estimatedPriceHigh",
           "recommendedChannel",
+          "whatnotEligible",
+          "whatnotChannel",
+          "whatnotChannelLabel",
+          "campaignSuggestion",
+          "showLotType",
+          "sortOrderScore",
+          "bundleSuggestion",
           "researchQueries",
           "listingDraft",
           "whatnotScript",
@@ -562,6 +577,19 @@ function itemAnalysisSchema() {
             type: "string",
             enum: ["eBay", "Whatnot", "Bundle", "Pruefen", "Problemfall"]
           },
+          whatnotEligible: { type: "boolean" },
+          whatnotChannel: {
+            type: "string",
+            enum: ["", "pokemon-cards", "playstation-games", "xbox-games", "retro-games", "comics", "action-figures", "anime-figures", "premium-collectibles", "low-value-bundles"]
+          },
+          whatnotChannelLabel: { type: "string" },
+          campaignSuggestion: { type: "string" },
+          showLotType: {
+            type: "string",
+            enum: ["single", "bundle", "premium", "problem"]
+          },
+          sortOrderScore: { type: "integer", minimum: 0, maximum: 100 },
+          bundleSuggestion: { type: "string" },
           researchQueries: { type: "array", items: { type: "string" } },
           listingDraft: {
             type: "object",
