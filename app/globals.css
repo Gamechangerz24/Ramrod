@@ -767,9 +767,9 @@ img {
 }
 
 .inventory-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  align-content: start;
   max-height: calc(100vh - 220px);
   min-width: 0;
   overflow: auto;
@@ -791,7 +791,8 @@ img {
 .item-row {
   align-items: start;
   grid-template-columns: 62px minmax(0, 1fr) minmax(58px, max-content);
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: 88px;
   max-width: 100%;
   overflow: hidden;
   padding: 10px;
@@ -1634,7 +1635,7 @@ img {
 
   .item-row {
     grid-template-columns: 56px minmax(0, 1fr) minmax(54px, max-content);
-    min-height: 0;
+    min-height: 80px;
     padding: 10px;
   }
 
