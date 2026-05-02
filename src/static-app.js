@@ -203,7 +203,7 @@ const state = {
     photo: "",
     weight: "0.25"
   },
-  items: normalizeItems(JSON.parse(localStorage.getItem("creators-scanapp-items") || "null") || seedItems)
+  items: normalizeItems(loadStoredItems())
 };
 
 const app = document.querySelector("#app");
@@ -211,6 +211,26 @@ const euro = (value) => new Intl.NumberFormat("de-DE", { style: "currency", curr
 const icon = (label) => `<span class="mini-icon" aria-hidden="true">${label}</span>`;
 const saveLocal = () => localStorage.setItem("creators-scanapp-items", JSON.stringify(state.items));
 const save = saveLocal;
+
+window.addEventListener("error", (event) => {
+  const message = event.error?.message || event.message || "Unbekannter Frontend-Fehler";
+  app.innerHTML = `<section class="workspace"><div class="status-strip">RAMROD konnte nicht starten: ${escapeHtml(message)}. Versuche /?reset=1 oder lade hart neu.</div></section>`;
+});
+
+function loadStoredItems() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("reset") === "1") {
+    localStorage.removeItem("creators-scanapp-items");
+    return seedItems;
+  }
+
+  try {
+    return JSON.parse(localStorage.getItem("creators-scanapp-items") || "null") || seedItems;
+  } catch (error) {
+    localStorage.removeItem("creators-scanapp-items");
+    return seedItems;
+  }
+}
 
 function nextSku(boxId) {
   return `${boxId}-${String(state.items.filter((item) => item.boxId === boxId).length + 1).padStart(4, "0")}`;
