@@ -457,7 +457,7 @@ function render() {
 
   app.innerHTML = `
     <aside class="sidebar">
-      <div class="brand"><div class="brand-mark">C</div><div><strong>CREATORS RAMROD</strong><span>Strongvision Intake</span></div></div>
+      <div class="brand"><img class="brand-logo" src="/app/assets/ramrod-icon.png" alt="" /><div><strong><span>R</span>AMROD</strong><small>CREATORS Intake</small></div></div>
       <nav class="nav-list" aria-label="Arbeitsbereiche">
         ${navButton("scan", "SC", "Scan")}
         ${navButton("inventory", "BX", "Bestand")}
@@ -469,7 +469,7 @@ function render() {
     </aside>
     <section class="workspace">
       <header class="topbar">
-        <div><p>Projekt RAMROD</p><h1>Lagerbestand in Liquiditaet verwandeln</h1></div>
+        <div><p>Strongvision Workflow</p><h1>RAMROD Intake Console</h1></div>
         <div class="topbar-actions">
           <button class="secondary-action" id="load-ai-import" type="button">${icon("AI")}AI Import laden</button>
           <button class="secondary-action" id="load-channel-plan" type="button">${icon("RT")}Channel Plan</button>
