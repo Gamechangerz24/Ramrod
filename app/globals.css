@@ -584,7 +584,9 @@ img {
 .inventory-list {
   display: grid;
   gap: 10px;
+  align-content: start;
   max-height: calc(100vh - 220px);
+  min-width: 0;
   overflow: auto;
 }
 
@@ -603,9 +605,11 @@ img {
 
 .item-row {
   align-items: start;
-  grid-template-columns: 62px minmax(0, 1fr) auto;
-  min-height: 92px;
-  padding: 8px;
+  grid-template-columns: 62px minmax(0, 1fr) minmax(58px, max-content);
+  min-height: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 10px;
 }
 
 .item-row.active {
@@ -631,6 +635,13 @@ img {
   min-width: 0;
 }
 
+.item-row > span {
+  align-content: start;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .item-row strong,
 .route-item strong,
 .campaign-item strong,
@@ -638,17 +649,25 @@ img {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   display: -webkit-box;
+  line-height: 1.18;
   overflow: hidden;
+  overflow-wrap: anywhere;
   text-overflow: ellipsis;
   white-space: normal;
+}
+
+.item-row strong {
+  font-size: 15px;
+  font-weight: 900;
 }
 
 .item-row small,
 .route-item small {
   color: var(--muted);
-  line-height: 1.25;
-  margin-top: 5px;
+  font-size: 13px;
+  line-height: 1.22;
   overflow: hidden;
+  overflow-wrap: anywhere;
   text-overflow: ellipsis;
   white-space: normal;
 }
@@ -668,6 +687,9 @@ img {
   color: var(--orange);
   font-style: normal;
   font-weight: 900;
+  justify-self: end;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .inspector {
@@ -1357,7 +1379,7 @@ img {
 
   .inventory-layout {
     align-items: stretch;
-    grid-template-columns: minmax(360px, 0.43fr) minmax(720px, 1fr);
+    grid-template-columns: minmax(390px, 0.42fr) minmax(0, 1fr);
     height: calc(100vh - 284px);
     min-height: 580px;
   }
@@ -1370,8 +1392,9 @@ img {
   }
 
   .item-row {
-    grid-template-columns: 56px minmax(0, 1fr) auto;
-    min-height: 82px;
+    grid-template-columns: 56px minmax(0, 1fr) minmax(54px, max-content);
+    min-height: 0;
+    padding: 10px;
   }
 
   .item-row img {
@@ -1380,7 +1403,7 @@ img {
   }
 
   .inspector {
-    grid-template-columns: minmax(420px, 0.95fr) minmax(440px, 1.05fr);
+    grid-template-columns: minmax(360px, 0.95fr) minmax(340px, 1.05fr);
     height: 100%;
     min-height: 0;
   }
