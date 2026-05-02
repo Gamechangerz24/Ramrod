@@ -186,6 +186,7 @@ const futureChannels = [
 const app = document.querySelector("#app");
 const euro = (value) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
 const icon = (label) => `<span class="mini-icon" aria-hidden="true">${label}</span>`;
+const devMode = new URLSearchParams(window.location.search).get("dev") === "1";
 
 window.addEventListener("error", (event) => {
   const message = event.error?.message || event.message || "Unbekannter Frontend-Fehler";
@@ -210,7 +211,7 @@ const state = {
     query: "",
     boxId: "SV-001",
     condition: "Gut",
-    completeness: "Ungeprueft, Fotos vorhanden",
+    completeness: "Ungeprüft, Fotos vorhanden",
     barcode: "",
     photo: "",
     weight: "0.25"
@@ -243,7 +244,7 @@ function nextSku(boxId) {
 function analyze(draft = state.draft) {
   const text = `${draft.query} ${draft.barcode}`.toLowerCase();
   const hint = hints.find((entry) => entry.tokens.some((token) => text.includes(token))) || hints[2];
-  const incomplete = draft.condition === "Unvollstaendig" || draft.condition === "Defekt";
+  const incomplete = draft.condition === "Unvollständig" || draft.condition === "Unvollstaendig" || draft.condition === "Defekt";
   const confidence = Math.max(38, hint.confidence - (incomplete ? 18 : 0));
   const fair = Math.round(hint.fair * (draft.condition === "Sehr gut" ? 1.18 : 1));
   return enrichWorkflow({
@@ -263,7 +264,7 @@ function analyze(draft = state.draft) {
     stage: confidence < 70 ? "Gescannt" : "Freigabe",
     weight: Number(draft.weight) || 0.25,
     image: draft.photo || "https://images.unsplash.com/photo-1611996575749-79a3a250f948?auto=format&fit=crop&w=900&q=80",
-    notes: confidence < 65 ? "KI ist unsicher. Variante, Zustand und Vergleichspreise vor Listing manuell pruefen." : "Listing-Entwurf bereit. Titel, Zustand und Versandgewicht vor Publikation bestaetigen.",
+    notes: confidence < 65 ? "KI ist unsicher. Variante, Zustand und Vergleichspreise vor Listing manuell prüfen." : "Listing-Entwurf bereit. Titel, Zustand und Versandgewicht vor Veröffentlichung bestätigen.",
     sourceType: "mock",
     research: [["eBay", "Aktive Vergleichsartikel", fair + 12, "simuliert"], ["eBay Solds", "Verkaufte Vergleichsartikel", fair - 8, "simuliert"], ["CREATORS", "Routing-Regel", fair, "jetzt"]]
   });
@@ -342,15 +343,15 @@ function campaignTitleFor(whatnot, item) {
 }
 
 function bundleSuggestionFor(item, whatnot, showLotType) {
-  if (showLotType === "premium") return "Vor Live-Verkauf durch Reviewer bestaetigen und als Highlight spaeter in der Show platzieren.";
-  if (showLotType === "bundle") return `Mit aehnlichen Artikeln aus ${whatnot.label} buendeln, wenn Fair Value unter 12 EUR bleibt.`;
-  return `Als Einzel-Lot in ${whatnot.label}; thematisch neben aehnliche Artikel sortieren.`;
+  if (showLotType === "premium") return "Vor Live-Verkauf bestätigen und als Highlight später in der Show platzieren.";
+  if (showLotType === "bundle") return `Mit ähnlichen Artikeln aus ${whatnot.label} bündeln, wenn der Marktwert unter 12 EUR bleibt.`;
+  return `Als Einzel-Lot in ${whatnot.label}; thematisch neben ähnliche Artikel sortieren.`;
 }
 
 function scriptForWhatnot(item, whatnot, showLotType) {
   const start = Math.max(1, Math.round((Number(item.low) || Number(item.fair) || 1) * 0.65));
   const type = showLotType === "premium" ? "Highlight-Lot" : showLotType === "bundle" ? "Bundle-Lot" : "Einzel-Lot";
-  return `${type} fuer ${whatnot.label}. Start bei ${euro(start)}. Fair Value ${euro(Number(item.fair) || 0)}. Zustand: ${item.condition || "siehe Fotos"}. ${item.completeness || "Vollstaendigkeit pruefen."} Besonderheiten kurz zeigen und bei Unsicherheit als Review-Hinweis nennen.`;
+  return `${type} für ${whatnot.label}. Start bei ${euro(start)}. Marktwert ${euro(Number(item.fair) || 0)}. Zustand: ${item.condition || "siehe Fotos"}. ${item.completeness || "Vollständigkeit prüfen."} Besonderheiten kurz zeigen und bei Unsicherheit als Hinweis nennen.`;
 }
 
 function buildWhatnotCampaigns(items) {
@@ -401,16 +402,16 @@ async function hydrateAppState() {
       state.items = normalizeItems(payload.items);
       state.selected = state.items[0]?.id || "";
       saveLocal();
-      state.importStatus = `Supabase verbunden: ${payload.items.length} Artikel geladen${state.persistence.writable ? " und schreibbereit" : ", aktuell nur lesend"}.`;
+      state.importStatus = `${payload.items.length} Artikel aus der Datenbank geladen${state.persistence.writable ? " und bereit zum Speichern" : ", aktuell nur lesend"}.`;
     } else if (state.persistence.writable) {
-      state.importStatus = "Supabase verbunden und schreibbereit. Noch keine Artikel in der Datenbank, lokale Demo bleibt sichtbar.";
+      state.importStatus = "Datenbank bereit. Noch keine gespeicherten Artikel vorhanden, Demo-Bestand bleibt sichtbar.";
     } else if (state.persistence.configured) {
-      state.importStatus = "Supabase erreichbar, aber noch ohne Service-Role-Key nur eingeschraenkt nutzbar. Lokale Demo bleibt sichtbar.";
+      state.importStatus = "Datenbank erreichbar, Speichern ist aktuell eingeschränkt. Demo-Bestand bleibt sichtbar.";
     } else {
-      state.importStatus = "Lokaler Modus: Supabase ist nicht konfiguriert.";
+      state.importStatus = "Lokaler Modus: Datenbank ist nicht verbunden.";
     }
   } catch (error) {
-    state.importStatus = `Supabase Laden fehlgeschlagen: ${error.message}. Lokale Demo bleibt sichtbar.`;
+    state.importStatus = `Daten konnten nicht geladen werden: ${error.message}. Demo-Bestand bleibt sichtbar.`;
   }
   render();
 }
@@ -424,11 +425,11 @@ async function persistItem(item, action = "Artikel") {
     if (result.item) {
       Object.assign(item, normalizeItems([result.item])[0]);
     }
-    state.importStatus = `${action} in Supabase gespeichert.`;
+    state.importStatus = `${action} gespeichert.`;
     saveLocal();
     return result.item || item;
   } catch (error) {
-    state.importStatus = `${action} lokal gespeichert, Supabase Sync fehlgeschlagen: ${error.message}`;
+    state.importStatus = `${action} lokal gespeichert, Datenbank-Sync fehlgeschlagen: ${error.message}`;
     return null;
   }
 }
@@ -440,8 +441,8 @@ async function persistItems(items, action = "Artikel") {
   const results = await Promise.allSettled(items.map((item) => persistItem(item, action)));
   const failed = results.filter((result) => result.status === "rejected").length;
   state.importStatus = failed
-    ? `${items.length - failed}/${items.length} ${action} in Supabase gespeichert.`
-    : `${items.length} ${action} in Supabase gespeichert.`;
+    ? `${items.length - failed}/${items.length} ${action} gespeichert.`
+    : `${items.length} ${action} gespeichert.`;
   render();
 }
 
@@ -495,10 +496,36 @@ function workStatus(item) {
   if (item.stage === "Versand") return "Versand";
   if (item.stage === "Verkauft") return "Verkauft";
   if (item.channel === "Problemfall") return "Problem";
-  if (item.channel === "Pruefen" || item.confidence < 70) return "Pruefen";
-  if (item.ebayDraft) return "Draft";
+  if (item.channel === "Pruefen" || item.confidence < 70) return "Prüfen";
+  if (item.ebayDraft) return "eBay-Entwurf";
   if (item.channel === "eBay" || item.channel === "Whatnot" || item.whatnotEligible) return "Verkaufen";
   return "Erfasst";
+}
+
+function isDemoItem(item) {
+  return String(item.sku || "").includes("DEMO") || String(item.boxId || "").includes("DEMO") || item.sourceType === "demo";
+}
+
+function demoBadge(item) {
+  return isDemoItem(item) ? `<span class="demo-badge">DEMO</span>` : "";
+}
+
+function channelLabel(channel) {
+  return {
+    Pruefen: "Prüfen",
+    eBay: "eBay",
+    Whatnot: "Whatnot",
+    Strongvision: "Strongvision",
+    Bundle: "Bundle",
+    Problemfall: "Problemfall"
+  }[channel] || channel || "Offen";
+}
+
+function channelClass(channel) {
+  return String(channel || "offen")
+    .toLowerCase()
+    .replace("ü", "ue")
+    .replace(/[^a-z0-9-]/g, "");
 }
 
 function queuePreview(items, emptyText = "Keine offenen Artikel") {
@@ -525,12 +552,11 @@ function render() {
       <nav class="nav-list" aria-label="Arbeitsbereiche">
         ${navButton("today", "HE", "Heute")}
         ${navButton("scan", "ER", "Erfassen")}
-        ${navButton("review", "PR", "Pruefen")}
+        ${navButton("review", "PR", "Prüfen")}
         ${navButton("sell", "VK", "Verkaufen")}
         ${navButton("shipping", "VS", "Versand")}
         ${navButton("inventory", "DB", "Bestand")}
       </nav>
-      <div class="box-stack"><div class="section-label">Lagerfilter</div>${boxButton({ id: "", label: "Alle Kisten", location: "Gesamter Bestand" })}${boxes.map(boxButton).join("")}</div>
     </aside>
     <section class="workspace">
       <header class="topbar">
@@ -542,11 +568,12 @@ function render() {
       ${state.importStatus ? `<div class="status-strip">${escapeHtml(state.importStatus)}</div>` : ""}
       <section class="metrics" aria-label="Kennzahlen">
         ${metric("AR", "Artikel", stats.count)}
-        ${metric("AI", "KI-Autoquote", `${stats.count ? Math.round((stats.auto / stats.count) * 100) : 0}%`)}
-        ${metric("PR", "Pruefen", stats.review)}
+        ${metric("AI", "Automatisch", `${stats.count ? Math.round((stats.auto / stats.count) * 100) : 0}%`)}
+        ${metric("PR", "Prüfen", stats.review)}
         ${metric("WN", "Whatnot", `${stats.whatnot}/${stats.campaigns}`)}
-        ${metric("EU", "Fair Value", euro(stats.value))}
+        ${metric("EU", "Marktwert", euro(stats.value))}
       </section>
+      ${boxFilterBar()}
       ${viewMarkup(selected)}
     </section>`;
 
@@ -557,7 +584,7 @@ function pageTitle() {
   return {
     today: "Heute",
     scan: "Artikel erfassen",
-    review: "Pruefen und freigeben",
+    review: "Prüfen und freigeben",
     sell: "Verkaufen",
     shipping: "Versand",
     inventory: "Bestand"
@@ -568,9 +595,22 @@ function navButton(id, iconLabel, label) {
   return `<button class="nav-button ${state.view === id ? "active" : ""}" data-view="${id}" type="button" title="${label}">${icon(iconLabel)}<span>${label}</span></button>`;
 }
 
+function boxLabel(box) {
+  if (!box.id) return "Alle Kisten";
+  const location = String(box.location || "").replace(/^CREATORS\s*/i, "").trim();
+  return `Kiste ${location || box.id}`;
+}
+
 function boxButton(box) {
   const selected = state.boxFilter === box.id || (!state.boxFilter && !box.id);
-  return `<button class="box-row ${selected ? "selected" : ""}" data-box="${box.id}" type="button"><span><strong>${box.id || "Alle"}</strong><small>${box.location}</small></span><span>›</span></button>`;
+  return `<button class="filter-chip ${selected ? "selected" : ""}" data-box="${box.id}" type="button"><strong>${boxLabel(box)}</strong><small>${box.id || "Gesamter Bestand"}</small></button>`;
+}
+
+function boxFilterBar() {
+  return `<section class="filter-bar" aria-label="Lagerfilter">
+    <div><span>Lagerfilter</span><strong>${state.boxFilter ? boxLabel(boxes.find((box) => box.id === state.boxFilter) || { id: state.boxFilter, location: state.boxFilter }) : "Alle Kisten"}</strong></div>
+    <div class="filter-chips">${boxButton({ id: "", label: "Alle Kisten", location: "Gesamter Bestand" })}${boxes.map(boxButton).join("")}</div>
+  </section>`;
 }
 
 function viewMarkup(selected) {
@@ -586,29 +626,29 @@ function viewMarkup(selected) {
 
 function todayView() {
   const queues = getWorkQueues();
-  const nextAction = queues.review.length ? "Pruefen starten" : queues.sellReady.length ? "Verkaufen vorbereiten" : "Neue Artikel erfassen";
+  const nextAction = queues.review.length ? "Prüfen starten" : queues.sellReady.length ? "Verkaufen vorbereiten" : "Neue Artikel erfassen";
   const nextView = queues.review.length ? "review" : queues.sellReady.length ? "sell" : "scan";
   const items = visibleItems();
 
   return `<section class="operator-dashboard">
     <div class="day-focus">
       <div>
-        <p>Naechster sinnvoller Schritt</p>
+        <p>Nächster sinnvoller Schritt</p>
         <h2>${nextAction}</h2>
-        <span>${queues.review.length} Pruefung · ${queues.ebay.length} eBay · ${queues.campaigns.length} Whatnot-Kampagnen · ${queues.shipping.length} Versand</span>
+        <span>${queues.review.length} Prüfung · ${queues.ebay.length} eBay · ${queues.campaigns.length} Whatnot-Kampagnen · ${queues.shipping.length} Versand</span>
       </div>
       <button class="primary-action inline-action" data-view="${nextView}" type="button">${icon("GO")}${nextAction}</button>
     </div>
     <div class="task-grid">
       ${taskCard("Erfassen", "Neue Ware scannen oder Fotos hochladen.", "scan", "ER", items.filter((item) => item.stage === "Gescannt" || item.stage === "Eingang").length, queuePreview(items.slice(0, 3)))}
-      ${taskCard("Pruefen", "Unsichere Preise, Zustaende und Plattformen entscheiden.", "review", "PR", queues.review.length, queuePreview(queues.review))}
-      ${taskCard("Verkaufen", "eBay-Drafts und Whatnot-Kampagnen vorbereiten.", "sell", "VK", queues.sellReady.length, queuePreview(queues.sellReady))}
+      ${taskCard("Prüfen", "Unsichere Preise, Zustände und Plattformen entscheiden.", "review", "PR", queues.review.length, queuePreview(queues.review))}
+      ${taskCard("Verkaufen", "eBay-Entwürfe und Whatnot-Kampagnen vorbereiten.", "sell", "VK", queues.sellReady.length, queuePreview(queues.sellReady))}
       ${taskCard("Versand", "Verkaufte Artikel finden, packen und verschicken.", "shipping", "VS", queues.shipping.length, queuePreview(queues.shipping, "Noch keine verkauften Artikel im Versand."))}
     </div>
-    <details class="dev-tools">
+    ${devMode ? `<details class="dev-tools">
       <summary>Demo- und Importwerkzeuge</summary>
       <div><button class="secondary-action" id="load-ai-import" type="button">${icon("AI")}AI Import laden</button><button class="secondary-action" id="load-channel-plan" type="button">${icon("RT")}Channel Plan laden</button></div>
-    </details>
+    </details>` : ""}
   </section>`;
 }
 
@@ -616,7 +656,7 @@ function taskCard(title, description, view, iconLabel, count, body) {
   return `<article class="task-card">
     <div class="task-card-head"><span>${icon(iconLabel)}</span><div><strong>${title}</strong><small>${description}</small></div><em>${count}</em></div>
     ${body}
-    <button class="secondary-action" data-view="${view}" type="button">${title} oeffnen</button>
+    <button class="secondary-action" data-view="${view}" type="button">${title} öffnen</button>
   </article>`;
 }
 
@@ -624,23 +664,23 @@ function scanView() {
   const preview = analyze();
   return `<section class="work-grid">
     <div class="scan-panel">
-      <div class="panel-heading"><div><p>Intake</p><h2>Artikel scannen</h2></div><button class="icon-button" id="reset" title="Neue Erfassung">${icon("NE")}</button></div>
+      <div class="panel-heading"><div><p>Erfassung</p><h2>Neuen Artikel erfassen</h2></div><button class="icon-button" id="reset" title="Neue Erfassung">${icon("NE")}</button></div>
       <label class="photo-drop">${state.draft.photo ? `<img src="${state.draft.photo}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>Foto aufnehmen oder hochladen</strong></span>`}<input id="photo" accept="image/*" type="file" /></label>
       <div class="form-grid">
         ${field("Artikelhinweis", `<input id="query" value="${escapeHtml(state.draft.query)}" placeholder="z.B. Pokemon Display, DS Spiel, Anime Figur" />`)}
         ${field("Barcode / Seriennummer", `<div class="input-with-icon">${icon("BC")}<input id="barcode" value="${escapeHtml(state.draft.barcode)}" placeholder="optional" /></div>`)}
         ${field("Kiste", `<select id="boxId">${boxes.map((box) => `<option ${box.id === state.draft.boxId ? "selected" : ""}>${box.id}</option>`).join("")}</select>`)}
-        ${field("Zustand", `<select id="condition">${["Neu", "Sehr gut", "Gut", "Gebraucht", "Unvollstaendig", "Defekt"].map((value) => `<option ${value === state.draft.condition ? "selected" : ""}>${value}</option>`).join("")}</select>`)}
+        ${field("Zustand", `<select id="condition">${["Neu", "Sehr gut", "Gut", "Gebraucht", "Unvollständig", "Defekt"].map((value) => `<option ${value === state.draft.condition ? "selected" : ""}>${value}</option>`).join("")}</select>`)}
         ${field("Gewicht kg", `<div class="input-with-icon">${icon("KG")}<input id="weight" value="${escapeHtml(state.draft.weight)}" inputmode="decimal" /></div>`)}
-        ${field("Vollstaendigkeit", `<input id="completeness" value="${escapeHtml(state.draft.completeness)}" />`)}
+        ${field("Vollständigkeit", `<input id="completeness" value="${escapeHtml(state.draft.completeness)}" />`)}
       </div>
       <button class="primary-action" id="add-item" type="button">${icon("AI")}${state.analyzing ? "Analysiere Foto..." : "KI-Vorschlag erzeugen"}</button>
     </div>
     <div class="ai-panel">
-      <div class="panel-heading"><div><p>AI Copilot</p><h2>Vorschau</h2></div>${icon("AI")}</div>
+      <div class="panel-heading"><div><p>KI-Vorschlag</p><h2>Vorschau</h2></div>${icon("AI")}</div>
       <div class="price-range"><span>${euro(preview.low)}</span><strong>${euro(preview.fair)}</strong><span>${euro(preview.aggressive)}</span></div>
       <div class="confidence"><span style="width:${preview.confidence}%"></span></div>
-      <div class="suggestion-list">${suggestion("Kategorie", preview.category)}${suggestion("Franchise", preview.franchise)}${suggestion("Routing", preview.channel)}${suggestion("SKU", preview.sku)}</div>
+      <div class="suggestion-list">${suggestion("Kategorie", preview.category)}${suggestion("Franchise", preview.franchise)}${suggestion("Verkaufskanal", channelLabel(preview.channel))}${suggestion("SKU", preview.sku)}</div>
       <div class="callout">${icon("IN")}<p>${preview.notes}</p></div>
     </div>
   </section>`;
@@ -657,12 +697,12 @@ function reviewView(selected) {
   if (active && !reviewItems.some((item) => item.id === state.selected)) state.selected = active.id;
 
   if (!reviewItems.length) {
-    return `<section class="empty-state"><h2>Keine offenen Pruefungen</h2><p>Alles, was unsicher ist, landet hier: niedrige KI-Confidence, Plattform “Pruefen”, Problemfaelle und teure Einzelstuecke.</p><button class="primary-action inline-action" data-view="scan" type="button">${icon("ER")}Neue Artikel erfassen</button></section>`;
+    return `<section class="empty-state"><h2>Keine offenen Prüfungen</h2><p>Alles, was unsicher ist, landet hier: niedrige KI-Sicherheit, Plattform “Prüfen”, Problemfälle und teure Einzelstücke.</p><button class="primary-action inline-action" data-view="scan" type="button">${icon("ER")}Neue Artikel erfassen</button></section>`;
   }
 
   return `<section class="inventory-layout review-workspace">
     <div class="inventory-list">
-      <div class="panel-heading"><div><p>Arbeitsqueue</p><h2>Pruefen</h2></div><span class="queue-count">${reviewItems.length} offen</span></div>
+      <div class="panel-heading"><div><p>Arbeitsliste</p><h2>Prüfen</h2></div><span class="queue-count">${reviewItems.length} offen</span></div>
       ${reviewItems.map(itemRow).join("")}
     </div>
     ${active ? inspector(active) : ""}
@@ -672,14 +712,16 @@ function reviewView(selected) {
 function inventoryView(selected) {
   const needle = state.search.toLowerCase();
   const filtered = visibleItems().filter((item) => [item.title, item.sku, item.category, item.channel, item.boxId, item.whatnotChannelLabel, item.campaignSuggestion].join(" ").toLowerCase().includes(needle));
+  const active = filtered.find((item) => item.id === selected?.id) || filtered[0];
+  if (active && active.id !== state.selected) state.selected = active.id;
   return `<section class="inventory-layout">
-    <div class="inventory-list"><div class="panel-heading"><div><p>Bestand</p><h2>Artikelkarten</h2></div><button class="icon-button" data-view="scan" title="Artikel hinzufuegen">${icon("PL")}</button></div>${filtered.map(itemRow).join("")}</div>
-    ${selected ? inspector(selected) : ""}
+    <div class="inventory-list"><div class="panel-heading"><div><p>Bestand</p><h2>Artikelkarten</h2></div><button class="icon-button" data-view="scan" title="Artikel hinzufügen">${icon("PL")}</button></div>${filtered.map(itemRow).join("")}</div>
+    ${active ? inspector(active) : `<section class="empty-state compact-empty"><h2>Kein Treffer</h2><p>Ändere Suche oder Lagerfilter, um wieder Artikel zu sehen.</p></section>`}
   </section>`;
 }
 
 function itemRow(item) {
-  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${item.category}</small><small>${sourceBadge(item)}</small></span><em>${euro(item.fair)}</em></button>`;
+  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${item.category}</small><small>${sourceBadge(item)}</small></span><span class="row-meta">${demoBadge(item)}<em>${euro(item.fair)}</em></span></button>`;
 }
 
 function inspector(item) {
@@ -694,18 +736,19 @@ function inspector(item) {
   return `<div class="inspector">
     <div class="inspector-media"><img src="${item.image}" alt="${escapeHtml(item.title)}" /></div>
     <div class="inspector-content">
-      <div class="inspector-title"><div><p>${item.sku}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${item.channel.toLowerCase()}">${item.channel}</span></div>
+      <div class="breadcrumb"><button data-view="today" type="button">Heute</button><span>›</span><button data-view="${state.view}" type="button">${escapeHtml(pageTitle())}</button><span>›</span><strong>${escapeHtml(item.sku)}</strong></div>
+      <div class="inspector-title"><div><p>${item.sku} ${demoBadge(item)}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${channelClass(item.channel)}">${channelLabel(item.channel)}</span></div>
       <div class="source-strip">${sourceBadge(item)}</div>
-      <div class="price-grid">${suggestion("Low", euro(item.low))}${suggestion("Fair", euro(item.fair))}${suggestion("Aggressiv", euro(item.aggressive))}${suggestion("Confidence", `${item.confidence}%`)}</div>
+      <div class="price-grid">${suggestion("Minimum", euro(item.low))}${suggestion("Marktwert", euro(item.fair))}${suggestion("Optimistisch", euro(item.aggressive))}${suggestion("KI-Sicherheit", `${item.confidence}%`)}</div>
       <div class="draft-actions">
-        <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Pruefe..." : "Preise checken"}</button>
-        <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Baue..." : "eBay Draft"}</button>
+        <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Prüfe..." : "Preise checken"}</button>
+        <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Baue..." : "eBay-Entwurf"}</button>
       </div>
       ${priceCheckCard(item)}
       ${ebayDraftCard(item)}
       ${channelPicker(item)}
       ${whatnotRoutingCard(item)}
-      <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollstaendigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
+      <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollständigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
       <section class="research"><h3>Preisquellen</h3>${research.map((comp) => `<div class="research-row"><span>${comp[0]}</span><strong>${comp[1]}</strong><em>${comp[2] ? euro(comp[2]) : "Regel"}</em><small>${comp[3]}</small></div>`).join("")}</section>
       <section class="script-box"><h3>Whatnot Skript</h3><p>${script}</p></section>
       ${otherVisible}
@@ -715,11 +758,11 @@ function inspector(item) {
 
 function whatnotRoutingCard(item) {
   if (!(item.whatnotEligible || item.channel === "Whatnot")) {
-    return `<section class="script-box"><h3>Whatnot Sorter</h3><p>Nicht fuer Whatnot markiert. Bei Bedarf im Plattformrouting auf Whatnot setzen, dann wird automatisch ein Kanal und eine Kampagne vorgeschlagen.</p></section>`;
+    return `<section class="script-box"><h3>Whatnot-Vorbereitung</h3><p>Nicht für Whatnot markiert. Setze den Artikel bei Bedarf im Plattformbereich auf Whatnot, dann wird automatisch eine passende Kampagne vorgeschlagen.</p></section>`;
   }
   return `<section class="whatnot-card">
     <div class="whatnot-card-head">
-      <span>${icon("WN")}Whatnot Sorter</span>
+      <span>${icon("WN")}Whatnot-Vorbereitung</span>
       <strong>${escapeHtml(item.whatnotChannelLabel || "Unsortiert")}</strong>
     </div>
     <div class="detail-grid">
@@ -743,11 +786,11 @@ function lotTypeLabel(value) {
 function priceCheckCard(item) {
   const check = item.priceCheck;
   if (!check) {
-    return `<section class="research compact"><h3>Preischeck</h3><p>Noch nicht geprueft. Erstellt lokale Evidence; Live-eBay folgt, sobald API-Zugang steht.</p></section>`;
+    return `<section class="research compact"><h3>Preischeck</h3><p>Noch nicht geprüft. Aktuell wird ein lokaler Vergleich erzeugt; echte Live-Preise folgen mit aktiviertem eBay-Zugang.</p></section>`;
   }
   return `<section class="research price-check-card">
     <h3>Preischeck</h3>
-    <div class="price-grid">${suggestion("Low", euro(check.low))}${suggestion("Fair", euro(check.fair))}${suggestion("Aggressiv", euro(check.aggressive))}${suggestion("Confidence", `${check.confidence}%`)}</div>
+    <div class="price-grid">${suggestion("Minimum", euro(check.low))}${suggestion("Marktwert", euro(check.fair))}${suggestion("Optimistisch", euro(check.aggressive))}${suggestion("KI-Sicherheit", `${check.confidence}%`)}</div>
     <div class="source-strip">Methode: ${escapeHtml(check.method)} · Query: ${escapeHtml(check.query)}</div>
     ${check.evidence.map((entry) => `<div class="research-row"><span>${escapeHtml(entry.source)}</span><strong>${escapeHtml(entry.title)}</strong><em>${euro(entry.price)}</em><small>${entry.matchScore}% Match</small></div>`).join("")}
   </section>`;
@@ -757,7 +800,7 @@ function ebayDraftCard(item) {
   const draft = item.ebayDraft;
   if (!draft) return "";
   return `<section class="script-box ebay-draft-card">
-    <h3>eBay Draft</h3>
+    <h3>eBay-Entwurf</h3>
     <div class="detail-grid">${suggestion("Status", draft.status)}${suggestion("SKU", draft.sku)}${suggestion("Marktplatz", draft.marketplaceId)}${suggestion("Preis", euro(Number(draft.offerDraft?.pricingSummary?.price?.value || item.fair)))}</div>
     <p>${escapeHtml(draft.inventoryItem?.product?.title || item.title)}</p>
     <div class="source-strip">Kategorie: ${escapeHtml(draft.offerDraft?.categoryId || "TODO")} · Location: ${escapeHtml(draft.offerDraft?.merchantLocationKey || "-")}</div>
@@ -768,9 +811,9 @@ function channelPicker(item) {
   const options = state.showAllChannels ? [...primaryChannels, ...futureChannels] : primaryChannels;
   const moreLabel = state.showAllChannels ? "Weniger anzeigen" : "Mehr anzeigen";
   return `<section class="channel-picker" aria-label="Plattformrouting">
-    <div class="channel-picker-head"><span>Plattformrouting</span><button data-toggle-channels type="button">${moreLabel}</button></div>
+    <div class="channel-picker-head"><span>Verkaufskanal</span><button data-toggle-channels type="button">${moreLabel}</button></div>
     <div class="segment-control">${options.map((channel) => channelButton(channel, item)).join("")}</div>
-    <p>${state.showAllChannels ? "Weitere Kanaele sind als Roadmap sichtbar und noch gesperrt." : "Die drei operativen Optionen fuer den aktuellen Demo-Flow."}</p>
+    <p>${state.showAllChannels ? "Weitere Kanäle sind als Roadmap sichtbar und noch gesperrt." : "Wähle, wo dieser Artikel als nächstes verkauft oder weiterbearbeitet werden soll."}</p>
   </section>`;
 }
 
@@ -791,7 +834,7 @@ function routingView() {
     }))
     .filter((bucket) => bucket.items.length);
   const columns = [
-    routeColumn("Pruefen", items.filter((item) => item.channel === "Pruefen")),
+    routeColumn("Prüfen", items.filter((item) => item.channel === "Pruefen")),
     routeColumn("eBay", items.filter((item) => item.channel === "eBay")),
     ...whatnotBuckets.map((bucket) => routeColumn(`Whatnot: ${bucket.channel.label}`, bucket.items, bucket.channel.icon)),
     routeColumn("Strongvision", items.filter((item) => item.channel === "Strongvision")),
@@ -811,12 +854,12 @@ function sellView() {
     <div class="sell-column">
       <div class="panel-heading"><div><p>eBay</p><h2>Listing Queue</h2></div><span class="queue-count">${queues.ebay.length}</span></div>
       <div class="sell-section">
-        <h3>Bereit fuer Draft</h3>
-        ${listingQueue(ebayNeedsDraft, "Keine offenen eBay-Drafts.")}
+        <h3>Bereit für eBay</h3>
+        ${listingQueue(ebayNeedsDraft, "Keine offenen eBay-Entwürfe.")}
       </div>
       <div class="sell-section">
-        <h3>Drafts erstellt</h3>
-        ${listingQueue(ebayDrafts, "Noch keine Drafts erstellt.")}
+        <h3>eBay-Entwürfe</h3>
+        ${listingQueue(ebayDrafts, "Noch keine eBay-Entwürfe erstellt.")}
       </div>
     </div>
     <div class="sell-column">
@@ -829,10 +872,10 @@ function sellView() {
 function listingQueue(items, emptyText) {
   if (!items.length) return `<p class="muted-copy">${emptyText}</p>`;
   return `<div class="listing-queue">${items.map((item) => `<article class="listing-row">
-    <button class="queue-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% Confidence</small></span></button>
+    <button class="queue-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% KI-Sicherheit</small></span></button>
     <div class="listing-actions">
-      <button class="secondary-action" data-price-check="${item.id}" type="button">${state.priceChecking === item.id ? "Pruefe..." : "Preischeck"}</button>
-      <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${state.ebayDrafting === item.id ? "Baue..." : "Draft"}</button>
+      <button class="secondary-action" data-price-check="${item.id}" type="button">${state.priceChecking === item.id ? "Prüfe..." : "Preischeck"}</button>
+      <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${state.ebayDrafting === item.id ? "Baue..." : "Entwurf"}</button>
     </div>
   </article>`).join("")}</div>`;
 }
@@ -847,15 +890,15 @@ function routeColumn(title, items, iconLabel = title.slice(0, 2).toUpperCase()) 
 function campaignsView() {
   const campaigns = buildWhatnotCampaigns(state.items);
   if (!campaigns.length) {
-    return `<section class="empty-state"><h2>Keine Whatnot-Kampagnen</h2><p>Setze Artikel im Plattformrouting auf Whatnot. RAMROD sortiert sie danach automatisch in Kanaele und Kampagnen.</p><button class="primary-action inline-action" id="auto-whatnot" type="button">${icon("WN")}Kandidaten sortieren</button></section>`;
+    return `<section class="empty-state"><h2>Keine Whatnot-Kampagnen</h2><p>Setze Artikel im Verkaufskanal auf Whatnot. RAMROD sortiert sie danach automatisch in Kanäle und Kampagnen.</p><button class="primary-action inline-action" id="auto-whatnot" type="button">${icon("WN")}Kandidaten sortieren</button></section>`;
   }
   return `<section class="campaigns-layout">
     <div class="campaigns-list">
-      <div class="panel-heading"><div><p>Whatnot</p><h2>Kampagnen</h2></div><div class="panel-actions"><button class="secondary-action" id="auto-whatnot" type="button">${icon("WN")}Kandidaten sortieren</button><button class="secondary-action" type="button">${icon("EX")}Export spaeter</button></div></div>
+      <div class="panel-heading"><div><p>Whatnot</p><h2>Kampagnen</h2></div><div class="panel-actions"><button class="secondary-action" id="auto-whatnot" type="button">${icon("WN")}Kandidaten sortieren</button><button class="secondary-action" type="button">${icon("EX")}Export später</button></div></div>
       ${campaigns.map(campaignCard).join("")}
     </div>
     <div class="show-console">
-      <div class="panel-heading"><div><p>Show-Modus</p><h2>Naechste Kampagne</h2></div>${icon("WN")}</div>
+      <div class="panel-heading"><div><p>Show-Modus</p><h2>Nächste Kampagne</h2></div>${icon("WN")}</div>
       ${showModePreview(campaigns[0])}
     </div>
   </section>`;
@@ -885,7 +928,7 @@ function showModePreview(campaign) {
       ${suggestion("Start", euro(Math.max(1, Math.round((Number(first.low) || Number(first.fair) || 1) * 0.65))))}
       ${suggestion("Fair", euro(first.fair))}
       ${suggestion("Lot", lotTypeLabel(first.showLotType))}
-      ${suggestion("Naechste Lots", campaign.items.length - 1)}
+      ${suggestion("Nächste Lots", campaign.items.length - 1)}
     </div>
     <div class="show-runlist">${campaign.items.slice(0, 8).map((item, index) => `<button class="show-runlist-row" data-select="${item.id}" data-view-after="inventory" type="button"><span>${index + 1}</span><strong>${escapeHtml(item.title)}</strong><em>${euro(item.fair)}</em></button>`).join("")}</div>
   </div>`;
@@ -896,9 +939,9 @@ function channelPlanView() {
   return `<section class="channel-plan-layout">
     <div class="channel-summary">
       ${suggestion("Artikel", plan.summary.total)}
-      ${suggestion("Freigabe noetig", plan.summary.needsApproval)}
-      ${suggestion("Fair Value", euro(plan.summary.fairValue))}
-      ${suggestion("Primaerkanaele", Object.entries(plan.summary.byPrimary).map(([key, value]) => `${key}: ${value}`).join(", "))}
+      ${suggestion("Freigabe nötig", plan.summary.needsApproval)}
+      ${suggestion("Marktwert", euro(plan.summary.fairValue))}
+      ${suggestion("Primärkanäle", Object.entries(plan.summary.byPrimary).map(([key, value]) => `${key}: ${value}`).join(", "))}
     </div>
     <div class="channel-plan-list">
       ${plan.plans.map(channelPlanRow).join("")}
@@ -914,17 +957,17 @@ function channelPlanRow(plan) {
   return `<article class="channel-plan-row">
     <div>
       <strong>${escapeHtml(plan.title)}</strong>
-      <small>${plan.sku} · ${euro(plan.fairValue)} · ${plan.confidence}% Confidence</small>
+      <small>${plan.sku} · ${euro(plan.fairValue)} · ${plan.confidence}% KI-Sicherheit</small>
     </div>
     <div class="channel-action-tags">${actions}</div>
-    <p>${escapeHtml(reasons)} Delist-Policy: ${plan.saleLockPolicy.delistEverywhereExceptSoldChannel ? "bei Verkauf ueberall entfernen" : "manuell pruefen"}.</p>
+    <p>${escapeHtml(reasons)} Verkaufsregel: ${plan.saleLockPolicy.delistEverywhereExceptSoldChannel ? "bei Verkauf überall entfernen" : "manuell prüfen"}.</p>
   </article>`;
 }
 
 function shippingView() {
   return `<section class="shipping-layout">
-    <div class="shipping-queue"><div class="panel-heading"><div><p>Pick & Pack</p><h2>Versandstation</h2></div><button class="secondary-action" type="button">${icon("CSV")}CSV Import</button></div>${visibleItems().filter((item) => item.channel !== "Problemfall").map((item) => `<div class="ship-row"><img src="${item.image}" alt="" /><div><strong>${item.sku}</strong><span>${escapeHtml(item.title)}</span></div><small>${item.boxId}</small><small>${item.weight.toFixed(2)} kg</small><button data-ship="${item.id}" title="Als versandbereit markieren">${icon("OK")}</button></div>`).join("")}</div>
-    <div class="shipping-guide"><h2>Label-Logik</h2><p>Der MVP sammelt Gewicht, Lagerplatz und SKU. Im naechsten Schritt verbinden wir DHL, eBay Orders und Whatnot Export, damit die Packstation automatisch Picklisten und Labels erzeugt.</p><div class="guide-steps"><span>1. Verkauf importieren</span><span>2. SKU scannen</span><span>3. Gewicht validieren</span><span>4. Label drucken</span></div></div>
+    <div class="shipping-queue"><div class="panel-heading"><div><p>Packen & Versenden</p><h2>Versandstation</h2></div><button class="secondary-action" type="button">${icon("CSV")}Verkäufe importieren</button></div>${visibleItems().filter((item) => item.channel !== "Problemfall").map((item) => `<div class="ship-row"><img src="${item.image}" alt="" /><div><strong>${item.sku}</strong><span>${escapeHtml(item.title)}</span></div><small>${item.boxId}</small><small>${item.weight.toFixed(2)} kg</small><button data-ship="${item.id}" title="Als versandbereit markieren">${icon("OK")}</button></div>`).join("")}</div>
+    <div class="shipping-guide"><h2>Versandetiketten</h2><p>Der MVP sammelt Gewicht, Lagerplatz und SKU. Im nächsten Schritt verbinden wir DHL, eBay Orders und Whatnot Export, damit die Packstation automatisch Picklisten und Labels erzeugt.</p><div class="guide-steps"><span>1. Verkauf importieren</span><span>2. SKU scannen</span><span>3. Gewicht validieren</span><span>4. Label drucken</span></div></div>
   </section>`;
 }
 
@@ -951,7 +994,7 @@ function bindEvents() {
       channel: button.dataset.route,
       whatnotEligible: button.dataset.route === "Whatnot" ? true : false
     });
-    await persistItem(state.items[index], "Routing");
+    await persistItem(state.items[index], "Verkaufskanal");
     render();
   }));
   document.querySelectorAll("[data-toggle-channels]").forEach((button) => button.addEventListener("click", () => {
@@ -962,7 +1005,7 @@ function bindEvents() {
     const item = state.items.find((entry) => entry.id === button.dataset.priceCheck);
     if (!item || state.priceChecking) return;
     state.priceChecking = item.id;
-    state.importStatus = "Lokaler Preischeck laeuft...";
+    state.importStatus = "Preischeck läuft...";
     render();
     try {
       const result = await postJson("/api/price-check", { item });
@@ -987,15 +1030,15 @@ function bindEvents() {
     const item = state.items.find((entry) => entry.id === button.dataset.ebayDraft);
     if (!item || state.ebayDrafting) return;
     state.ebayDrafting = item.id;
-    state.importStatus = "eBay Draft wird lokal erzeugt...";
+    state.importStatus = "eBay-Entwurf wird lokal erzeugt...";
     render();
     try {
       const result = await postJson("/api/ebay-draft", { item });
       item.ebayDraft = result.ebayDraft;
-      state.importStatus = "eBay Draft erzeugt. Noch nicht an eBay gesendet.";
-      await persistItem(item, "eBay Draft");
+      state.importStatus = "eBay-Entwurf erzeugt. Noch nicht an eBay gesendet.";
+      await persistItem(item, "eBay-Entwurf");
     } catch (error) {
-      state.importStatus = `eBay Draft fehlgeschlagen: ${error.message}`;
+      state.importStatus = `eBay-Entwurf fehlgeschlagen: ${error.message}`;
     } finally {
       state.ebayDrafting = "";
       render();
@@ -1040,7 +1083,7 @@ function bindEvents() {
     try {
       const prepared = await prepareImageForAi(file);
       state.draft.photo = prepared.dataUrl;
-      state.importStatus = `Foto bereit fuer Live-KI (${prepared.width}x${prepared.height}, ${formatBytes(prepared.bytes)}).`;
+      state.importStatus = `Foto bereit für Live-KI (${prepared.width}x${prepared.height}, ${formatBytes(prepared.bytes)}).`;
     } catch (error) {
       state.importStatus = `Bildoptimierung fehlgeschlagen: ${error.message}. Nutze Originalbild.`;
       state.draft.photo = await readFileAsDataUrl(file);
@@ -1059,7 +1102,7 @@ function bindEvents() {
       const item = enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
       state.items.unshift(item);
       state.selected = item.id;
-      state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprueft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
+      state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprüft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
       state.view = "review";
       state.importStatus = usedLiveAi ? "Live-KI Artikelkarte erzeugt." : "Mock-Artikelkarte erzeugt.";
       await persistItem(item, "Artikel");
@@ -1073,7 +1116,7 @@ function bindEvents() {
 
   const reset = document.querySelector("#reset");
   if (reset) reset.addEventListener("click", () => {
-    state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprueft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
+    state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprüft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
     render();
   });
 
@@ -1116,7 +1159,7 @@ function bindEvents() {
   const autoWhatnot = document.querySelector("#auto-whatnot");
   if (autoWhatnot) autoWhatnot.addEventListener("click", () => {
     markWhatnotCandidates();
-    state.importStatus = "Whatnot-Kandidaten wurden nach Kanaelen und Kampagnen sortiert.";
+    state.importStatus = "Whatnot-Kandidaten wurden nach Kanälen und Kampagnen sortiert.";
     state.view = "sell";
     persistItems(state.items.filter((item) => item.whatnotEligible || item.channel === "Whatnot"), "Whatnot-Kandidaten");
     render();

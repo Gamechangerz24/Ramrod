@@ -171,6 +171,70 @@ img {
   margin-top: 3px;
 }
 
+.filter-bar {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(170px, auto) minmax(0, 1fr);
+  padding: 12px;
+}
+
+.filter-bar > div:first-child span,
+.filter-bar > div:first-child strong {
+  display: block;
+}
+
+.filter-bar > div:first-child span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.filter-bar > div:first-child strong {
+  margin-top: 3px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.filter-chip {
+  align-items: center;
+  background: #fbfcfd;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  display: inline-flex;
+  gap: 8px;
+  min-height: 38px;
+  padding: 7px 10px;
+}
+
+.filter-chip.selected {
+  border-color: var(--orange);
+  box-shadow: inset 3px 0 0 var(--orange);
+}
+
+.filter-chip strong,
+.filter-chip small {
+  display: block;
+  line-height: 1.05;
+}
+
+.filter-chip small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .workspace {
   display: grid;
   gap: 14px;
@@ -876,6 +940,49 @@ img {
   justify-self: end;
   line-height: 1;
   white-space: nowrap;
+}
+
+.row-meta {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.demo-badge {
+  background: #111827;
+  border-radius: 999px;
+  color: var(--orange);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 5px 7px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.breadcrumb {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.breadcrumb button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-weight: 900;
+  padding: 0;
+}
+
+.breadcrumb strong {
+  color: var(--ink);
 }
 
 .inspector {
@@ -1732,6 +1839,10 @@ img {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .filter-bar {
+    grid-template-columns: 1fr;
+  }
+
   .inspector-media img {
     max-height: 420px;
     min-height: 320px;
@@ -1858,6 +1969,12 @@ img {
   .show-hero,
   .task-grid {
     grid-template-columns: 1fr;
+  }
+
+  .filter-chips {
+    overflow: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
   }
 
   .campaigns-list {

@@ -13,7 +13,7 @@ if (!html.includes("src/static-app.js")) {
   throw new Error("index.html does not load the static app script");
 }
 
-for (const token of ["Artikel scannen", "Routing", "Versandstation", "Whatnot Skript"]) {
+for (const token of ["Neuen Artikel erfassen", "Verkaufskanal", "Versandstation", "Whatnot Skript"]) {
   if (!js.includes(token)) {
     throw new Error(`Missing required UI token: ${token}`);
   }
