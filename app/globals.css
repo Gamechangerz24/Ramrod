@@ -319,6 +319,8 @@ img {
 
 .work-grid,
 .inventory-layout,
+.operator-dashboard,
+.sell-layout,
 .shipping-layout {
   display: grid;
   gap: 18px;
@@ -333,6 +335,9 @@ img {
 .ai-panel,
 .inventory-list,
 .inspector,
+.day-focus,
+.task-card,
+.sell-column,
 .shipping-queue,
 .shipping-guide,
 .route-column {
@@ -345,10 +350,190 @@ img {
 .scan-panel,
 .ai-panel,
 .inventory-list,
+.day-focus,
+.task-card,
+.sell-column,
 .shipping-queue,
 .shipping-guide,
 .route-column {
   padding: 18px;
+}
+
+.operator-dashboard {
+  align-content: start;
+}
+
+.day-focus {
+  align-items: center;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.day-focus p,
+.task-card-head small,
+.sell-section h3 {
+  color: var(--muted);
+}
+
+.day-focus p {
+  font-size: 12px;
+  font-weight: 900;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.day-focus h2 {
+  font-size: clamp(28px, 3vw, 42px);
+  line-height: 1.05;
+  margin: 0;
+}
+
+.day-focus span {
+  color: var(--muted);
+  display: block;
+  font-weight: 700;
+  margin-top: 8px;
+}
+
+.task-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.task-card {
+  align-content: start;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.task-card-head {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+}
+
+.task-card-head > span {
+  align-items: center;
+  background: var(--dark);
+  border-radius: 8px;
+  color: var(--orange);
+  display: grid;
+  height: 42px;
+  place-items: center;
+  width: 42px;
+}
+
+.task-card-head strong,
+.task-card-head small {
+  display: block;
+  min-width: 0;
+}
+
+.task-card-head strong {
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.task-card-head small {
+  line-height: 1.35;
+  margin-top: 5px;
+}
+
+.task-card-head em,
+.queue-count {
+  color: var(--orange);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.queue-count {
+  background: var(--orange-soft);
+  border-radius: 999px;
+  padding: 6px 10px;
+}
+
+.queue-preview,
+.listing-queue {
+  display: grid;
+  gap: 8px;
+}
+
+.queue-row {
+  align-items: center;
+  background: #fbfcfd;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: inherit;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 46px minmax(0, 1fr);
+  min-height: 62px;
+  min-width: 0;
+  padding: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.queue-row img {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  height: 46px;
+  object-fit: cover;
+  width: 46px;
+}
+
+.queue-row strong,
+.queue-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-row strong {
+  font-size: 14px;
+  line-height: 1.18;
+  white-space: nowrap;
+}
+
+.queue-row small,
+.muted-copy {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.queue-row small {
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.muted-copy {
+  line-height: 1.45;
+  margin: 0;
+}
+
+.dev-tools {
+  background: #fbfcfd;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 12px 14px;
+}
+
+.dev-tools summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.dev-tools div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .panel-heading {
@@ -954,6 +1139,62 @@ img {
   min-height: 0;
 }
 
+.sell-layout {
+  grid-template-columns: minmax(360px, 0.86fr) minmax(0, 1.14fr);
+}
+
+.sell-column {
+  align-content: start;
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+}
+
+.sell-section {
+  display: grid;
+  gap: 8px;
+}
+
+.sell-section h3 {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.listing-row {
+  background: #fbfcfd;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+
+.listing-row .queue-row {
+  background: transparent;
+  border: 0;
+  min-height: 54px;
+  padding: 0;
+}
+
+.listing-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.listing-actions .secondary-action {
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.compact-empty {
+  min-height: 180px;
+}
+
 .campaigns-list,
 .show-console,
 .empty-state,
@@ -1480,9 +1721,14 @@ img {
   .work-grid,
   .inventory-layout,
   .campaigns-layout,
+  .sell-layout,
   .shipping-layout,
   .inspector {
     grid-template-columns: 1fr;
+  }
+
+  .task-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .inspector-media img {
@@ -1500,7 +1746,7 @@ img {
   .sidebar {
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     left: 0;
     padding: 8px;
     position: fixed;
@@ -1608,7 +1854,8 @@ img {
 
   .campaign-stats,
   .channel-summary,
-  .show-hero {
+  .show-hero,
+  .task-grid {
     grid-template-columns: 1fr;
   }
 
