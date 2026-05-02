@@ -1,4 +1,4 @@
-const boxes = [
+let boxes = [
   { id: "SV-001", label: "Pokemon / TCG Mischkiste", location: "CREATORS A-01", stage: "Freigabe" },
   { id: "SV-002", label: "Retro Games & Konsolen", location: "CREATORS A-02", stage: "Gescannt" },
   { id: "SV-003", label: "Figuren / Collectibles", location: "CREATORS B-04", stage: "Eingang" }
@@ -187,8 +187,9 @@ const state = {
   view: "scan",
   selected: "itm-001",
   search: "",
-  importStatus: "",
+  importStatus: "Lade lokale App...",
   channelPlan: null,
+  persistence: { configured: false, writable: false },
   showAllChannels: false,
   analyzing: false,
   priceChecking: "",
@@ -208,7 +209,8 @@ const state = {
 const app = document.querySelector("#app");
 const euro = (value) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
 const icon = (label) => `<span class="mini-icon" aria-hidden="true">${label}</span>`;
-const save = () => localStorage.setItem("creators-scanapp-items", JSON.stringify(state.items));
+const saveLocal = () => localStorage.setItem("creators-scanapp-items", JSON.stringify(state.items));
+const save = saveLocal;
 
 function nextSku(boxId) {
   return `${boxId}-${String(state.items.filter((item) => item.boxId === boxId).length + 1).padStart(4, "0")}`;
@@ -361,6 +363,64 @@ function buildWhatnotCampaigns(items) {
     });
 }
 
+async function hydrateAppState() {
+  render();
+  try {
+    const payload = await fetchJson("/api/app-state");
+    state.persistence = payload.persistence || state.persistence;
+
+    if (payload.boxes?.length) {
+      boxes = payload.boxes;
+    }
+
+    if (payload.items?.length) {
+      state.items = normalizeItems(payload.items);
+      state.selected = state.items[0]?.id || "";
+      saveLocal();
+      state.importStatus = `Supabase verbunden: ${payload.items.length} Artikel geladen${state.persistence.writable ? " und schreibbereit" : ", aktuell nur lesend"}.`;
+    } else if (state.persistence.writable) {
+      state.importStatus = "Supabase verbunden und schreibbereit. Noch keine Artikel in der Datenbank, lokale Demo bleibt sichtbar.";
+    } else if (state.persistence.configured) {
+      state.importStatus = "Supabase erreichbar, aber noch ohne Service-Role-Key nur eingeschraenkt nutzbar. Lokale Demo bleibt sichtbar.";
+    } else {
+      state.importStatus = "Lokaler Modus: Supabase ist nicht konfiguriert.";
+    }
+  } catch (error) {
+    state.importStatus = `Supabase Laden fehlgeschlagen: ${error.message}. Lokale Demo bleibt sichtbar.`;
+  }
+  render();
+}
+
+async function persistItem(item, action = "Artikel") {
+  saveLocal();
+  if (!state.persistence?.writable) return null;
+
+  try {
+    const result = await postJson("/api/items", { item });
+    if (result.item) {
+      Object.assign(item, normalizeItems([result.item])[0]);
+    }
+    state.importStatus = `${action} in Supabase gespeichert.`;
+    saveLocal();
+    return result.item || item;
+  } catch (error) {
+    state.importStatus = `${action} lokal gespeichert, Supabase Sync fehlgeschlagen: ${error.message}`;
+    return null;
+  }
+}
+
+async function persistItems(items, action = "Artikel") {
+  saveLocal();
+  if (!state.persistence?.writable) return;
+
+  const results = await Promise.allSettled(items.map((item) => persistItem(item, action)));
+  const failed = results.filter((result) => result.status === "rejected").length;
+  state.importStatus = failed
+    ? `${items.length - failed}/${items.length} ${action} in Supabase gespeichert.`
+    : `${items.length} ${action} in Supabase gespeichert.`;
+  render();
+}
+
 function isWhatnotCandidate(item) {
   if (item.channel === "Problemfall" || item.channel === "Pruefen") return false;
   const text = [item.title, item.category, item.franchise].filter(Boolean).join(" ").toLowerCase();
@@ -373,7 +433,7 @@ function markWhatnotCandidates() {
     ? enrichWorkflow({ ...item, channel: "Whatnot", whatnotEligible: true, whatnotChannel: "", whatnotChannelLabel: "", campaignId: "", campaignSuggestion: "" })
     : enrichWorkflow({ ...item, whatnotEligible: item.channel === "Whatnot" })
   );
-  save();
+  saveLocal();
 }
 
 function metric(iconLabel, label, value) {
@@ -712,7 +772,7 @@ function bindEvents() {
     if (button.dataset.viewAfter) state.view = button.dataset.viewAfter;
     render();
   }));
-  document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", async () => {
     const index = state.items.findIndex((entry) => entry.id === button.dataset.id);
     if (index === -1) return;
     state.items[index] = enrichWorkflow({
@@ -720,7 +780,7 @@ function bindEvents() {
       channel: button.dataset.route,
       whatnotEligible: button.dataset.route === "Whatnot" ? true : false
     });
-    save();
+    await persistItem(state.items[index], "Routing");
     render();
   }));
   document.querySelectorAll("[data-toggle-channels]").forEach((button) => button.addEventListener("click", () => {
@@ -744,7 +804,7 @@ function bindEvents() {
       state.importStatus = result.liveProviderAvailable?.ebayBrowse || result.liveProviderAvailable?.serpApi
         ? "Preischeck erzeugt. Live-Provider ist konfiguriert, aber noch nicht aktiv geschaltet."
         : "Lokaler Preischeck erzeugt. Fuer echte Live-Preise brauchen wir eBay Browse oder SerpApi.";
-      save();
+      await persistItem(item, "Preischeck");
     } catch (error) {
       state.importStatus = `Preischeck fehlgeschlagen: ${error.message}`;
     } finally {
@@ -762,7 +822,7 @@ function bindEvents() {
       const result = await postJson("/api/ebay-draft", { item });
       item.ebayDraft = result.ebayDraft;
       state.importStatus = "eBay Draft erzeugt. Noch nicht an eBay gesendet.";
-      save();
+      await persistItem(item, "eBay Draft");
     } catch (error) {
       state.importStatus = `eBay Draft fehlgeschlagen: ${error.message}`;
     } finally {
@@ -770,10 +830,10 @@ function bindEvents() {
       render();
     }
   }));
-  document.querySelectorAll("[data-ship]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-ship]").forEach((button) => button.addEventListener("click", async () => {
     const item = state.items.find((entry) => entry.id === button.dataset.ship);
     item.stage = "Versand";
-    save();
+    await persistItem(item, "Versandstatus");
     render();
   }));
 
@@ -831,7 +891,7 @@ function bindEvents() {
       state.draft = { query: "", boxId: state.draft.boxId, condition: "Gut", completeness: "Ungeprueft, Fotos vorhanden", barcode: "", photo: "", weight: "0.25" };
       state.view = "inventory";
       state.importStatus = usedLiveAi ? "Live-KI Artikelkarte erzeugt." : "Mock-Artikelkarte erzeugt.";
-      save();
+      await persistItem(item, "Artikel");
     } catch (error) {
       state.importStatus = `Live-KI fehlgeschlagen: ${error.message}. Es wurde kein Live-Artikel erzeugt.`;
     } finally {
@@ -858,7 +918,8 @@ function bindEvents() {
       state.selected = payload.items[0]?.id || "";
       state.view = "inventory";
       state.importStatus = `${payload.count} OpenAI-Artikel aus ${payload.model} geladen.`;
-      save();
+      saveLocal();
+      await persistItems(state.items, "AI-Import-Artikel");
     } catch (error) {
       state.importStatus = `AI Import fehlgeschlagen: ${error.message}`;
     }
@@ -886,8 +947,16 @@ function bindEvents() {
     markWhatnotCandidates();
     state.importStatus = "Whatnot-Kandidaten wurden nach Kanaelen und Kampagnen sortiert.";
     state.view = "campaigns";
+    persistItems(state.items.filter((item) => item.whatnotEligible || item.channel === "Whatnot"), "Whatnot-Kandidaten");
     render();
   });
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, { cache: "no-store" });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message || result.error || `HTTP ${response.status}`);
+  return result;
 }
 
 async function postJson(url, payload) {
@@ -990,4 +1059,4 @@ function makeId() {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-render();
+hydrateAppState();

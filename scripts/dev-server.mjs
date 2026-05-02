@@ -10,6 +10,9 @@ const host = process.env.HOST || "0.0.0.0";
 const model = process.env.OPENAI_MODEL || "gpt-5.4-mini";
 const liveImageDetail = process.env.OPENAI_LIVE_IMAGE_DETAIL || process.env.OPENAI_IMAGE_DETAIL || "low";
 const ebayPriceProvider = (process.env.EBAY_PRICE_PROVIDER || "local").toLowerCase();
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 let ebayAppTokenCache = null;
 
 const mimeTypes = {
@@ -26,8 +29,18 @@ const mimeTypes = {
 
 const server = createServer(async (request, response) => {
   try {
+    if (request.method === "GET" && request.url === "/api/app-state") {
+      await handleAppState(request, response);
+      return;
+    }
+
     if (request.method === "POST" && request.url === "/api/analyze-image") {
       await handleAnalyzeImage(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && request.url === "/api/items") {
+      await handleSaveItem(request, response);
       return;
     }
 
@@ -56,6 +69,87 @@ const server = createServer(async (request, response) => {
 server.listen(port, host, () => {
   console.log(`Scanapp server listening on http://${host}:${port}`);
 });
+
+async function handleAppState(_request, response) {
+  const persistence = supabasePersistenceStatus();
+
+  if (!persistence.configured) {
+    sendJson(response, 200, {
+      persistence,
+      customers: [],
+      boxes: [],
+      items: [],
+      message: "Supabase is not configured."
+    });
+    return;
+  }
+
+  try {
+    const [customers, boxes, items] = await Promise.all([
+      supabaseSelect("/customers?select=id,name,slug&order=name.asc"),
+      supabaseSelect("/boxes?select=id,code,label,location,status,customer_id&order=code.asc"),
+      supabaseSelect("/items?select=*&order=created_at.desc&limit=500")
+    ]);
+
+    sendJson(response, 200, {
+      persistence,
+      customers,
+      boxes: boxes.map(mapDbBoxToUi),
+      items: items.map((item) => mapDbItemToUi(item, boxes))
+    });
+  } catch (error) {
+    sendJson(response, 200, {
+      persistence: { ...persistence, available: false },
+      customers: [],
+      boxes: [],
+      items: [],
+      message: redactSecret(error.message)
+    });
+  }
+}
+
+async function handleSaveItem(request, response) {
+  const persistence = supabasePersistenceStatus();
+  if (!persistence.writable) {
+    sendJson(response, 503, {
+      error: "supabase_not_writable",
+      message: "SUPABASE_SERVICE_ROLE_KEY is required for server-side writes."
+    });
+    return;
+  }
+
+  const body = JSON.parse(await readRequestBody(request, 12 * 1024 * 1024));
+  const item = body.item;
+
+  if (!item?.sku || !item?.title) {
+    sendJson(response, 400, {
+      error: "missing_item",
+      message: "item with sku and title is required."
+    });
+    return;
+  }
+
+  try {
+    const customer = await getOrCreateCustomer();
+    const box = await getBoxByCode(customer.id, item.boxId || "SV-001");
+    const savedRows = await supabaseUpsert("/items?on_conflict=sku", mapUiItemToDb(item, customer, box));
+    const saved = savedRows[0] || null;
+
+    if (item.priceCheck && saved) {
+      await supabaseInsert("/price_checks", mapUiPriceCheckToDb(saved.id, item.priceCheck));
+    }
+
+    sendJson(response, 200, {
+      persistence,
+      item: saved ? mapDbItemToUi(saved, box ? [box] : []) : item
+    });
+  } catch (error) {
+    sendJson(response, 500, {
+      error: "supabase_save_failed",
+      message: redactSecret(error.message)
+    });
+  }
+}
 
 async function handleAnalyzeImage(request, response) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -443,8 +537,205 @@ function normalizeResearch(item) {
     if (Array.isArray(entry)) {
       return { source: entry[0], label: entry[1], price: entry[2], age: entry[3] };
     }
-    return entry;
+  return entry;
   });
+}
+
+function supabasePersistenceStatus() {
+  return {
+    configured: Boolean(supabaseUrl && (supabaseServiceRoleKey || supabaseAnonKey)),
+    writable: Boolean(supabaseUrl && supabaseServiceRoleKey),
+    projectUrl: supabaseUrl || null
+  };
+}
+
+async function supabaseSelect(path) {
+  const key = supabaseServiceRoleKey || supabaseAnonKey;
+  return supabaseRequest(path, { method: "GET" }, key);
+}
+
+async function supabaseInsert(path, payload) {
+  return supabaseRequest(path, {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(payload)
+  }, supabaseServiceRoleKey);
+}
+
+async function supabaseUpsert(path, payload) {
+  return supabaseRequest(path, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(payload)
+  }, supabaseServiceRoleKey);
+}
+
+async function supabaseRequest(path, options = {}, key) {
+  if (!supabaseUrl || !key) {
+    throw new Error("Supabase URL/key missing.");
+  }
+
+  const url = new URL(`/rest/v1${path}`, supabaseUrl);
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  const text = await response.text();
+  const body = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    throw new Error(body?.message || body?.msg || body?.code || `Supabase HTTP ${response.status}`);
+  }
+
+  return body || [];
+}
+
+async function getOrCreateCustomer() {
+  const customers = await supabaseSelect("/customers?select=id,name,slug&slug=eq.strongvision&limit=1");
+  if (customers[0]) return customers[0];
+  const rows = await supabaseInsert("/customers", {
+    name: "Strongvision",
+    slug: "strongvision",
+    notes: "Pilotkunde fuer RAMROD Intake"
+  });
+  return rows[0];
+}
+
+async function getBoxByCode(customerId, code) {
+  const rows = await supabaseSelect(`/boxes?select=id,code,label,location,status,customer_id&customer_id=eq.${encodeURIComponent(customerId)}&code=eq.${encodeURIComponent(code)}&limit=1`);
+  if (rows[0]) return rows[0];
+  const inserted = await supabaseInsert("/boxes", {
+    customer_id: customerId,
+    code,
+    label: code,
+    location: "CREATORS",
+    status: "intake"
+  });
+  return inserted[0];
+}
+
+function mapDbBoxToUi(box) {
+  return {
+    id: box.code,
+    dbId: box.id,
+    label: box.label || box.code,
+    location: box.location || "CREATORS",
+    stage: box.status || "intake"
+  };
+}
+
+function mapUiItemToDb(item, customer, box) {
+  return {
+    customer_id: customer.id,
+    box_id: box?.id || null,
+    sku: item.sku,
+    title: item.title,
+    category: item.category || null,
+    franchise: item.franchise || null,
+    condition: item.condition || null,
+    completeness: item.completeness || null,
+    confidence: clampNumber(item.confidence, 0, 100, 0),
+    price_low: numberOrNull(item.low),
+    price_fair: numberOrNull(item.fair),
+    price_aggressive: numberOrNull(item.aggressive),
+    weight_kg: numberOrNull(item.weight),
+    primary_channel: item.channel || "Pruefen",
+    status: item.stage || "scanned",
+    source_type: item.sourceType || "scanapp",
+    notes: item.notes || null,
+    raw_analysis: {
+      uiItem: item,
+      image: item.image || "",
+      research: item.research || [],
+      whatnot: {
+        eligible: Boolean(item.whatnotEligible),
+        channel: item.whatnotChannel || "",
+        channelLabel: item.whatnotChannelLabel || "",
+        campaignId: item.campaignId || "",
+        campaignSuggestion: item.campaignSuggestion || "",
+        showLotType: item.showLotType || "",
+        sortOrderScore: item.sortOrderScore || 0,
+        bundleSuggestion: item.bundleSuggestion || "",
+        script: item.whatnotScript || ""
+      },
+      listingDraft: item.listingDraft || null,
+      ebayDraft: item.ebayDraft || null
+    }
+  };
+}
+
+function mapDbItemToUi(row, boxes = []) {
+  const raw = row.raw_analysis || {};
+  const ui = raw.uiItem || {};
+  const box = boxes.find((entry) => entry.id === row.box_id || entry.dbId === row.box_id);
+  const whatnot = raw.whatnot || {};
+
+  return {
+    ...ui,
+    id: ui.id || row.id,
+    dbId: row.id,
+    sku: row.sku,
+    boxId: ui.boxId || box?.code || box?.id || "SV-001",
+    title: row.title,
+    category: row.category || ui.category || "",
+    franchise: row.franchise || ui.franchise || "",
+    condition: row.condition || ui.condition || "Gebraucht",
+    completeness: row.completeness || ui.completeness || "siehe Fotos",
+    confidence: Number(row.confidence || ui.confidence || 0),
+    low: Number(row.price_low ?? ui.low ?? 0),
+    fair: Number(row.price_fair ?? ui.fair ?? 0),
+    aggressive: Number(row.price_aggressive ?? ui.aggressive ?? 0),
+    channel: row.primary_channel || ui.channel || "Pruefen",
+    stage: row.status || ui.stage || "Gescannt",
+    weight: Number(row.weight_kg ?? ui.weight ?? 0),
+    image: ui.image || raw.image || "https://images.unsplash.com/photo-1611996575749-79a3a250f948?auto=format&fit=crop&w=900&q=80",
+    notes: row.notes || ui.notes || "",
+    sourceType: row.source_type || ui.sourceType || "supabase",
+    research: raw.research || ui.research || [],
+    whatnotEligible: Boolean(whatnot.eligible ?? ui.whatnotEligible),
+    whatnotChannel: whatnot.channel || ui.whatnotChannel || "",
+    whatnotChannelLabel: whatnot.channelLabel || ui.whatnotChannelLabel || "",
+    campaignId: whatnot.campaignId || ui.campaignId || "",
+    campaignSuggestion: whatnot.campaignSuggestion || ui.campaignSuggestion || "",
+    showLotType: whatnot.showLotType || ui.showLotType || "",
+    sortOrderScore: Number(whatnot.sortOrderScore || ui.sortOrderScore || 0),
+    bundleSuggestion: whatnot.bundleSuggestion || ui.bundleSuggestion || "",
+    whatnotScript: whatnot.script || ui.whatnotScript || "",
+    listingDraft: raw.listingDraft || ui.listingDraft || null,
+    ebayDraft: raw.ebayDraft || ui.ebayDraft || null
+  };
+}
+
+function mapUiPriceCheckToDb(itemId, priceCheck) {
+  return {
+    item_id: itemId,
+    method: priceCheck.method || "unknown",
+    query: priceCheck.query || null,
+    low: numberOrNull(priceCheck.low),
+    fair: numberOrNull(priceCheck.fair),
+    aggressive: numberOrNull(priceCheck.aggressive),
+    confidence: clampNumber(priceCheck.confidence, 0, 100, 0),
+    evidence: priceCheck.evidence || [],
+    notes: priceCheck.notes || [],
+    checked_at: priceCheck.checkedAt || new Date().toISOString()
+  };
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(number)));
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function buildSearchQuery(item) {
