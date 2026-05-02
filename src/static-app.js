@@ -183,6 +183,17 @@ const futureChannels = [
   "Liquidation Basket"
 ].map((label) => ({ id: label, label, status: "noch nicht verfuegbar", note: "Roadmap" }));
 
+const app = document.querySelector("#app");
+const euro = (value) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
+const icon = (label) => `<span class="mini-icon" aria-hidden="true">${label}</span>`;
+
+window.addEventListener("error", (event) => {
+  const message = event.error?.message || event.message || "Unbekannter Frontend-Fehler";
+  if (app) {
+    app.innerHTML = `<section class="workspace"><div class="status-strip">RAMROD konnte nicht starten: ${escapeHtml(message)}. Versuche /?reset=1 oder lade hart neu.</div></section>`;
+  }
+});
+
 const state = {
   view: "scan",
   selected: "itm-001",
@@ -206,16 +217,8 @@ const state = {
   items: normalizeItems(loadStoredItems())
 };
 
-const app = document.querySelector("#app");
-const euro = (value) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
-const icon = (label) => `<span class="mini-icon" aria-hidden="true">${label}</span>`;
 const saveLocal = () => localStorage.setItem("creators-scanapp-items", JSON.stringify(state.items));
 const save = saveLocal;
-
-window.addEventListener("error", (event) => {
-  const message = event.error?.message || event.message || "Unbekannter Frontend-Fehler";
-  app.innerHTML = `<section class="workspace"><div class="status-strip">RAMROD konnte nicht starten: ${escapeHtml(message)}. Versuche /?reset=1 oder lade hart neu.</div></section>`;
-});
 
 function loadStoredItems() {
   const params = new URLSearchParams(window.location.search);
