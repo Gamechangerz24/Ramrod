@@ -257,7 +257,8 @@ async function handlePriceCheck(request, response) {
     liveProviderAvailable: {
       ebayBrowse: Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET),
       ebayBrowseEnabled: ebayPriceProvider === "ebay-browse",
-      serpApi: Boolean(process.env.SERPAPI_API_KEY)
+      serpApi: Boolean(process.env.SERPAPI_API_KEY),
+      webResearch: Boolean(process.env.SERPAPI_API_KEY)
     },
     priceCheck,
     ebayDraft
@@ -283,34 +284,62 @@ async function handleEbayDraft(request, response) {
 }
 
 async function buildPriceCheck(item) {
+  const liveEvidence = [];
+  const notes = [];
+  let ebayFailed = "";
+  let webFailed = "";
+
   if (ebayPriceProvider === "ebay-browse") {
     try {
       const evidence = await fetchEbayBrowseEvidence(item);
       if (evidence.length) {
-        return buildPriceCheckFromEvidence(item, evidence, "ebay-browse", [
-          "Live-eBay-Browse-Preischeck aus aktiven eBay-Angeboten.",
-          "Sold-Prices sind hier noch nicht enthalten.",
-          "Finaler Preis bleibt Review-pflichtig."
-        ]);
+        liveEvidence.push(...evidence);
+        notes.push("Live-eBay-Browse-Preischeck aus aktiven eBay-Angeboten.");
+      } else {
+        notes.push("eBay Browse wurde abgefragt, lieferte aber keine verwertbaren aktiven Treffer.");
       }
-      const fallback = buildLocalPriceCheck(item);
-      fallback.notes = [
-        "eBay Browse wurde abgefragt, lieferte aber keine verwertbaren Treffer; lokaler Fallback genutzt.",
-        "Die Query kann zu eng sein oder eBay hat fuer diesen Artikel keine passenden aktiven Angebote geliefert.",
-        "Weitere Quellen wie SerpApi, PriceCharting oder Kategorie-spezifische Adapter koennen die Trefferquote verbessern."
-      ];
-      return fallback;
     } catch (error) {
-      const fallback = buildLocalPriceCheck(item);
-      fallback.notes = [
-        `eBay Browse nicht verfuegbar: ${redactSecret(error.message)}. Lokaler Fallback genutzt.`,
-        "Fuer echte eBay-Preise brauchen wir einen gueltigen Live-Provider."
-      ];
-      return fallback;
+      ebayFailed = redactSecret(error.message);
+      notes.push(`eBay Browse nicht verfuegbar: ${ebayFailed}.`);
     }
   }
 
-  return buildLocalPriceCheck(item);
+  if (process.env.SERPAPI_API_KEY) {
+    try {
+      const webEvidence = await fetchSerpApiEbayEvidence(item);
+      if (webEvidence.length) {
+        liveEvidence.push(...webEvidence);
+        notes.push("Web Research ueber SerpApi wurde in die Preisberechnung einbezogen.");
+      } else {
+        notes.push("Web Research ueber SerpApi lieferte keine verwertbaren Treffer.");
+      }
+    } catch (error) {
+      webFailed = redactSecret(error.message);
+      notes.push(`Web Research nicht verfuegbar: ${webFailed}.`);
+    }
+  } else {
+    notes.push("Web Research ist vorbereitet, aber SERPAPI_API_KEY ist noch nicht gesetzt.");
+  }
+
+  if (liveEvidence.length) {
+    const hasEbay = liveEvidence.some((entry) => entry.source === "eBay Browse");
+    const hasWeb = liveEvidence.some((entry) => entry.source?.startsWith("SerpApi"));
+    const method = hasEbay && hasWeb ? "multi-source" : hasWeb ? "web-research" : "ebay-browse";
+    return buildPriceCheckFromEvidence(item, liveEvidence, method, [
+      ...notes,
+      "Finaler Preis bleibt Review-pflichtig."
+    ]);
+  }
+
+  const fallback = buildLocalPriceCheck(item);
+  fallback.notes = [
+    ...notes,
+    ebayFailed || webFailed
+      ? "Keine Live-Quelle konnte verwertbare Treffer liefern; lokaler Fallback genutzt."
+      : "Keine Live-Quelle aktiv; lokaler Fallback genutzt.",
+    "Weitere Quellen wie SerpApi, PriceCharting oder Kategorie-spezifische Adapter koennen die Trefferquote verbessern."
+  ];
+  return fallback;
 }
 
 function buildLocalPriceCheck(item) {
@@ -349,14 +378,14 @@ function buildPriceCheckFromEvidence(item, evidence, method, notes) {
   const fair = Math.round((median * 0.6) + (average * 0.4));
   const variance = Math.max(...prices) - Math.min(...prices);
   const baseConfidence = Math.round((Number(item.confidence) || 65) + Math.min(12, evidence.length * 3) - Math.min(22, variance / Math.max(1, fair) * 20));
-  const evidenceCap = method === "ebay-browse"
+  const evidenceCap = method === "ebay-browse" || method === "web-research" || method === "multi-source"
     ? (usableEvidence.length === 1 ? 62 : usableEvidence.length === 2 ? 72 : 94)
     : 94;
   const confidence = Math.max(35, Math.min(evidenceCap, baseConfidence));
   const finalNotes = [
     ...notes,
-    ...(method === "ebay-browse" && usableEvidence.length < 3
-      ? ["Nur wenige eBay-Treffer gefunden; Preis als Indikation, nicht als belastbarer Marktwert."]
+    ...(["ebay-browse", "web-research", "multi-source"].includes(method) && usableEvidence.length < 3
+      ? ["Nur wenige Live-Treffer gefunden; Preis als Indikation, nicht als belastbarer Marktwert."]
       : []),
     ...(markedEvidence.some((entry) => entry.outlier)
       ? ["Ausreisser wurden in der Preisberechnung markiert und nicht gewichtet."]
@@ -378,7 +407,7 @@ function buildPriceCheckFromEvidence(item, evidence, method, notes) {
       confidence: clampNumber(item.confidence, 0, 100, 0)
     },
     calculation: {
-      basis: method === "ebay-browse" ? "aktive eBay-Angebote" : "lokale RAMROD-Hinweise",
+      basis: priceCheckBasis(method),
       formula: "Marktwert = 60% Median + 40% Durchschnitt der nutzbaren Treffer",
       usableCount: usableEvidence.length,
       outlierCount: markedEvidence.filter((entry) => entry.outlier).length,
@@ -390,6 +419,13 @@ function buildPriceCheckFromEvidence(item, evidence, method, notes) {
     evidence: markedEvidence.slice(0, 6),
     notes: finalNotes
   };
+}
+
+function priceCheckBasis(method) {
+  if (method === "multi-source") return "eBay + Web Research";
+  if (method === "web-research") return "Web Research";
+  if (method === "ebay-browse") return "aktive eBay-Angebote";
+  return "lokale RAMROD-Hinweise";
 }
 
 function markPriceOutliers(evidence) {
@@ -441,6 +477,64 @@ async function fetchEbayBrowseEvidence(item) {
       matchScore: Math.max(48, Math.min(94, Math.round((Number(item.confidence) || 70) - index * 4))),
       url: entry.itemWebUrl || ""
     }));
+}
+
+async function fetchSerpApiEbayEvidence(item) {
+  const apiKey = process.env.SERPAPI_API_KEY;
+  if (!apiKey) return [];
+
+  const [sold, active] = await Promise.all([
+    fetchSerpApiEbaySearch(item, "Sold"),
+    fetchSerpApiEbaySearch(item, "")
+  ]);
+
+  return [...sold, ...active].slice(0, 10);
+}
+
+async function fetchSerpApiEbaySearch(item, showOnly) {
+  const query = buildSearchQuery(item);
+  const url = new URL("https://serpapi.com/search.json");
+  url.searchParams.set("engine", "ebay");
+  url.searchParams.set("ebay_domain", "ebay.de");
+  url.searchParams.set("_nkw", query);
+  url.searchParams.set("_ipg", "25");
+  url.searchParams.set("api_key", process.env.SERPAPI_API_KEY);
+  if (showOnly) url.searchParams.set("show_only", showOnly);
+
+  const response = await fetch(url);
+  const body = await response.json();
+  if (!response.ok || body.error) {
+    throw new Error(body.error || `SerpApi HTTP ${response.status}`);
+  }
+
+  return (body.organic_results || [])
+    .map((entry, index) => {
+      const price = extractSerpApiPrice(entry.price);
+      if (!price) return null;
+      const sold = Boolean(entry.sold_date || showOnly === "Sold");
+      return {
+        source: sold ? "SerpApi eBay Sold" : "SerpApi eBay Web",
+        title: entry.title || item.title,
+        price: Math.round(price),
+        status: sold ? "sold_listing" : "active_web_listing",
+        age: entry.sold_date || entry.condition || entry.quantity_sold || "web",
+        matchScore: Math.max(44, Math.min(88, Math.round((Number(item.confidence) || 70) - index * 3 + (sold ? 6 : 0)))),
+        url: entry.link || "",
+        webResearch: true
+      };
+    })
+    .filter(Boolean);
+}
+
+function extractSerpApiPrice(price) {
+  if (!price) return 0;
+  if (Number(price.extracted) > 0) return Number(price.extracted);
+  if (Number(price.from?.extracted) > 0 && Number(price.to?.extracted) > 0) {
+    return (Number(price.from.extracted) + Number(price.to.extracted)) / 2;
+  }
+  if (Number(price.from?.extracted) > 0) return Number(price.from.extracted);
+  if (Number(price.to?.extracted) > 0) return Number(price.to.extracted);
+  return 0;
 }
 
 async function getEbayAppToken() {

@@ -790,6 +790,8 @@ function priceCheckCard(item) {
   }
   const evidence = Array.isArray(check.evidence) ? check.evidence : [];
   const ebayCount = evidence.filter((entry) => entry.source === "eBay Browse" && !entry.outlier).length;
+  const webCount = evidence.filter((entry) => entry.webResearch && !entry.outlier).length;
+  const soldCount = evidence.filter((entry) => entry.status === "sold_listing" && !entry.outlier).length;
   const outlierCount = evidence.filter((entry) => entry.outlier).length;
   const providerLabel = priceCheckProviderLabel(check.method);
   const notes = Array.isArray(check.notes) ? check.notes : [];
@@ -823,6 +825,7 @@ function priceCheckCard(item) {
     </div>` : ""}
     <div class="evidence-summary">
       <span>${icon("EB")} ${ebayCount} eBay-Live-Treffer</span>
+      <span>${webCount} Web-Treffer · ${soldCount} verkauft</span>
       <span>${outlierCount} Ausreißer markiert</span>
       <span>Query: ${escapeHtml(check.query || "-")}</span>
     </div>
@@ -843,20 +846,36 @@ function priceDelta(previous, current) {
 }
 
 function priceCheckExplanation(check) {
-  const source = check.method === "ebay-browse" ? "eBay-Live-Angeboten" : "lokalen Hinweisen";
+  const source = check.method === "multi-source"
+    ? "eBay-Live-Angeboten und Web Research"
+    : check.method === "web-research"
+      ? "Web-Research-Treffern"
+      : check.method === "ebay-browse"
+        ? "eBay-Live-Angeboten"
+        : "lokalen Hinweisen";
   const usable = Number(check.calculation?.usableCount || 0);
   const outliers = Number(check.calculation?.outlierCount || 0);
   return `RAMROD hat den Artikelpreis aus ${usable || "den"} nutzbaren ${source} berechnet${outliers ? ` und ${outliers} Ausreißer nicht gewichtet` : ""}.`;
 }
 
 function priceCheckProviderLabel(method) {
+  if (method === "multi-source") return "eBay + Web";
+  if (method === "web-research") return "Web Research";
   if (method === "ebay-browse") return "eBay live";
   if (method === "serpapi") return "Web live";
   return "Lokal";
 }
 
 function evidenceRow(entry) {
-  const status = entry.outlier ? "Ausreißer" : entry.status === "active_listing" ? "Aktives Angebot" : entry.status || "Hinweis";
+  const status = entry.outlier
+    ? "Ausreißer"
+    : entry.status === "active_listing"
+      ? "Aktives Angebot"
+      : entry.status === "sold_listing"
+        ? "Verkauft"
+        : entry.status === "active_web_listing"
+          ? "Web-Angebot"
+          : entry.status || "Hinweis";
   const title = escapeHtml(entry.title || "Unbenannter Treffer");
   const link = entry.url
     ? `<a href="${escapeHtml(entry.url)}" target="_blank" rel="noreferrer">${title}</a>`
