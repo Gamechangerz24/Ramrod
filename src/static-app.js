@@ -786,14 +786,51 @@ function lotTypeLabel(value) {
 function priceCheckCard(item) {
   const check = item.priceCheck;
   if (!check) {
-    return `<section class="research compact"><h3>Preischeck</h3><p>Noch nicht geprüft. Aktuell wird ein lokaler Vergleich erzeugt; echte Live-Preise folgen mit aktiviertem eBay-Zugang.</p></section>`;
+    return `<section class="research compact"><div class="section-title"><h3>Preischeck</h3><span class="status-pill muted">Offen</span></div><p>Noch nicht geprüft. Klicke auf “Preise checken”, um Live-Vergleiche über eBay und lokale RAMROD-Hinweise zu erzeugen.</p></section>`;
   }
+  const evidence = Array.isArray(check.evidence) ? check.evidence : [];
+  const ebayCount = evidence.filter((entry) => entry.source === "eBay Browse" && !entry.outlier).length;
+  const outlierCount = evidence.filter((entry) => entry.outlier).length;
+  const providerLabel = priceCheckProviderLabel(check.method);
+  const notes = Array.isArray(check.notes) ? check.notes : [];
   return `<section class="research price-check-card">
-    <h3>Preischeck</h3>
+    <div class="section-title">
+      <h3>Preischeck</h3>
+      <span class="status-pill ${check.method === "ebay-browse" ? "live" : "muted"}">${providerLabel}</span>
+    </div>
     <div class="price-grid">${suggestion("Minimum", euro(check.low))}${suggestion("Marktwert", euro(check.fair))}${suggestion("Optimistisch", euro(check.aggressive))}${suggestion("KI-Sicherheit", `${check.confidence}%`)}</div>
-    <div class="source-strip">Methode: ${escapeHtml(check.method)} · Query: ${escapeHtml(check.query)}</div>
-    ${check.evidence.map((entry) => `<div class="research-row"><span>${escapeHtml(entry.source)}</span><strong>${escapeHtml(entry.title)}</strong><em>${euro(entry.price)}</em><small>${entry.matchScore}% Match</small></div>`).join("")}
+    <div class="evidence-summary">
+      <span>${icon("EB")} ${ebayCount} eBay-Live-Treffer</span>
+      <span>${outlierCount} Ausreißer markiert</span>
+      <span>Query: ${escapeHtml(check.query || "-")}</span>
+    </div>
+    <div class="evidence-list">
+      ${evidence.length ? evidence.map(evidenceRow).join("") : `<p class="muted-copy">Keine verwertbaren Vergleichstreffer gefunden.</p>`}
+    </div>
+    ${notes.length ? `<ul class="price-notes">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>` : ""}
   </section>`;
+}
+
+function priceCheckProviderLabel(method) {
+  if (method === "ebay-browse") return "eBay live";
+  if (method === "serpapi") return "Web live";
+  return "Lokal";
+}
+
+function evidenceRow(entry) {
+  const status = entry.outlier ? "Ausreißer" : entry.status === "active_listing" ? "Aktives Angebot" : entry.status || "Hinweis";
+  const title = escapeHtml(entry.title || "Unbenannter Treffer");
+  const link = entry.url
+    ? `<a href="${escapeHtml(entry.url)}" target="_blank" rel="noreferrer">${title}</a>`
+    : `<strong>${title}</strong>`;
+  return `<article class="evidence-row ${entry.outlier ? "outlier" : ""}">
+    <div class="evidence-main">
+      <span class="source-pill">${escapeHtml(entry.source || "Quelle")}</span>
+      ${link}
+      <small>${escapeHtml(status)} · ${escapeHtml(entry.age || "live")} · ${Number(entry.matchScore || 0)}% Match</small>
+    </div>
+    <em>${euro(entry.price)}</em>
+  </article>`;
 }
 
 function ebayDraftCard(item) {
@@ -872,12 +909,20 @@ function sellView() {
 function listingQueue(items, emptyText) {
   if (!items.length) return `<p class="muted-copy">${emptyText}</p>`;
   return `<div class="listing-queue">${items.map((item) => `<article class="listing-row">
-    <button class="queue-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% KI-Sicherheit</small></span></button>
+    <button class="queue-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% KI-Sicherheit</small><small>${priceCheckInline(item)}</small></span></button>
     <div class="listing-actions">
       <button class="secondary-action" data-price-check="${item.id}" type="button">${state.priceChecking === item.id ? "Prüfe..." : "Preischeck"}</button>
       <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${state.ebayDrafting === item.id ? "Baue..." : "Entwurf"}</button>
     </div>
   </article>`).join("")}</div>`;
+}
+
+function priceCheckInline(item) {
+  if (!item.priceCheck) return "Preischeck offen";
+  const evidence = Array.isArray(item.priceCheck.evidence) ? item.priceCheck.evidence : [];
+  const liveCount = evidence.filter((entry) => entry.source === "eBay Browse" && !entry.outlier).length;
+  if (item.priceCheck.method === "ebay-browse") return `${liveCount} eBay-Treffer · Marktwert ${euro(item.priceCheck.fair)}`;
+  return `Lokaler Preischeck · Marktwert ${euro(item.priceCheck.fair)}`;
 }
 
 function routeColumn(title, items, iconLabel = title.slice(0, 2).toUpperCase()) {
@@ -1015,8 +1060,8 @@ function bindEvents() {
       item.fair = result.priceCheck.fair;
       item.aggressive = result.priceCheck.aggressive;
       item.confidence = Math.max(item.confidence, result.priceCheck.confidence);
-      state.importStatus = result.liveProviderAvailable?.ebayBrowse || result.liveProviderAvailable?.serpApi
-        ? "Preischeck erzeugt. Live-Provider ist konfiguriert, aber noch nicht aktiv geschaltet."
+      state.importStatus = result.priceCheck?.method === "ebay-browse"
+        ? "eBay-Live-Preischeck erzeugt. Aktive Angebote wurden als Vergleich gespeichert."
         : "Lokaler Preischeck erzeugt. Fuer echte Live-Preise brauchen wir eBay Browse oder SerpApi.";
       await persistItem(item, "Preischeck");
     } catch (error) {

@@ -1194,6 +1194,131 @@ img {
   margin: 0 0 10px;
 }
 
+.section-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.section-title h3 {
+  margin: 0;
+}
+
+.status-pill,
+.source-pill {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  min-height: 24px;
+  padding: 6px 9px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status-pill {
+  background: #0d0d0d;
+  color: var(--orange);
+}
+
+.status-pill.live {
+  background: rgba(255, 106, 0, 0.12);
+  border: 1px solid rgba(255, 106, 0, 0.3);
+  color: #b84b00;
+}
+
+.status-pill.muted,
+.source-pill {
+  background: #eef2f5;
+  color: var(--muted);
+}
+
+.evidence-summary {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 10px;
+}
+
+.evidence-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.evidence-list {
+  display: grid;
+  gap: 8px;
+}
+
+.evidence-row {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px;
+}
+
+.evidence-row.outlier {
+  opacity: 0.68;
+}
+
+.evidence-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.evidence-main a,
+.evidence-main strong {
+  color: var(--ink);
+  font-weight: 900;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.evidence-main a:hover {
+  color: #b84b00;
+  text-decoration: underline;
+}
+
+.evidence-main small {
+  color: var(--muted);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.evidence-row em {
+  color: var(--orange);
+  font-style: normal;
+  font-weight: 1000;
+}
+
+.price-notes {
+  color: var(--muted);
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.price-notes li {
+  line-height: 1.35;
+}
+
 .research-row {
   align-items: center;
   border-top: 1px solid var(--line);
@@ -1935,6 +2060,8 @@ img {
   }
 
   .research-row,
+  .evidence-summary,
+  .evidence-row,
   .ship-row {
     grid-template-columns: 1fr;
   }
