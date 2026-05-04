@@ -739,7 +739,7 @@ function inspector(item) {
       <div class="breadcrumb"><button data-view="today" type="button">Heute</button><span>›</span><button data-view="${state.view}" type="button">${escapeHtml(pageTitle())}</button><span>›</span><strong>${escapeHtml(item.sku)}</strong></div>
       <div class="inspector-title"><div><p>${item.sku} ${demoBadge(item)}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${channelClass(item.channel)}">${channelLabel(item.channel)}</span></div>
       <div class="source-strip">${sourceBadge(item)}</div>
-      <div class="price-grid">${suggestion("Minimum", euro(item.low))}${suggestion("Marktwert", euro(item.fair))}${suggestion("Optimistisch", euro(item.aggressive))}${suggestion("KI-Sicherheit", `${item.confidence}%`)}</div>
+      <div class="price-grid">${suggestion("Minimum", euro(item.low))}${suggestion("Marktwert", euro(item.fair))}${suggestion("Optimistisch", euro(item.aggressive))}${suggestion("Erkennung", `${item.confidence}%`)}</div>
       <div class="draft-actions">
         <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Prüfe..." : "Preise checken"}</button>
         <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Baue..." : "eBay-Entwurf"}</button>
@@ -793,12 +793,34 @@ function priceCheckCard(item) {
   const outlierCount = evidence.filter((entry) => entry.outlier).length;
   const providerLabel = priceCheckProviderLabel(check.method);
   const notes = Array.isArray(check.notes) ? check.notes : [];
+  const previous = check.previous || {};
+  const calculation = check.calculation || {};
   return `<section class="research price-check-card">
     <div class="section-title">
       <h3>Preischeck</h3>
       <span class="status-pill ${check.method === "ebay-browse" ? "live" : "muted"}">${providerLabel}</span>
     </div>
-    <div class="price-grid">${suggestion("Minimum", euro(check.low))}${suggestion("Marktwert", euro(check.fair))}${suggestion("Optimistisch", euro(check.aggressive))}${suggestion("KI-Sicherheit", `${check.confidence}%`)}</div>
+    <div class="applied-price">
+      <div>
+        <small>Angewendeter Preis</small>
+        <strong>${euro(check.fair)}</strong>
+        <span>${priceDelta(previous.fair, check.fair)}</span>
+      </div>
+      <p>${priceCheckExplanation(check)}</p>
+    </div>
+    <div class="price-grid">${suggestion("Minimum", euro(check.low))}${suggestion("Marktwert", euro(check.fair))}${suggestion("Optimistisch", euro(check.aggressive))}${suggestion("Preis-Sicherheit", `${check.confidence}%`)}</div>
+    ${calculation.formula ? `<div class="calculation-box">
+      <strong>So wurde geschätzt</strong>
+      <p>${escapeHtml(calculation.formula)}.</p>
+      <div class="calculation-grid">
+        ${suggestion("Basis", escapeHtml(calculation.basis || providerLabel))}
+        ${suggestion("Nutzbare Treffer", Number(calculation.usableCount || 0))}
+        ${suggestion("Median", euro(calculation.median))}
+        ${suggestion("Durchschnitt", euro(calculation.average))}
+        ${suggestion("Vergleichsspanne", `${euro(calculation.minComparable)} - ${euro(calculation.maxComparable)}`)}
+        ${suggestion("Ausreißer", Number(calculation.outlierCount ?? outlierCount))}
+      </div>
+    </div>` : ""}
     <div class="evidence-summary">
       <span>${icon("EB")} ${ebayCount} eBay-Live-Treffer</span>
       <span>${outlierCount} Ausreißer markiert</span>
@@ -809,6 +831,22 @@ function priceCheckCard(item) {
     </div>
     ${notes.length ? `<ul class="price-notes">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>` : ""}
   </section>`;
+}
+
+function priceDelta(previous, current) {
+  const before = Number(previous);
+  const after = Number(current);
+  if (!before || !after) return "Neu berechnet";
+  const delta = after - before;
+  if (!delta) return `unverändert zu vorher ${euro(before)}`;
+  return `${delta > 0 ? "+" : ""}${euro(delta)} gegenüber vorher ${euro(before)}`;
+}
+
+function priceCheckExplanation(check) {
+  const source = check.method === "ebay-browse" ? "eBay-Live-Angeboten" : "lokalen Hinweisen";
+  const usable = Number(check.calculation?.usableCount || 0);
+  const outliers = Number(check.calculation?.outlierCount || 0);
+  return `RAMROD hat den Artikelpreis aus ${usable || "den"} nutzbaren ${source} berechnet${outliers ? ` und ${outliers} Ausreißer nicht gewichtet` : ""}.`;
 }
 
 function priceCheckProviderLabel(method) {

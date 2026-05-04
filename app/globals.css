@@ -1188,6 +1188,68 @@ img {
   gap: 10px;
 }
 
+.applied-price {
+  align-items: center;
+  background: #0d0d0d;
+  border-radius: 8px;
+  color: #fff;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(130px, auto) minmax(0, 1fr);
+  padding: 14px;
+}
+
+.applied-price small,
+.applied-price span {
+  color: rgba(255, 255, 255, 0.68);
+  display: block;
+  font-weight: 800;
+}
+
+.applied-price strong {
+  color: var(--orange);
+  display: block;
+  font-size: 34px;
+  line-height: 1;
+  margin: 4px 0;
+}
+
+.applied-price p {
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1.35;
+  margin: 0;
+}
+
+.calculation-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.calculation-box > strong {
+  font-size: 14px;
+}
+
+.calculation-box > p {
+  color: var(--muted);
+  line-height: 1.35;
+  margin: 0;
+}
+
+.calculation-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.calculation-grid .suggestion {
+  background: #f7f9fb;
+  padding: 9px;
+}
+
 .research h3,
 .script-box h3 {
   font-size: 16px;
@@ -2060,6 +2122,8 @@ img {
   }
 
   .research-row,
+  .applied-price,
+  .calculation-grid,
   .evidence-summary,
   .evidence-row,
   .ship-row {

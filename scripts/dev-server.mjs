@@ -371,6 +371,22 @@ function buildPriceCheckFromEvidence(item, evidence, method, notes) {
     fair,
     aggressive: Math.max(fair, Math.round(Math.max(...prices) * 1.08)),
     confidence,
+    previous: {
+      low: numberOrNull(item.low),
+      fair: numberOrNull(item.fair),
+      aggressive: numberOrNull(item.aggressive),
+      confidence: clampNumber(item.confidence, 0, 100, 0)
+    },
+    calculation: {
+      basis: method === "ebay-browse" ? "aktive eBay-Angebote" : "lokale RAMROD-Hinweise",
+      formula: "Marktwert = 60% Median + 40% Durchschnitt der nutzbaren Treffer",
+      usableCount: usableEvidence.length,
+      outlierCount: markedEvidence.filter((entry) => entry.outlier).length,
+      median,
+      average,
+      minComparable: Math.min(...prices),
+      maxComparable: Math.max(...prices)
+    },
     evidence: markedEvidence.slice(0, 6),
     notes: finalNotes
   };
