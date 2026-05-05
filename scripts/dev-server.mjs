@@ -448,51 +448,65 @@ async function fetchEbayBrowseEvidence(item) {
   const token = await getEbayAppToken();
   const baseUrl = ebayApiBaseUrl();
   const marketplaceId = process.env.EBAY_MARKETPLACE_ID || "EBAY_DE";
-  const query = buildSearchQuery(item);
-  const url = new URL(`${baseUrl}/buy/browse/v1/item_summary/search`);
-  url.searchParams.set("q", query);
-  url.searchParams.set("limit", "10");
+  const results = [];
+  for (const query of buildSearchQueries(item).slice(0, 3)) {
+    const url = new URL(`${baseUrl}/buy/browse/v1/item_summary/search`);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "10");
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "X-EBAY-C-MARKETPLACE-ID": marketplaceId,
-      "Accept-Language": "de-DE"
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-EBAY-C-MARKETPLACE-ID": marketplaceId,
+        "Accept-Language": "de-DE"
+      }
+    });
+    const body = await response.json();
+
+    if (!response.ok) {
+      throw new Error(body.errors?.[0]?.message || body.message || `eBay Browse HTTP ${response.status}`);
     }
-  });
-  const body = await response.json();
 
-  if (!response.ok) {
-    throw new Error(body.errors?.[0]?.message || body.message || `eBay Browse HTTP ${response.status}`);
+    results.push(...(body.itemSummaries || [])
+      .filter((entry) => Number(entry.price?.value) > 0)
+      .map((entry, index) => ({
+        source: "eBay Browse",
+        title: entry.title || item.title,
+        price: Math.round(Number(entry.price.value)),
+        status: "active_listing",
+        age: entry.itemCreationDate ? new Date(entry.itemCreationDate).toLocaleDateString("de-DE") : "live",
+        matchScore: Math.max(48, Math.min(94, Math.round((Number(item.confidence) || 70) - index * 4))),
+        url: entry.itemWebUrl || "",
+        query
+      })));
+
+    if (results.length >= 8) break;
   }
 
-  return (body.itemSummaries || [])
-    .filter((entry) => Number(entry.price?.value) > 0)
-    .map((entry, index) => ({
-      source: "eBay Browse",
-      title: entry.title || item.title,
-      price: Math.round(Number(entry.price.value)),
-      status: "active_listing",
-      age: entry.itemCreationDate ? new Date(entry.itemCreationDate).toLocaleDateString("de-DE") : "live",
-      matchScore: Math.max(48, Math.min(94, Math.round((Number(item.confidence) || 70) - index * 4))),
-      url: entry.itemWebUrl || ""
-    }));
+  return uniqueEvidence(results).slice(0, 12);
 }
 
 async function fetchSerpApiEbayEvidence(item) {
   const apiKey = process.env.SERPAPI_API_KEY;
   if (!apiKey) return [];
 
-  const [sold, active] = await Promise.all([
-    fetchSerpApiEbaySearch(item, "Sold"),
-    fetchSerpApiEbaySearch(item, "")
+  const queries = buildSearchQueries(item).slice(0, 3);
+  const searches = queries.flatMap((query) => [
+    fetchSerpApiEbaySearch(item, query, "Sold"),
+    fetchSerpApiEbaySearch(item, query, "")
   ]);
+  const settled = await Promise.allSettled(searches);
+  const failures = settled.filter((result) => result.status === "rejected");
+  const evidence = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 
-  return [...sold, ...active].slice(0, 10);
+  if (!evidence.length && failures.length) {
+    throw new Error(failures[0].reason?.message || "SerpApi returned no usable results.");
+  }
+
+  return uniqueEvidence(evidence).slice(0, 12);
 }
 
-async function fetchSerpApiEbaySearch(item, showOnly) {
-  const query = buildSearchQuery(item);
+async function fetchSerpApiEbaySearch(item, query, showOnly) {
   const url = new URL("https://serpapi.com/search.json");
   url.searchParams.set("engine", "ebay");
   url.searchParams.set("ebay_domain", "ebay.de");
@@ -520,10 +534,21 @@ async function fetchSerpApiEbaySearch(item, showOnly) {
         age: entry.sold_date || entry.condition || entry.quantity_sold || "web",
         matchScore: Math.max(44, Math.min(88, Math.round((Number(item.confidence) || 70) - index * 3 + (sold ? 6 : 0)))),
         url: entry.link || "",
-        webResearch: true
+        webResearch: true,
+        query
       };
     })
     .filter(Boolean);
+}
+
+function uniqueEvidence(evidence) {
+  const seen = new Set();
+  return evidence.filter((entry) => {
+    const key = entry.url || `${entry.source}:${entry.title}:${entry.price}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function extractSerpApiPrice(price) {
@@ -849,7 +874,90 @@ function numberOrNull(value) {
 }
 
 function buildSearchQuery(item) {
-  return [item.franchise, item.title, item.category].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  return buildSearchQueries(item)[0];
+}
+
+function buildSearchQueries(item) {
+  const haystack = [item.title, item.franchise, item.category, item.completeness, item.notes]
+    .filter(Boolean)
+    .join(" ");
+  const platform = extractPlatform(haystack);
+  const title = extractComparableTitle(item.title || haystack, platform);
+  const cleanOriginal = normalizeSearchText(item.title || haystack);
+  const category = normalizeSearchText(item.category || "");
+
+  return uniqueStrings([
+    [title, platform].filter(Boolean).join(" "),
+    [title, platform, "gebraucht"].filter(Boolean).join(" "),
+    [title, platform, "PAL"].filter(Boolean).join(" "),
+    cleanOriginal,
+    [title, category].filter(Boolean).join(" ")
+  ])
+    .map((query) => clampText(query, 80))
+    .filter((query) => query.length >= 3);
+}
+
+function extractComparableTitle(value, platform = "") {
+  const text = normalizeSearchText(value);
+  const afterLabel = text.match(/\b(?:spiel|game|titel)\s*:?\s+(.+)$/i);
+  let title = afterLabel ? afterLabel[1] : text;
+
+  title = title
+    .replace(/\([^)]*(?:electronic arts|bioware|ubisoft|capcom|nintendo|sony|microsoft|sega|bethesda)[^)]*\)/gi, " ")
+    .replace(/\b(?:electronic arts|bioware|ubisoft|capcom|nintendo|sony|microsoft|sega|bethesda)\b/gi, " ")
+    .replace(/\b(?:videospiel|spiel|game|games|gebraucht|preis|deutschland|ebay|komplett|mit anleitung|pal|usk\s*\d+)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (platform) {
+    title = title.replace(new RegExp(platform.replace(/\s+/g, "\\s*"), "ig"), " ").replace(/\s+/g, " ").trim();
+  }
+
+  const colonParts = title.split(/\s*:\s*/).filter(Boolean);
+  if (colonParts.length > 1) title = colonParts[colonParts.length - 1];
+
+  return title || normalizeSearchText(value);
+}
+
+function extractPlatform(value) {
+  const text = normalizeSearchText(value).toLowerCase();
+  const matches = [
+    [/xbox\s*360/, "Xbox 360"],
+    [/xbox\s*one/, "Xbox One"],
+    [/xbox\s*series\s*x/, "Xbox Series X"],
+    [/\bps5\b|playstation\s*5/, "PS5"],
+    [/\bps4\b|playstation\s*4/, "PS4"],
+    [/\bps3\b|playstation\s*3/, "PS3"],
+    [/\bps2\b|playstation\s*2/, "PS2"],
+    [/nintendo\s*switch/, "Nintendo Switch"],
+    [/\b3ds\b|nintendo\s*3ds/, "Nintendo 3DS"],
+    [/\bds\b|nintendo\s*ds/, "Nintendo DS"],
+    [/dreamcast/, "Dreamcast"],
+    [/gamecube/, "GameCube"],
+    [/wii\s*u/, "Wii U"],
+    [/\bwii\b/, "Wii"]
+  ];
+  return matches.find(([pattern]) => pattern.test(text))?.[1] || "";
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .replace(/[^\p{L}\p{N}:+/(). -]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  return values
+    .map((value) => normalizeSearchText(value))
+    .filter(Boolean)
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function cleanTitle(value) {

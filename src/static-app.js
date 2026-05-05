@@ -884,7 +884,7 @@ function evidenceRow(entry) {
     <div class="evidence-main">
       <span class="source-pill">${escapeHtml(entry.source || "Quelle")}</span>
       ${link}
-      <small>${escapeHtml(status)} · ${escapeHtml(entry.age || "live")} · ${Number(entry.matchScore || 0)}% Match</small>
+      <small>${escapeHtml(status)} · ${escapeHtml(entry.age || "live")} · ${Number(entry.matchScore || 0)}% Match${entry.query ? ` · Query: ${escapeHtml(entry.query)}` : ""}</small>
     </div>
     <em>${euro(entry.price)}</em>
   </article>`;
