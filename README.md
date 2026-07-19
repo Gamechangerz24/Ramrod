@@ -1,6 +1,7 @@
 # CREATORS Scanapp
 
-AI-assisted inventory intake and channel-routing prototype for the Strongvision / CREATORS RAMROD workflow.
+AI-assisted, multi-tenant inventory intake and sales orchestration for CREATORS,
+Strongvision, private inventories, and future customer organizations.
 
 ## Current Prototype
 
@@ -11,6 +12,11 @@ AI-assisted inventory intake and channel-routing prototype for the Strongvision 
 - AI article export
 - Channel router and listing plan
 - eBay/Whatnot/Strongvision connector strategy docs
+- Supabase-backed durable automation queue
+- Replaceable VPS and Mac mini workers with leases and retries
+- Organization switcher with isolated inventories
+- CREATORS platform-admin overview
+- Separate public RAMROD shop organization
 
 ## Local Run
 
@@ -36,8 +42,50 @@ If that does not resolve on iPhone, use the Mac's local network IP:
 http://172.16.100.14:3001
 ```
 
-The local server exposes `/api/analyze-image` for live OpenAI image analysis.
-Live scan uploads are resized in the browser and use low image detail by default to keep mobile scans fast and cheap.
+The local server exposes `/api/recognize-image` for fast, conservative identity
+and OCR extraction and `/api/analyze-image` for the richer sales strategy.
+Live scan uploads are resized in the browser, checked for image quality, and
+automatically rotated when the recognizer detects a sideways product.
+
+## Hybrid Worker
+
+The first production architecture keeps the public control plane on the VPS and runs optional local jobs on the CREATORS Mac mini. Supabase stores the queue and all results.
+
+Apply `supabase/migrations/20260716103000_worker_job_queue.sql` and
+`supabase/migrations/20260717164500_price_check_job_link.sql`, then start a worker with:
+
+```bash
+npm run worker
+```
+
+With the app server running, verify the complete queue round trip using:
+
+```bash
+npm run worker:smoke
+```
+
+New `live_openai` and `batch_openai` items automatically receive one idempotent
+`price_check` job. The app shows queued, running, succeeded, and failed states;
+successful worker results replace the initial estimate and remain linked through
+`price_checks.source_job_id`.
+
+See `docs/HYBRID_WORKER_ARCHITECTURE.md` for deployment order and Mac mini guardrails.
+
+## Customer Organizations
+
+Apply `supabase/migrations/20260719120000_multi_tenant_foundation.sql` after the
+initial schema and worker migrations. It adds memberships, platform admins,
+locations, seller profiles, consignment contracts, organization-scoped SKUs,
+and tenant-aware RLS policies.
+
+One login can belong to several organizations. The active organization is sent
+with every API request and controls inventory reads, item writes, jobs, and
+seller context. The public shop reads only `SHOP_ORGANIZATION_SLUG` (default:
+`creators`) so customer and private stock cannot leak into the RAMROD storefront.
+
+Set platform admins either through Supabase app metadata (`ramrod_role=admin`),
+the `platform_admins` table, or during the pilot through
+`RAMROD_PLATFORM_ADMIN_EMAILS`.
 
 ## Sensitive Data
 

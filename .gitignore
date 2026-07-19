@@ -2,8 +2,10 @@
 node_modules
 out
 dist
+backups/
 .env
 .env.local
+deploy/.env.production
 npm-debug.log*
 .DS_Store
 
@@ -13,6 +15,7 @@ data/drive-demo-files.json
 data/drive-demo-analysis.json
 data/app-import-items.json
 data/channel-listing-plan.json
+data/qwen-openai-benchmark.json
 
 # Keep shareable configuration files in git
 !data/channel-config.json

@@ -4,6 +4,7 @@ loadDotEnv(".env.local");
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !anonKey) {
   console.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in environment.");
@@ -11,22 +12,28 @@ if (!supabaseUrl || !anonKey) {
 }
 
 const checks = [
-  ["channels", "id,name,status"],
-  ["customers", "id,name,slug"],
-  ["items", "id,sku,title"]
+  ["channels", "id,name,status", anonKey],
+  ["customers", "id,name,slug", anonKey],
+  ["items", "id,sku,title", anonKey],
+  ...(serviceRoleKey
+    ? [
+        ["jobs", "id,job_type,status", serviceRoleKey],
+        ["workers", "id,name,status", serviceRoleKey]
+      ]
+    : [])
 ];
 
 const results = [];
 
-for (const [table, select] of checks) {
+for (const [table, select, key] of checks) {
   const url = new URL(`/rest/v1/${table}`, supabaseUrl);
   url.searchParams.set("select", select);
   url.searchParams.set("limit", "1");
 
   const response = await fetch(url, {
     headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${anonKey}`,
+      apikey: key,
+      Authorization: `Bearer ${key}`,
       Accept: "application/json"
     }
   });

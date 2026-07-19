@@ -1,0 +1,14 @@
+services:
+  ramrod:
+    build:
+      context: .
+    env_file:
+      - ./deploy/.env.production
+    environment:
+      AUTH_REQUIRED: "true"
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      PORT: 3001
+    ports:
+      - "127.0.0.1:3001:3001"
+    restart: unless-stopped

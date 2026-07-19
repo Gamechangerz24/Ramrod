@@ -1,0 +1,12 @@
+.git
+.env
+.env.local
+deploy/.env.production
+node_modules
+npm-debug.log*
+.DS_Store
+imports
+data/drive-demo-files.json
+data/drive-demo-analysis.json
+data/app-import-items.json
+data/channel-listing-plan.json

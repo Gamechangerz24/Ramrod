@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111111" />
+    <meta name="description" content="RAMROD verkauft Games, Toys, Collectibles und besondere Fundstücke – ehrlich beschrieben und einzeln fotografiert." />
+    <title>RAMROD – Games, Toys & Collectibles</title>
+    <link rel="icon" type="image/png" href="/app/assets/ramrod-icon.png" />
+    <link rel="apple-touch-icon" href="/app/assets/ramrod-icon-192.png" />
+    <link rel="stylesheet" href="/app/shop.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#catalog">Zum Sortiment</a>
+    <header class="site-header">
+      <div class="service-strip">
+        <span>Geprüfte Einzelstücke</span>
+        <span>Zustand ehrlich dokumentiert</span>
+        <span>Versand aus Esslingen</span>
+      </div>
+      <div class="header-main">
+        <a class="shop-brand" href="/" aria-label="RAMROD Startseite">
+          <img src="/app/assets/ramrod-icon.png" alt="" />
+          <strong><span>R</span>AMROD</strong>
+        </a>
+        <form class="shop-search" id="shop-search" role="search">
+          <label class="sr-only" for="shop-search-input">Produkte durchsuchen</label>
+          <input id="shop-search-input" type="search" placeholder="Produkte suchen …" autocomplete="off" />
+          <button type="submit" title="Suchen" aria-label="Suchen">⌕</button>
+        </form>
+        <div class="header-actions">
+          <button class="icon-action" id="saved-button" type="button" title="Merkliste" aria-label="Merkliste">♡</button>
+          <button class="cart-action" id="cart-button" type="button" title="Warenkorb" aria-label="Warenkorb öffnen">
+            <span aria-hidden="true">▣</span>
+            <b id="cart-count">0</b>
+          </button>
+        </div>
+      </div>
+      <nav class="category-nav" id="category-nav" aria-label="Produktkategorien"></nav>
+    </header>
+
+    <main>
+      <section class="feature-drop" id="feature-drop" hidden aria-labelledby="feature-title">
+        <div class="feature-shade" aria-hidden="true"></div>
+        <div class="feature-content">
+          <p id="feature-kicker">RAMROD Fundstück</p>
+          <h1 id="feature-title">Besondere Stücke. Ehrlich beschrieben.</h1>
+          <span id="feature-copy"></span>
+          <button class="feature-action" id="feature-action" type="button">Fundstück ansehen</button>
+        </div>
+      </section>
+
+      <section class="catalog-section" id="catalog" aria-labelledby="catalog-title">
+        <header class="catalog-heading">
+          <div>
+            <p>Aktueller Bestand</p>
+            <h2 id="catalog-title">Neu eingetroffen</h2>
+          </div>
+          <span class="catalog-status" id="catalog-status">Sortiment wird geladen …</span>
+        </header>
+
+        <div class="catalog-toolbar">
+          <button class="filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="shop-filters">Filter</button>
+          <label>
+            <span>Sortierung</span>
+            <select id="sort-select">
+              <option value="newest">Neu eingetroffen</option>
+              <option value="price-asc">Preis aufsteigend</option>
+              <option value="price-desc">Preis absteigend</option>
+              <option value="title">Name</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="catalog-layout">
+          <aside class="shop-filters" id="shop-filters" data-open="false" aria-label="Filter">
+            <div class="filter-heading">
+              <strong>Filter</strong>
+              <button id="reset-filters" type="button">Zurücksetzen</button>
+            </div>
+            <fieldset>
+              <legend>Bereich</legend>
+              <div id="department-filters"></div>
+            </fieldset>
+            <fieldset>
+              <legend>Zustand</legend>
+              <label><input type="radio" name="condition" value="" checked /> Alle</label>
+              <label><input type="radio" name="condition" value="gut" /> Gut oder besser</label>
+              <label><input type="radio" name="condition" value="gebraucht" /> Gebraucht</label>
+              <label><input type="radio" name="condition" value="prüfen" /> Noch zu prüfen</label>
+            </fieldset>
+            <fieldset>
+              <legend>Preis</legend>
+              <label><input type="radio" name="price" value="" checked /> Alle Preise</label>
+              <label><input type="radio" name="price" value="0-25" /> Unter 25 €</label>
+              <label><input type="radio" name="price" value="25-60" /> 25 bis 60 €</label>
+              <label><input type="radio" name="price" value="60-999999" /> Über 60 €</label>
+            </fieldset>
+          </aside>
+
+          <div class="catalog-results">
+            <div class="active-filters" id="active-filters" aria-live="polite"></div>
+            <div class="product-grid" id="product-grid" aria-live="polite"></div>
+            <div class="empty-state" id="empty-state" hidden>
+              <strong>Gerade nichts Passendes dabei.</strong>
+              <span>Filter zurücksetzen oder später wieder vorbeischauen.</span>
+              <button type="button" data-reset>Alle Artikel anzeigen</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="drop-band" aria-label="RAMROD Drops">
+        <div>
+          <p>Nächster Drop</p>
+          <h2>Retro Games aus der Strongvision-Kiste</h2>
+        </div>
+        <span>Einzelstücke, Bundles und überraschende Funde – Veröffentlichung nach Prüfung.</span>
+        <button type="button" id="drop-reminder">Drop merken</button>
+      </section>
+    </main>
+
+    <footer class="shop-footer">
+      <a class="footer-brand" href="/"><img src="/app/assets/ramrod-icon.png" alt="" /><strong>RAMROD</strong></a>
+      <span>Games, Toys, Collectibles & Fundstücke</span>
+      <nav aria-label="Rechtliches">
+        <a href="#">Versand</a>
+        <a href="#">Rückgabe</a>
+        <a href="#">Datenschutz</a>
+        <a href="#">Impressum</a>
+      </nav>
+    </footer>
+
+    <dialog class="product-dialog" id="product-dialog" aria-labelledby="dialog-title">
+      <button class="dialog-close" id="dialog-close" type="button" title="Schließen" aria-label="Produkt schließen">×</button>
+      <div id="dialog-content"></div>
+    </dialog>
+
+    <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+    <aside class="cart-drawer" id="cart-drawer" aria-label="Warenkorb" aria-hidden="true">
+      <header><h2>Warenkorb</h2><button id="cart-close" type="button" title="Schließen" aria-label="Warenkorb schließen">×</button></header>
+      <div id="cart-items"></div>
+      <footer>
+        <div><span>Summe</span><strong id="cart-total">0 €</strong></div>
+        <button type="button" id="checkout-button" disabled>Checkout folgt</button>
+      </footer>
+    </aside>
+
+    <script src="/src/shop-app.js"></script>
+  </body>
+</html>
