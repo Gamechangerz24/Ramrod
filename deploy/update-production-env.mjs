@@ -13,7 +13,10 @@ const updates = {
   OPENAI_STRATEGY_MODEL: "gpt-5.6-terra",
   OPENAI_RECOGNITION_REASONING_EFFORT: "none",
   OPENAI_STRATEGY_REASONING_EFFORT: "none",
-  OPENAI_RECOGNITION_IMAGE_DETAIL: "low"
+  OPENAI_RECOGNITION_IMAGE_DETAIL: "low",
+  SHOP_PREVIEW_MODE: "false",
+  SHOP_HOST_ROUTING: "true",
+  SHOP_ORGANIZATION_SLUG: "creators"
 };
 
 let text = readFileSync(envPath, "utf8");

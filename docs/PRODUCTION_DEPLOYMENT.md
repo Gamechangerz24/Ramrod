@@ -41,10 +41,14 @@ RAMROD is deployed as an installable PWA. The VPS is the public control plane; S
 ## Updates
 
 ```bash
-git pull
-docker compose -f compose.prod.yaml up -d --build
-docker compose -f compose.prod.yaml ps
+curl --fail --silent --show-error \
+  https://raw.githubusercontent.com/Gamechangerz24/Ramrod/main/deploy/deploy-vps-release.sh \
+  | bash -s -- <commit-sha>
 ```
+
+The release script clones the exact commit, preserves the production environment,
+creates a root-only backup, rebuilds the container, checks `/api/health`, and rolls
+back automatically if the new service does not become healthy.
 
 ## Rollback
 
