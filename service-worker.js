@@ -1,4 +1,4 @@
-const CACHE_NAME = "ramrod-shell-v4-multi-tenant";
+const CACHE_NAME = "ramrod-shell-v5-network-first";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -8,6 +8,7 @@ const APP_SHELL = [
   "/app/assets/ramrod-icon-192.png",
   "/app/assets/ramrod-icon-512.png"
 ];
+const APP_SHELL_PATHS = new Set(APP_SHELL);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -33,6 +34,21 @@ self.addEventListener("fetch", (event) => {
       fetch(request)
         .then((response) => response)
         .catch(() => caches.match("/index.html"))
+    );
+    return;
+  }
+
+  if (APP_SHELL_PATHS.has(url.pathname)) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
     return;
   }
