@@ -1102,6 +1102,7 @@ function scanView() {
           ? "Analyse mit Prüfung fortsetzen"
           : "Artikel analysieren";
   const actionDisabled = state.analyzing || state.recognizing || (!photos.length && !devMode);
+  const needsPhotoEvidence = Boolean(state.recognition && state.recognition.evidence?.status !== "ready_for_research");
   const manualFields = `<details class="capture-details">
     <summary>Optionale Angaben</summary>
     <div class="form-grid">
@@ -1124,7 +1125,7 @@ function scanView() {
       ${batchMode
         ? `<div class="batch-instruction"><strong>${state.batchDrafts.length} Artikel gespeichert</strong><span>Fotografiere alle Seiten dieses Artikels. Danach „Nächster Artikel“.</span></div>`
         : `<div class="workflow-progress" aria-label="Verkaufsworkflow">${["Foto", "Erkennen", "Markt", "Strategie", "Freigeben"].map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>`}
-      <label class="photo-drop">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
+      <label class="photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
       <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder Mediathek"}</strong></div>
       ${photos.length ? `<div class="photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Bildqualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
       ${manualFields}
@@ -1312,7 +1313,33 @@ function fastRecognitionPanel(photos) {
     ${visibleText.length ? `<section class="recognition-evidence"><strong>Sichtbar gelesen</strong><div>${visibleText.slice(0, 8).map((entry) => `<span>${escapeHtml(entry)}</span>`).join("")}</div></section>` : ""}
     ${missing.length ? `<section class="recognition-missing"><strong>Noch nicht belegt</strong><p>${missing.slice(0, 5).map(escapeHtml).join(" · ")}</p></section>` : ""}
     ${requests.length ? `<section class="requested-photos"><strong>Nächstes hilfreiches Foto</strong>${requests.slice(0, 3).map((entry) => `<div>${icon("KA")}<span>${escapeHtml(entry.instruction)}</span></div>`).join("")}</section>` : ""}
-    <div class="release-gate">${icon("PR")}<p><strong>Autofreigabe gesperrt</strong><span>Erst Quellenabgleich und Pflichtmerkmale können den Artikel freigeben.</span></p></div>`;
+    ${scanReleaseGuide(recognition)}`;
+}
+
+function scanReleaseGuide(recognition) {
+  const evidence = recognition.evidence || {};
+  const identityReady = evidence.status === "ready_for_research";
+  const missing = Array.isArray(recognition.missingEvidence) ? recognition.missingEvidence.filter(Boolean) : [];
+  const request = recognition.requestedPhotos?.[0]?.instruction || "Zusätzliche Kennzeichnung oder Rückseite fotografieren";
+  return `<section class="scan-release-guide ${identityReady ? "ready" : "blocked"}">
+    <div class="release-guide-head">
+      <div><small>Nächster Schritt</small><strong>${identityReady ? "Markt und Verkaufsstrategie berechnen" : "Identität vervollständigen"}</strong></div>
+      <span>${identityReady ? "1/3 bereit" : "Foto fehlt"}</span>
+    </div>
+    <div class="release-guide-list">
+      ${releaseGuideRow(true, "Produkt erkannt", recognition.identity?.title || "Produktkandidat erkannt")}
+      ${releaseGuideRow(identityReady, identityReady ? "Bildbelege ausreichend" : "Zusatzbeleg fehlt", identityReady ? "RAMROD kann mit der Marktrecherche fortfahren." : (missing.join(" · ") || request))}
+      ${releaseGuideRow(false, "Preisquellen abgleichen", identityReady ? "Startet automatisch mit dem nächsten Button." : "Startet nach ausreichender Produkterkennung.", true)}
+      ${releaseGuideRow(false, "Pflichtangaben prüfen", "Werden nach der Analyse einzeln angezeigt und können dort direkt ergänzt werden.", true)}
+    </div>
+    <button class="${identityReady ? "primary-action" : "secondary-action"} release-guide-action" ${identityReady ? "data-run-next-step" : "data-capture-more"} type="button">${icon(identityReady ? "AI" : "KA")}${identityReady ? "Preis, Kanal und Strategie ermitteln" : "Fehlendes Foto aufnehmen"}</button>
+  </section>`;
+}
+
+function releaseGuideRow(done, label, note, upcoming = false) {
+  const status = done ? "done" : upcoming ? "upcoming" : "missing";
+  const mark = done ? "OK" : upcoming ? "NX" : "!";
+  return `<div class="release-guide-row ${status}">${icon(mark)}<p><strong>${escapeHtml(label)}</strong><span>${escapeHtml(note)}</span></p></div>`;
 }
 
 function field(label, control) {
@@ -1343,9 +1370,10 @@ function batchSummaryCard() {
   if (!summary) return "";
   const items = (summary.itemIds || []).map((id) => state.items.find((item) => item.id === id)).filter(Boolean);
   const approved = items.filter((item) => item.approval?.status === "approved");
-  const ready = items.filter((item) => item.approval?.status !== "approved" && item.priceCheck && !["Pruefen", "Problemfall"].includes(item.channel));
-  const waiting = items.filter((item) => item.approval?.status !== "approved" && !item.priceCheck);
-  const manual = items.filter((item) => item.approval?.status !== "approved" && ["Pruefen", "Problemfall"].includes(item.channel));
+  const openItems = items.filter((item) => item.approval?.status !== "approved");
+  const ready = openItems.filter((item) => releaseRequirements(item).every((entry) => entry.ready));
+  const waiting = openItems.filter((item) => releaseRequirements(item).some((entry) => entry.id === "sources" && !entry.ready && entry.pending));
+  const manual = openItems.filter((item) => !ready.includes(item) && !waiting.includes(item));
   return `<section class="batch-summary-card">
     <div class="batch-summary-head"><div><p>Sammelanalyse abgeschlossen</p><h2>${summary.completed} Artikel verarbeitet</h2></div><button class="icon-button" data-dismiss-batch-summary type="button" title="Zusammenfassung schließen">×</button></div>
     <div class="batch-summary-stats">
@@ -1417,25 +1445,27 @@ function salesStrategyCard(item) {
   const strategy = normalizeSalesStrategy(item);
   const repair = strategy.repairDecision;
   const approved = item.approval?.status === "approved";
+  const requirements = releaseRequirements(item);
+  const blockers = requirements.filter((entry) => !entry.ready);
   const pricePending = ["queued", "running"].includes(item.automationJob?.status) && !item.priceCheck;
-  const priceReady = Boolean(item.priceCheck);
-  const routeReady = !["Pruefen", "Problemfall"].includes(item.channel);
-  const disabled = !approved && (!priceReady || !routeReady || Boolean(state.approving));
+  const disabled = !approved && (blockers.length > 0 || Boolean(state.approving));
   const approvalLabel = approved
     ? "Verkauf freigegeben"
     : pricePending
       ? "Marktcheck läuft"
-      : !priceReady
+      : blockers[0]?.id === "sources"
         ? "Zuerst Preise prüfen"
-        : !routeReady
-          ? "Erst Verkaufskanal festlegen"
+        : blockers[0]?.id === "required"
+          ? "Pflichtangaben ergänzen"
+          : blockers[0]?.id === "channel"
+            ? "Verkaufskanal wählen"
           : state.approving === item.id
             ? "Verkauf wird vorbereitet..."
             : "Verkauf freigeben";
   const action = strategyActionLabel(strategy.recommendedAction);
   const repairLabel = repairDecisionLabel(repair.recommendation);
 
-  return `<section class="sales-strategy-card">
+  return `<section class="sales-strategy-card ${blockers.length ? "has-release-blockers" : "release-ready"}">
     <div class="recommendation-banner">
       <div><small>RAMROD empfiehlt</small><h3>${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice)}</h3><p>${escapeHtml(strategy.routeReason)}</p>${strategy.alternativeChannels.length ? `<span class="recommendation-alternatives">Alternativen: ${strategy.alternativeChannels.map(channelLabel).map(escapeHtml).join(" · ")}</span>` : ""}</div>
       <span class="strategy-action">${escapeHtml(action)}</span>
@@ -1445,8 +1475,10 @@ function salesStrategyCard(item) {
       ${suggestion("Untergrenze", euro(strategy.minimumAcceptablePrice))}
       ${suggestion("Verkaufsdauer", escapeHtml(salesTimeLabel(strategy.expectedTimeToSell)))}
     </div>
+    ${releaseChecklist(item, requirements)}
+    ${requiredItemFieldsEditor(item, requirements.find((entry) => entry.id === "required"))}
     <div class="approval-bar ${approved ? "approved" : ""}">
-      <div><strong>${approved ? "Freigegeben" : "Bereit für deine Entscheidung"}</strong><span>${escapeHtml(approved ? item.approval.summary || strategy.approvalSummary : strategy.approvalSummary)}</span></div>
+      <div><strong>${approved ? "Freigegeben" : blockers.length ? `${blockers.length} Schritt${blockers.length === 1 ? "" : "e"} bis zur Freigabe` : "Bereit für deine Entscheidung"}</strong><span>${escapeHtml(approved ? item.approval.summary || strategy.approvalSummary : blockers.length ? blockers.map((entry) => entry.label).join(" · ") : strategy.approvalSummary)}</span></div>
       <button class="primary-action inline-action" data-approve-sale="${item.id}" type="button" ${disabled || approved ? "disabled" : ""}>${icon(approved ? "OK" : "GO")}${approvalLabel}</button>
     </div>
     <details class="strategy-details">
@@ -1469,6 +1501,102 @@ function salesStrategyCard(item) {
       ${strategy.detectedDefects.length ? `<div class="defect-strip"><strong>Erkannte Punkte</strong><span>${strategy.detectedDefects.map(escapeHtml).join(" · ")}</span></div>` : ""}
     </details>
   </section>`;
+}
+
+function releaseRequirements(item) {
+  const unknown = /^(unbekannt|unbekannter sammlerartikel|offen|nicht belegt|prüfen|pruefen|-)?$/i;
+  const unchecked = /^(ungeprüft|ungeprueft|offen|prüfen|pruefen|-)/i;
+  const titleReady = Boolean(String(item.title || "").trim()) && !unknown.test(String(item.title || "").trim());
+  const categoryReady = Boolean(String(item.category || "").trim()) && !unknown.test(String(item.category || "").trim());
+  const conditionReady = Boolean(String(item.condition || "").trim()) && !unknown.test(String(item.condition || "").trim());
+  const completenessReady = Boolean(String(item.completeness || "").trim()) && !unchecked.test(String(item.completeness || "").trim());
+  const imageReady = Boolean(item.image);
+  const evidenceStatus = item.recognitionEvidence?.status || item.recognition?.evidence?.status || "";
+  const evidenceReady = !evidenceStatus || evidenceStatus === "ready_for_research" || Boolean(item.requiredFieldsConfirmedAt);
+  const fieldState = { title: titleReady, category: categoryReady, condition: conditionReady, completeness: completenessReady, image: imageReady };
+  const missingFields = Object.entries(fieldState).filter(([, ready]) => !ready).map(([name]) => name);
+  const requiredReady = missingFields.length === 0 && evidenceReady;
+  const sourcePending = ["queued", "running"].includes(item.automationJob?.status) && !item.priceCheck;
+  const channelReady = Boolean(item.channel) && !["Pruefen", "Problemfall"].includes(item.channel);
+  const evidenceMissing = Array.isArray(item.recognition?.missingEvidence) ? item.recognition.missingEvidence.filter(Boolean) : [];
+
+  return [
+    {
+      id: "required",
+      label: "Pflichtangaben bestätigen",
+      ready: requiredReady,
+      detail: requiredReady
+        ? "Identität, Kategorie, Zustand und Lieferumfang sind bestätigt."
+        : missingFields.length
+          ? `Fehlt: ${missingFields.map(releaseFieldLabel).join(", ")}.`
+          : evidenceMissing.length
+            ? `Noch bestätigen: ${evidenceMissing.slice(0, 3).join(" · ")}.`
+            : "Identität oder Variante muss einmal bestätigt werden.",
+      missingFields
+    },
+    {
+      id: "sources",
+      label: "Preisquellen abgleichen",
+      ready: Boolean(item.priceCheck),
+      pending: sourcePending,
+      detail: item.priceCheck
+        ? `Marktwert ${euro(item.priceCheck.fair || item.fair)} aus ${priceCheckProviderLabel(item.priceCheck.method)}.`
+        : sourcePending
+          ? "eBay- und Web-Quellen werden gerade automatisch geprüft."
+          : "Es wurde noch kein Live-Quellenabgleich durchgeführt."
+    },
+    {
+      id: "channel",
+      label: "Verkaufskanal festlegen",
+      ready: channelReady,
+      detail: channelReady
+        ? `${channelLabel(item.channel)} ist als bester Verkaufsweg gewählt.`
+        : "RAMROD braucht deine Bestätigung für eBay, Whatnot oder Kleinanzeigen."
+    }
+  ];
+}
+
+function releaseFieldLabel(name) {
+  return {
+    title: "Titel / Variante",
+    category: "Kategorie",
+    condition: "Zustand",
+    completeness: "Lieferumfang",
+    image: "Foto"
+  }[name] || name;
+}
+
+function releaseChecklist(item, requirements) {
+  const done = requirements.filter((entry) => entry.ready).length;
+  const channelRequirement = requirements.find((entry) => entry.id === "channel");
+  return `<section class="release-checklist ${done === requirements.length ? "complete" : ""}">
+    <div class="release-checklist-head"><div><small>Freigabe-Check</small><strong>${done}/${requirements.length} erledigt</strong></div><span>${done === requirements.length ? "Bereit" : "Noch nicht freigeben"}</span></div>
+    <div class="release-checklist-rows">
+      ${requirements.map((entry) => `<div class="release-check-row ${entry.ready ? "done" : entry.pending ? "pending" : "missing"}">
+        ${icon(entry.ready ? "OK" : entry.pending ? "…" : "!")}
+        <p><strong>${escapeHtml(entry.label)}</strong><span>${escapeHtml(entry.detail)}</span></p>
+        ${!entry.ready && entry.id === "required" ? `<button data-focus-release-fields type="button">Jetzt pflegen</button>` : ""}
+        ${!entry.ready && entry.id === "sources" ? `<button data-price-check="${item.id}" type="button" ${entry.pending || state.priceChecking === item.id ? "disabled" : ""}>${entry.pending || state.priceChecking === item.id ? "Prüfung läuft" : "Jetzt prüfen"}</button>` : ""}
+      </div>`).join("")}
+    </div>
+    ${!channelRequirement.ready ? `<div class="release-channel-choice"><strong>Verkaufskanal auswählen</strong><div class="segment-control">${primaryChannels.map((channel) => channelButton(channel, item)).join("")}</div></div>` : ""}
+  </section>`;
+}
+
+function requiredItemFieldsEditor(item, requirement) {
+  const missing = new Set(requirement?.missingFields || []);
+  const needsConfirmation = requirement && !requirement.ready;
+  const conditions = ["Neu", "Sehr gut", "Gut", "Gebraucht", "Unvollständig", "Defekt"];
+  return `<details class="release-fields ${needsConfirmation ? "attention-required" : ""}" ${needsConfirmation ? "open" : ""}>
+    <summary><span>Pflichtangaben</span><strong>${needsConfirmation ? "Bitte prüfen und speichern" : "Vollständig"}</strong></summary>
+    <form data-release-fields="${item.id}" class="release-fields-form">
+      <label class="field ${missing.has("title") ? "missing" : ""}"><span>Titel und Variante</span><input name="title" value="${escapeHtml(item.title || "")}" required /></label>
+      <label class="field ${missing.has("category") ? "missing" : ""}"><span>Kategorie</span><input name="category" value="${escapeHtml(item.category || "")}" required /></label>
+      <label class="field ${missing.has("condition") ? "missing" : ""}"><span>Zustand</span><select name="condition" required>${conditions.includes(item.condition) ? "" : `<option value="" selected disabled>Bitte wählen</option>`}${conditions.map((value) => `<option ${value === item.condition ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+      <label class="field ${missing.has("completeness") ? "missing" : ""}"><span>Lieferumfang / Vollständigkeit</span><input name="completeness" value="${escapeHtml(item.completeness || "")}" placeholder="z.B. vollständig, Anleitung fehlt" required /></label>
+      <button class="secondary-action" type="submit">${icon("OK")}Angaben bestätigen</button>
+    </form>
+  </details>`;
 }
 
 function strategyChecklist(title, entries) {
@@ -1568,7 +1696,7 @@ function priceCheckCard(item) {
         <p>${escapeHtml(message)} Nutze „Preise checken“ für einen direkten neuen Versuch.</p>
       </section>`;
     }
-    return `<section class="research compact"><div class="section-title"><h3>Preischeck</h3><span class="status-pill muted">Offen</span></div><p>Noch nicht geprüft. Klicke auf „Preise checken“, um Live-Vergleiche über eBay und Web-Quellen zu erzeugen.</p></section>`;
+    return `<section class="research compact attention-required"><div class="section-title"><h3>Preischeck</h3><span class="status-pill muted">Offen</span></div><p>Noch nicht geprüft. Klicke auf „Preise checken“, um Live-Vergleiche über eBay und Web-Quellen zu erzeugen.</p></section>`;
   }
   const evidence = Array.isArray(check.evidence) ? check.evidence : [];
   const ebayCount = evidence.filter((entry) => entry.source === "eBay Browse" && !entry.outlier).length;
@@ -1686,7 +1814,8 @@ function ebayDraftCard(item) {
 function channelPicker(item) {
   const options = state.showAllChannels ? [...primaryChannels, ...futureChannels] : primaryChannels;
   const moreLabel = state.showAllChannels ? "Weniger anzeigen" : "Mehr anzeigen";
-  return `<section class="channel-picker" aria-label="Plattformrouting">
+  const needsChannel = !item.channel || ["Pruefen", "Problemfall"].includes(item.channel);
+  return `<section class="channel-picker ${needsChannel ? "attention-required" : ""}" aria-label="Plattformrouting">
     <div class="channel-picker-head"><span>Verkaufskanal</span><button data-toggle-channels type="button">${moreLabel}</button></div>
     <div class="segment-control">${options.map((channel) => channelButton(channel, item)).join("")}</div>
     <p>${state.showAllChannels ? "Assistierte Kanäle bereiten Inhalt und Strategie vor; gesperrte Kanäle brauchen noch einen Connector." : "Wähle, wo dieser Artikel als nächstes verkauft oder weiterbearbeitet werden soll."}</p>
@@ -1990,8 +2119,9 @@ function shippingView() {
 }
 
 async function approveItemForSale(item) {
-  if (!item?.priceCheck || ["Pruefen", "Problemfall"].includes(item.channel)) {
-    throw new Error("Preischeck oder Verkaufskanal ist noch nicht freigabebereit.");
+  const blockers = releaseRequirements(item).filter((entry) => !entry.ready);
+  if (blockers.length) {
+    throw new Error(`Noch offen: ${blockers.map((entry) => entry.label).join(", ")}.`);
   }
   if (item.channel === "eBay" && !item.ebayDraft) {
     const result = await postJson("/api/ebay-draft", { item });
@@ -2098,11 +2228,33 @@ function bindEvents() {
     state.mobileDetailsItem = state.mobileDetailsItem === button.dataset.toggleItemDetails ? "" : button.dataset.toggleItemDetails;
     render();
   }));
+  document.querySelectorAll("[data-focus-release-fields]").forEach((button) => button.addEventListener("click", () => {
+    const details = button.closest(".sales-strategy-card")?.querySelector(".release-fields");
+    if (!details) return;
+    details.open = true;
+    details.scrollIntoView({ behavior: "smooth", block: "center" });
+    requestAnimationFrame(() => details.querySelector(".field.missing input, .field.missing select, input, select")?.focus());
+  }));
+  document.querySelectorAll("[data-release-fields]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const item = state.items.find((entry) => entry.id === event.currentTarget.dataset.releaseFields);
+    if (!item) return;
+    const values = new FormData(event.currentTarget);
+    item.title = String(values.get("title") || "").trim();
+    item.category = String(values.get("category") || "").trim();
+    item.condition = String(values.get("condition") || "").trim();
+    item.completeness = String(values.get("completeness") || "").trim();
+    item.requiredFieldsConfirmedAt = new Date().toISOString();
+    Object.assign(item, enrichWorkflow(item));
+    state.importStatus = `${item.sku}: Pflichtangaben bestätigt.`;
+    await persistItem(item, "Pflichtangaben");
+    render();
+  }));
   document.querySelector("[data-bulk-approve]")?.addEventListener("click", async () => {
     if (state.approving || !state.batchSummary) return;
     const ready = (state.batchSummary.itemIds || [])
       .map((id) => state.items.find((item) => item.id === id))
-      .filter((item) => item && item.approval?.status !== "approved" && item.priceCheck && !["Pruefen", "Problemfall"].includes(item.channel));
+      .filter((item) => item && item.approval?.status !== "approved" && releaseRequirements(item).every((entry) => entry.ready));
     if (!ready.length) return;
     state.approving = "batch";
     state.importStatus = `${ready.length} sichere Artikel werden freigegeben...`;
@@ -2148,6 +2300,12 @@ function bindEvents() {
       ? "Serienaufnahme bereit: mehrere Ansichten aufnehmen, dann zum nächsten Artikel."
       : "Einzelaufnahme bereit.";
     render();
+  }));
+  document.querySelectorAll("[data-capture-more]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("#photo")?.click();
+  }));
+  document.querySelectorAll("[data-run-next-step]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("#add-item")?.click();
   }));
   document.querySelectorAll("[data-price-check]").forEach((button) => button.addEventListener("click", async () => {
     const item = state.items.find((entry) => entry.id === button.dataset.priceCheck);
@@ -2195,7 +2353,7 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-approve-sale]").forEach((button) => button.addEventListener("click", async () => {
     const item = state.items.find((entry) => entry.id === button.dataset.approveSale);
-    if (!item || state.approving || !item.priceCheck || ["Pruefen", "Problemfall"].includes(item.channel)) return;
+    if (!item || state.approving || releaseRequirements(item).some((entry) => !entry.ready)) return;
     state.approving = item.id;
     state.importStatus = `${item.sku} wird für den Verkauf vorbereitet...`;
     render();

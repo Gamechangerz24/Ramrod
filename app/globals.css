@@ -1128,6 +1128,212 @@ img {
   gap: 2px;
 }
 
+.attention-required {
+  border-color: var(--orange) !important;
+  box-shadow: 0 0 0 2px rgba(255, 106, 0, 0.12);
+}
+
+.scan-release-guide {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+}
+
+.scan-release-guide.blocked {
+  background: #fff7f2;
+  border-color: #ffb98f;
+}
+
+.scan-release-guide.ready {
+  background: #f2f8f4;
+  border-color: #9fcbb0;
+}
+
+.release-guide-head,
+.release-checklist-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.release-guide-head > div,
+.release-checklist-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.release-guide-head small,
+.release-checklist-head small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.release-guide-head > span,
+.release-checklist-head > span {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 8px;
+}
+
+.release-guide-list,
+.release-checklist-rows {
+  display: grid;
+  gap: 7px;
+}
+
+.release-guide-row,
+.release-check-row {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 9px;
+}
+
+.release-guide-row p,
+.release-check-row p {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  min-width: 0;
+}
+
+.release-guide-row p span,
+.release-check-row p span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.release-guide-row.done .mini-icon,
+.release-check-row.done .mini-icon {
+  background: #e4f3e9;
+  color: #227247;
+}
+
+.release-guide-row.missing,
+.release-check-row.missing {
+  border-color: #ffb98f;
+}
+
+.release-guide-row.missing .mini-icon,
+.release-check-row.missing .mini-icon {
+  background: #fff0e7;
+  color: #b74c00;
+}
+
+.release-guide-row.upcoming,
+.release-check-row.pending {
+  opacity: 0.72;
+}
+
+.release-guide-action {
+  justify-content: center;
+  margin: 0;
+  width: 100%;
+}
+
+.release-checklist {
+  background: #fff7f2;
+  border: 1px solid #ffb98f;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.release-checklist.complete {
+  background: #f2f8f4;
+  border-color: #9fcbb0;
+}
+
+.release-check-row button {
+  background: var(--surface);
+  border: 1px solid #f18a4b;
+  border-radius: 6px;
+  color: #9f4309;
+  font-size: 12px;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 6px 9px;
+}
+
+.release-check-row button:disabled {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.release-channel-choice {
+  display: grid;
+  gap: 7px;
+}
+
+.release-channel-choice > strong {
+  font-size: 12px;
+}
+
+.release-channel-choice .segment-control {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.release-fields {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+}
+
+.release-fields summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px 0;
+}
+
+.release-fields summary span {
+  font-weight: 900;
+}
+
+.release-fields summary strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.release-fields-form {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding-bottom: 12px;
+}
+
+.release-fields-form .secondary-action {
+  grid-column: 1 / -1;
+  justify-content: center;
+  margin: 0;
+}
+
+.release-fields-form .field.missing input,
+.release-fields-form .field.missing select {
+  border-color: var(--orange);
+  box-shadow: 0 0 0 2px rgba(255, 106, 0, 0.1);
+}
+
 .form-grid {
   display: grid;
   gap: 12px;
@@ -3877,6 +4083,30 @@ img {
 
   .campaign-item em {
     grid-column: 3;
+  }
+
+  .release-guide-head,
+  .release-checklist-head,
+  .release-fields summary {
+    align-items: start;
+  }
+
+  .release-guide-row,
+  .release-check-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .release-check-row button {
+    grid-column: 2;
+    justify-self: stretch;
+  }
+
+  .release-fields-form {
+    grid-template-columns: 1fr;
+  }
+
+  .release-fields-form .secondary-action {
+    grid-column: 1;
   }
 }
 

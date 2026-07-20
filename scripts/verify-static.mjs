@@ -38,6 +38,9 @@ for (const token of [
   "Freigeben",
   "Verkäufe",
   "Verkaufskanal",
+  "Freigabe-Check",
+  "Pflichtangaben bestätigen",
+  "Jetzt pflegen",
   "Versandstation",
   "Whatnot Skript",
   "Anmelden"
