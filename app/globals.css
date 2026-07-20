@@ -1291,6 +1291,21 @@ img {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.release-channel-choice .segment-control button {
+  align-content: center;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+}
+
+.release-channel-choice .segment-control strong,
+.release-channel-choice .segment-control small {
+  overflow: visible;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .release-fields {
   border: 1px solid var(--line);
   border-radius: 8px;
