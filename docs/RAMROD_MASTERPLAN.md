@@ -149,12 +149,17 @@ Die Entscheidung basiert auf dem **erwarteten Netto-Mehrwert pro zusätzlicher A
 | Kanal | Hauptrolle | Geeignete Ware | Automatisierung |
 | --- | --- | --- | --- |
 | RAMROD Shop | Marge, Marke, Wiederkäufer | gute Einzelstücke, kuratierte Bundles, Drops | API-first |
+| Google Shopping | qualifizierter Traffic zum Shop | shopfähige Artikel mit stabiler Produktseite | Merchant API / Feed |
 | eBay | Reichweite und Preissignale | klar suchbare Einzelartikel | API-first |
 | Whatnot | Unterhaltung und schneller Abverkauf | thematisch passende, live erklärbare Ware | Kampagnen + Verkäuferassistenz |
+| TikTok Shop | Discovery Commerce und Live | visuelle Produkte, Einstiegsartikel, Drops | Partner-API nach Freigabe |
 | Instagram | Nachfrage und Vertrauen | visuelle Fundstücke, Vorher/Nachher, Drops | Content-Plan + Freigabe |
+| Kleinanzeigen | lokale Nachfrage und Abholung | sperrige Ware, Konsolen-Bundles, Kisten | browser-assistiert |
 | Strongvision Shop | Kundenkanal | vereinbarte Bestände | späterer Connector |
-| Spezialbörsen | hohe Fachzielgruppe | Karten, Comics, Retro, Figuren | Adapter je Vertikale |
+| Spezialbörsen | hohe Fachzielgruppe | TCG, LEGO, Musik, Vintage, seltene Objekte | Adapter je Vertikale |
 | Lokal/B2B/Liquidation | Geschwindigkeit | sperrige, geringe oder sehr große Posten | regelbasiert |
+
+Die vollständige Kanalbewertung, Account-Regeln, Agenten-Rolle und Build-Reihenfolge stehen in [MARKETPLACE_ANALYSIS.md](MARKETPLACE_ANALYSIS.md).
 
 ## 10. Der RAMROD Shop
 
