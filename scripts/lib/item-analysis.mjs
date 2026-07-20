@@ -1,7 +1,7 @@
 export function buildItemAnalysisPrompt(recognition = null) {
   const prompt = [
     "Du bist der AI-Scanner fuer CREATORS Projekt RAMROD.",
-    "Analysiere ein frisch aufgenommenes Foto aus einer wilden Strongvision-Kiste.",
+    "Analysiere ein frisch aufgenommenes Foto aus einem Kunden-, CREATORS- oder privaten Warenbestand.",
     "Ein Foto kann einen dominanten Artikel und Nebenartikel enthalten.",
     "Pruefe zuerst, ob das Bild gedreht ist, und lies Beschriftungen gedanklich in allen vier 90-Grad-Ausrichtungen. Nenne die vermutete notwendige Rotation in image.qualityNotes.",
     "Erfinde keine Barcodes, Seriennummern, Editionen, Preise oder sichtbaren Maengel.",
@@ -9,6 +9,7 @@ export function buildItemAnalysisPrompt(recognition = null) {
     "Trenne sichere Beobachtungen von Vermutungen. Senke die Confidence, wenn die exakte Variante nicht sichtbar belegt ist.",
     "Nutze sichtbare Initialen, Farb-Codierungen und Beschriftungen zur Charakteridentifikation. Bei Teenage Mutant Ninja Turtles gilt: orange Maske oder M am Guertel = Michelangelo, blau oder L = Leonardo, rot oder R = Raphael, lila oder D = Donatello.",
     "Gib eine operative Artikelkarte fuer Weiterverkauf, Plattformrouting und Whatnot-Vorbereitung aus.",
+    "Beruecksichtige je nach Artikel eBay, Whatnot, Kleinanzeigen, Vinted, Facebook Marketplace, Spezialforen und den eigenen Shop. Waehle den Kanal mit dem besten Verhaeltnis aus Zielgruppe, Nettoerloes, Verkaufsdauer und Arbeitsaufwand.",
     "Wenn Whatnot geeignet ist, sortiere den Artikel in einen konkreten Show-Kanal. Halte Pokemon Cards, PlayStation Games, Xbox Games, Retro Games, Comics, Action Figures und Anime Figures getrennt.",
     "Erstelle eine konkrete Verkaufsstrategie und entscheide zwischen direkt verkaufen, reinigen, reparieren, buendeln, pruefen oder als defekt/Teiletraeger verkaufen.",
     "Empfiehl eine Reparatur nur, wenn der konservativ erwartete Mehrerloes die geschaetzten Teile-, Arbeits- und Risikokosten sinnvoll uebersteigt.",
@@ -178,7 +179,7 @@ export function itemAnalysisSchema() {
           estimatedPriceLow: { type: "number" },
           estimatedPriceFair: { type: "number" },
           estimatedPriceHigh: { type: "number" },
-          recommendedChannel: { type: "string", enum: ["eBay", "Whatnot", "Bundle", "Pruefen", "Problemfall"] },
+          recommendedChannel: { type: "string", enum: ["eBay", "Whatnot", "Kleinanzeigen", "Vinted", "Facebook Marketplace", "Spezialforum", "Strongvision", "Bundle", "Pruefen", "Problemfall"] },
           whatnotEligible: { type: "boolean" },
           whatnotChannel: {
             type: "string",
@@ -233,6 +234,7 @@ export function itemAnalysisSchema() {
                 }
               },
               routeReason: { type: "string" },
+              alternativeChannels: { type: "array", items: { type: "string" } },
               salesFormat: { type: "string", enum: ["fixed_price", "auction", "live_show", "bundle", "local_pickup", "parts"] },
               targetPrice: { type: "number" },
               minimumAcceptablePrice: { type: "number" },

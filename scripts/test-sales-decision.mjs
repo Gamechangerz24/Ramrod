@@ -90,6 +90,60 @@ assert.equal(scratchedConsole.channel, "eBay");
 assert.equal(scratchedConsole.salesStrategy.recommendedAction, "clean_and_sell");
 assert.equal(scratchedConsole.salesStrategy.repairDecision.recommendation, "repair_if_cheap");
 
+const childSeat = reconcileSalesDecision({
+  title: "Britax Römer Kindersitz",
+  category: "Kindersitz / Baby",
+  condition: "Gebraucht",
+  confidence: 91,
+  recognitionEvidence: { score: 86 }
+}, {
+  method: "multi-source",
+  low: 35,
+  fair: 55,
+  aggressive: 75,
+  confidence: 72,
+  evidence: [{ price: 45 }, { price: 55 }, { price: 65 }]
+});
+
+assert.equal(childSeat.channel, "Kleinanzeigen");
+assert.equal(childSeat.salesStrategy.salesFormat, "local_pickup");
+assert.deepEqual(childSeat.salesStrategy.alternativeChannels, ["Facebook Marketplace"]);
+
+const handbag = reconcileSalesDecision({
+  title: "Leder Handtasche Damen",
+  category: "Mode / Handtasche",
+  condition: "Sehr gut",
+  confidence: 90,
+  recognitionEvidence: { score: 84 }
+}, {
+  method: "multi-source",
+  low: 30,
+  fair: 50,
+  aggressive: 70,
+  confidence: 70,
+  evidence: [{ price: 42 }, { price: 50 }, { price: 60 }]
+});
+
+assert.equal(handbag.channel, "Vinted");
+assert.deepEqual(handbag.salesStrategy.alternativeChannels, ["Kleinanzeigen"]);
+
+const householdBundle = reconcileSalesDecision({
+  title: "Gemischtes Spielzeugpaket zur Abholung",
+  category: "Spielzeugpaket",
+  condition: "Gebraucht",
+  confidence: 88,
+  recognitionEvidence: { score: 80 }
+}, {
+  method: "multi-source",
+  low: 10,
+  fair: 20,
+  aggressive: 30,
+  confidence: 66,
+  evidence: [{ price: 15 }, { price: 20 }, { price: 25 }]
+});
+
+assert.equal(householdBundle.channel, "Facebook Marketplace");
+
 const unknown = reconcileSalesDecision({
   title: "Unbekannter Sammlerartikel",
   category: "Collectible",

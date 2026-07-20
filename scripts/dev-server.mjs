@@ -1290,7 +1290,7 @@ async function handlePriceCheck(request, response) {
     whatnotEligible: decision.whatnotEligible,
     salesStrategy: decision.salesStrategy
   };
-  const ebayDraft = buildEbayDraft(decidedItem, priceCheck);
+  const ebayDraft = decision.channel === "eBay" ? buildEbayDraft(decidedItem, priceCheck) : null;
 
   sendJson(response, 200, {
     provider: priceCheck.method,

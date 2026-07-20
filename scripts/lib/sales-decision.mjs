@@ -32,6 +32,10 @@ export function reconcileSalesDecision(item, priceCheck) {
   const isGame = /videospiel|video game|xbox|playstation|nintendo|dreamcast|game boy|switch|ps[1-5]\b/.test(categoryText);
   const isCard = /pokemon|pokémon|trading card|sammelkarte|tcg|magic the gathering|yu-gi-oh/.test(categoryText);
   const isCollectible = /collectible|sammler|actionfigur|action figure|figur|comic|toy|spielzeug/.test(categoryText);
+  const isFashion = /handtasche|designer.?tasche|schuhe|sneaker|kleidung|jacke|mantel|kleid\b|mode|fashion/.test(categoryText);
+  const isLocalGeneral = /staubsauger|kindersitz|kinderwagen|möbel|moebel|sofa|esstisch|haushaltsgerät|haushaltsgeraet|waschmaschine|kühlschrank|kuehlschrank|fahrrad|fitnessgerät|fitnessgeraet/.test(categoryText);
+  const isEverydayBundle = /spielzeugpaket|kleiderpaket|haushaltspaket|kinderkleidung.?paket|haushaltsauflösung|haushaltsaufloesung/.test(categoryText);
+  const isSpecialist = /modelleisenbahn|modellbahn|analogkamera|plattenspieler|verstärker|verstaerker|hi-?fi|vintage.?uhr/.test(categoryText);
   const specialEdition = /collector|collectors|collector's|limited|special edition|steelbook|deluxe|first edition|erstauflage/.test(categoryText);
   const explicitCosmeticIssue = /kratzer|scratch|delle|dent|staub|dust|verschmutz|verfärb|verfaerb|abrieb/.test(conditionText);
   const explicitFunctionalIssue = /defekt|kaputt|broken|bruch|riss|funktioniert nicht|untested|ungetestet/.test(conditionText);
@@ -40,6 +44,18 @@ export function reconcileSalesDecision(item, priceCheck) {
   const reasons = [];
   if (!sourceMatchReady) {
     reasons.push("Identität oder Marktbelege reichen für eine automatische Kanalempfehlung noch nicht aus.");
+  } else if (isFashion) {
+    channel = "Vinted";
+    reasons.push("Mode, Schuhe und Taschen erreichen auf Vinted eine passende kaufbereite Zielgruppe; Marke, Größe und Zustand müssen klar belegt sein.");
+  } else if (isLocalGeneral) {
+    channel = "Kleinanzeigen";
+    reasons.push("Sperrige oder alltagsnahe Gebrauchtware ist über Kleinanzeigen mit Abholung meist wirtschaftlicher als Paketversand.");
+  } else if (isEverydayBundle) {
+    channel = "Facebook Marketplace";
+    reasons.push("Lokale Pakete und gemischte Alltagsware lassen sich über Facebook Marketplace zielgruppennah als Abhol-Bundle anbieten.");
+  } else if (isSpecialist && fair >= 75) {
+    channel = "Spezialforum";
+    reasons.push("Der Artikel braucht Fachpublikum und erklärungsbedürftige Zustandsdetails; ein passendes Spezialforum kann qualifiziertere Käufer liefern.");
   } else if (isGame) {
     channel = specialEdition || fair >= 12 ? "eBay" : "Whatnot";
     reasons.push(channel === "eBay"
@@ -101,7 +117,20 @@ export function reconcileSalesDecision(item, priceCheck) {
     recommendedAction = "clean_and_sell";
   }
 
-  const salesFormat = channel === "Whatnot" ? "live_show" : "fixed_price";
+  const alternativeChannels = {
+    eBay: ["RAMROD Shop", "Spezialforum"],
+    Whatnot: ["eBay", "RAMROD Shop"],
+    Kleinanzeigen: ["Facebook Marketplace"],
+    Vinted: ["Kleinanzeigen"],
+    "Facebook Marketplace": ["Kleinanzeigen"],
+    Spezialforum: ["eBay"],
+    Strongvision: ["eBay"]
+  }[channel] || [];
+  const salesFormat = channel === "Whatnot"
+    ? "live_show"
+    : ["Kleinanzeigen", "Facebook Marketplace"].includes(channel)
+      ? "local_pickup"
+      : "fixed_price";
   const strategy = {
     ...currentStrategy,
     recommendedAction,
@@ -111,6 +140,7 @@ export function reconcileSalesDecision(item, priceCheck) {
     rationale: reasons.join(" "),
     repairDecision,
     routeReason: reasons.join(" "),
+    alternativeChannels,
     salesFormat,
     targetPrice: fair,
     minimumAcceptablePrice: low,

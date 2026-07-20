@@ -161,27 +161,20 @@ const whatnotChannels = [
 ];
 
 const primaryChannels = [
-  { id: "eBay", label: "eBay", status: "bereit", note: "API geplant" },
+  { id: "eBay", label: "eBay", status: "bereit", note: "Entwurf" },
   { id: "Whatnot", label: "Whatnot", status: "bereit", note: "Show-Batch" },
-  { id: "Strongvision", label: "Strongvision", status: "bereit", note: "Website/DB" }
+  { id: "Kleinanzeigen", label: "Kleinanzeigen", status: "assistiert", note: "Abholung" }
 ];
 
 const futureChannels = [
-  "Shopify Hub",
-  "WooCommerce",
-  "Kaufland",
-  "Amazon",
-  "Hood.de",
-  "Etsy",
-  "BrickLink",
-  "Cardmarket",
-  "Discogs",
-  "Kleinanzeigen",
-  "Facebook Marketplace",
-  "Vinted",
-  "Catawiki",
-  "Liquidation Basket"
-].map((label) => ({ id: label, label, status: "noch nicht verfuegbar", note: "Roadmap" }));
+  { id: "Vinted", label: "Vinted", status: "assistiert", note: "Mode" },
+  { id: "Facebook Marketplace", label: "Facebook Marketplace", status: "assistiert", note: "Lokal" },
+  { id: "Spezialforum", label: "Spezialforum", status: "assistiert", note: "Fachpublikum" },
+  { id: "RAMROD Shop", label: "RAMROD Shop", status: "noch nicht verfügbar", note: "Roadmap" },
+  { id: "Strongvision", label: "Strongvision", status: "noch nicht verfügbar", note: "Website/DB" },
+  ...["Shopify Hub", "WooCommerce", "Kaufland", "Amazon", "Hood.de", "Etsy", "BrickLink", "Cardmarket", "Discogs", "Catawiki", "Liquidation Basket"]
+    .map((label) => ({ id: label, label, status: "noch nicht verfügbar", note: "Roadmap" }))
+];
 
 const app = document.querySelector("#app");
 const euro = (value) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
@@ -226,6 +219,12 @@ const state = {
   recognitionMeta: null,
   recognitionRequestId: 0,
   analyzing: false,
+  captureMode: "single",
+  batchDrafts: [],
+  batchAnalyzing: false,
+  batchProgress: null,
+  batchSummary: null,
+  mobileDetailsItem: "",
   priceChecking: "",
   ebayDrafting: "",
   approving: "",
@@ -384,6 +383,9 @@ function normalizeSalesStrategy(item) {
       caveat: repair.caveat || "Schätzung aus Bild und Artikeldaten; Teilepreis, Arbeitszeit und Funktion vor Umsetzung prüfen."
     },
     routeReason: strategy.routeReason || `${channelLabel(item.channel)} passt aktuell am besten zu Wert, Artikeltyp und Bearbeitungsaufwand.`,
+    alternativeChannels: Array.isArray(strategy.alternativeChannels) && strategy.alternativeChannels.length
+      ? strategy.alternativeChannels
+      : channelAlternatives(item.channel),
     salesFormat: strategy.salesFormat || (item.channel === "Whatnot" ? "live_show" : item.channel === "Bundle" ? "bundle" : "fixed_price"),
     targetPrice: Number(strategy.targetPrice || fair),
     minimumAcceptablePrice: Number(strategy.minimumAcceptablePrice || low),
@@ -668,7 +670,7 @@ function isWhatnotCandidate(item) {
 }
 
 function markWhatnotCandidates() {
-  state.items = state.items.map((item) => isWhatnotCandidate(item)
+  state.items = state.items.map((item) => item.approval?.status === "approved" && isWhatnotCandidate(item)
     ? enrichWorkflow({ ...item, channel: "Whatnot", whatnotEligible: true, whatnotChannel: "", whatnotChannelLabel: "", campaignId: "", campaignSuggestion: "" })
     : enrichWorkflow({ ...item, whatnotEligible: item.channel === "Whatnot" })
   );
@@ -688,25 +690,28 @@ function visibleItems(items = state.items) {
 }
 
 function getWorkQueues(items = visibleItems()) {
+  const approvedItems = items.filter((item) => item.approval?.status === "approved");
   const review = items.filter((item) => item.approval?.status !== "approved" && (
     item.channel === "Pruefen"
     || item.confidence < 70
     || ["Gescannt", "Freigabe"].includes(item.stage)
   ));
-  const ebay = items.filter((item) => item.channel === "eBay");
-  const whatnot = items.filter((item) => item.whatnotEligible || item.channel === "Whatnot");
+  const ebay = approvedItems.filter((item) => item.channel === "eBay");
+  const whatnot = approvedItems.filter((item) => item.whatnotEligible || item.channel === "Whatnot");
+  const assisted = approvedItems.filter((item) => ["Kleinanzeigen", "Vinted", "Facebook Marketplace", "Spezialforum", "Strongvision", "RAMROD Shop"].includes(item.channel));
   const problem = items.filter((item) => item.channel === "Problemfall");
   const shipping = items.filter((item) => item.stage === "Verkauft" || item.stage === "Versand");
-  const sellReady = [...new Map([...ebay, ...whatnot].map((item) => [item.id, item])).values()];
+  const sellReady = [...new Map([...ebay, ...whatnot, ...assisted].map((item) => [item.id, item])).values()];
 
   return {
     review,
     ebay,
     whatnot,
+    assisted,
     problem,
     shipping,
     sellReady,
-    campaigns: buildWhatnotCampaigns(items)
+    campaigns: buildWhatnotCampaigns(approvedItems)
   };
 }
 
@@ -764,10 +769,27 @@ function channelLabel(channel) {
     Pruefen: "Prüfen",
     eBay: "eBay",
     Whatnot: "Whatnot",
+    Kleinanzeigen: "Kleinanzeigen",
+    Vinted: "Vinted",
+    "Facebook Marketplace": "Facebook Marketplace",
+    Spezialforum: "Spezialforum",
+    "RAMROD Shop": "RAMROD Shop",
     Strongvision: "Strongvision",
     Bundle: "Bundle",
     Problemfall: "Problemfall"
   }[channel] || channel || "Offen";
+}
+
+function channelAlternatives(channel) {
+  return {
+    eBay: ["RAMROD Shop", "Spezialforum"],
+    Whatnot: ["eBay", "RAMROD Shop"],
+    Kleinanzeigen: ["Facebook Marketplace"],
+    Vinted: ["Kleinanzeigen"],
+    "Facebook Marketplace": ["Kleinanzeigen"],
+    Spezialforum: ["eBay"],
+    Strongvision: ["eBay"]
+  }[channel] || [];
 }
 
 function channelClass(channel) {
@@ -824,6 +846,11 @@ function render() {
         ${navButton("sell", "VK", "Verkaufen")}
         ${navButton("shipping", "VS", "Versand")}
         ${navButton("inventory", "DB", "Bestand")}
+      </nav>
+      <nav class="mobile-nav-list" aria-label="Mobiler Arbeitsablauf">
+        ${mobileNavButton("scan", "KA", "Scannen")}
+        ${mobileNavButton("review", "OK", "Freigeben")}
+        ${mobileNavButton("sell", "VK", "Verkäufe")}
       </nav>
     </aside>
     <section class="workspace view-${state.view}">
@@ -970,9 +997,9 @@ function bindAuthEvents() {
 function pageTitle() {
   return {
     today: "Heute",
-    scan: "Artikel erfassen",
-    review: "Prüfen und freigeben",
-    sell: "Verkaufen",
+    scan: "Scannen",
+    review: "Freigeben",
+    sell: "Verkäufe",
     shipping: "Versand",
     inventory: "Bestand",
     admin: "Plattform-Admin"
@@ -981,6 +1008,11 @@ function pageTitle() {
 
 function navButton(id, iconLabel, label) {
   return `<button class="nav-button ${state.view === id ? "active" : ""}" data-view="${id}" type="button" title="${label}">${icon(iconLabel)}<span>${label}</span></button>`;
+}
+
+function mobileNavButton(id, iconLabel, label) {
+  const groupedViews = id === "sell" ? ["sell", "inventory", "shipping", "campaigns", "routing"] : [id];
+  return `<button class="nav-button ${groupedViews.includes(state.view) ? "active" : ""}" data-view="${id}" type="button" title="${label}">${icon(iconLabel)}<span>${label}</span></button>`;
 }
 
 function boxLabel(box) {
@@ -1055,38 +1087,185 @@ function scanView() {
     : state.draft.photo
       ? [{ dataUrl: state.draft.photo, quality: null }]
       : [];
+  const batchMode = state.captureMode === "batch";
+  const photoLimit = batchMode ? 6 : 4;
+  const currentBatchNumber = state.batchDrafts.length + 1;
+  const capturedCount = state.batchDrafts.length + (photos.length ? 1 : 0);
   const activeStep = state.analyzing ? 4 : state.recognition ? 3 : state.recognizing ? 2 : 1;
   const actionLabel = state.analyzing
-    ? "Markt und Verkaufsstrategie werden ermittelt..."
+    ? "Analyse läuft..."
     : state.recognizing
-      ? "Schnellerkennung läuft..."
+      ? "Produkt wird erkannt..."
       : state.recognition?.evidence?.status === "ready_for_research"
-        ? "Markt und Verkaufsstrategie ermitteln"
+        ? "Preis, Kanal und Strategie ermitteln"
         : state.recognition
-          ? "Mit manueller Prüfung fortfahren"
-          : "Artikel schnell erkennen";
+          ? "Analyse mit Prüfung fortsetzen"
+          : "Artikel analysieren";
   const actionDisabled = state.analyzing || state.recognizing || (!photos.length && !devMode);
-  return `<section class="work-grid">
+  const manualFields = `<details class="capture-details">
+    <summary>Optionale Angaben</summary>
+    <div class="form-grid">
+      ${field("Artikelhinweis", `<input id="query" value="${escapeHtml(state.draft.query)}" placeholder="z.B. Pokemon Display, PS3, Handtasche" />`)}
+      ${field("Barcode / Seriennummer", `<div class="input-with-icon">${icon("BC")}<input id="barcode" value="${escapeHtml(state.draft.barcode)}" placeholder="optional" /></div>`)}
+      ${field("Kiste", `<select id="boxId">${boxes.map((box) => `<option ${box.id === state.draft.boxId ? "selected" : ""}>${box.id}</option>`).join("")}</select>`)}
+      ${field("Zustand", `<select id="condition">${["Neu", "Sehr gut", "Gut", "Gebraucht", "Unvollständig", "Defekt"].map((value) => `<option ${value === state.draft.condition ? "selected" : ""}>${value}</option>`).join("")}</select>`)}
+      ${field("Gewicht kg", `<div class="input-with-icon">${icon("KG")}<input id="weight" value="${escapeHtml(state.draft.weight)}" inputmode="decimal" /></div>`)}
+      ${field("Vollständigkeit", `<input id="completeness" value="${escapeHtml(state.draft.completeness)}" />`)}
+    </div>
+  </details>`;
+
+  return `<section class="work-grid ${batchMode ? "batch-capture-workspace" : ""}">
     <div class="scan-panel">
-      <div class="panel-heading"><div><p>Erfassung</p><h2>Neuen Artikel erfassen</h2></div><button class="icon-button" id="reset" title="Neue Erfassung">${icon("NE")}</button></div>
-      <div class="workflow-progress" aria-label="Verkaufsworkflow">${["Foto", "Erkennen", "Belege", "Strategie", "Freigeben"].map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>
-      <label class="photo-drop">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>Erstes Foto aufnehmen</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
-      <div class="photo-capture-meta"><span>${photos.length}/4 Fotos</span><strong>${photos.length ? "Weitere Ansicht hinzufügen" : "Kamera oder Mediathek"}</strong></div>
-      ${photos.length ? `<div class="photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Bildqualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
-      <div class="form-grid">
-        ${field("Artikelhinweis", `<input id="query" value="${escapeHtml(state.draft.query)}" placeholder="z.B. Pokemon Display, DS Spiel, Anime Figur" />`)}
-        ${field("Barcode / Seriennummer", `<div class="input-with-icon">${icon("BC")}<input id="barcode" value="${escapeHtml(state.draft.barcode)}" placeholder="optional" /></div>`)}
-        ${field("Kiste", `<select id="boxId">${boxes.map((box) => `<option ${box.id === state.draft.boxId ? "selected" : ""}>${box.id}</option>`).join("")}</select>`)}
-        ${field("Zustand", `<select id="condition">${["Neu", "Sehr gut", "Gut", "Gebraucht", "Unvollständig", "Defekt"].map((value) => `<option ${value === state.draft.condition ? "selected" : ""}>${value}</option>`).join("")}</select>`)}
-        ${field("Gewicht kg", `<div class="input-with-icon">${icon("KG")}<input id="weight" value="${escapeHtml(state.draft.weight)}" inputmode="decimal" /></div>`)}
-        ${field("Vollständigkeit", `<input id="completeness" value="${escapeHtml(state.draft.completeness)}" />`)}
+      <div class="panel-heading"><div><p>${batchMode ? `Serienaufnahme · Artikel ${currentBatchNumber}` : "Einzelaufnahme"}</p><h2>${batchMode ? "Viele Artikel nacheinander" : "Einen Artikel analysieren"}</h2></div><button class="icon-button" id="reset" title="Aufnahme zurücksetzen">${icon("NE")}</button></div>
+      <div class="capture-mode" role="group" aria-label="Aufnahmemodus">
+        <button class="${batchMode ? "" : "selected"}" data-capture-mode="single" type="button">Ein Artikel</button>
+        <button class="${batchMode ? "selected" : ""}" data-capture-mode="batch" type="button">Serienaufnahme</button>
       </div>
-      <button class="primary-action" id="add-item" type="button" ${actionDisabled ? "disabled" : ""}>${icon("AI")}${actionLabel}</button>
+      ${batchMode
+        ? `<div class="batch-instruction"><strong>${state.batchDrafts.length} Artikel gespeichert</strong><span>Fotografiere alle Seiten dieses Artikels. Danach „Nächster Artikel“.</span></div>`
+        : `<div class="workflow-progress" aria-label="Verkaufsworkflow">${["Foto", "Erkennen", "Markt", "Strategie", "Freigeben"].map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>`}
+      <label class="photo-drop">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
+      <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder Mediathek"}</strong></div>
+      ${photos.length ? `<div class="photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Bildqualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
+      ${manualFields}
+      ${batchMode
+        ? `<div class="batch-capture-actions">
+            <button class="secondary-action" id="batch-next" type="button" ${!photos.length || state.batchAnalyzing ? "disabled" : ""}>${icon("NX")}Nächster Artikel</button>
+            <button class="primary-action" id="batch-finish" type="button" ${!capturedCount || state.batchAnalyzing ? "disabled" : ""}>${icon("AI")}${state.batchAnalyzing ? "Sammelanalyse läuft..." : `${capturedCount} Artikel analysieren`}</button>
+          </div>`
+        : `<button class="primary-action mobile-primary-action" id="add-item" type="button" ${actionDisabled ? "disabled" : ""}>${icon("AI")}${actionLabel}</button>`}
     </div>
     <div class="ai-panel">
-      ${fastRecognitionPanel(photos)}
+      ${batchMode ? batchCapturePanel() : fastRecognitionPanel(photos)}
     </div>
   </section>`;
+}
+
+function batchCapturePanel() {
+  const progress = state.batchProgress;
+  if (state.batchAnalyzing && progress) {
+    const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
+    return `<div class="panel-heading"><div><p>Sammelanalyse</p><h2>${progress.completed}/${progress.total} verarbeitet</h2></div>${icon("AI")}</div>
+      <div class="batch-progress"><span><i style="width:${percent}%"></i></span><strong>${escapeHtml(progress.label || "Artikel werden analysiert")}</strong><small>${progress.failed} benötigen bisher eine manuelle Prüfung.</small></div>
+      ${batchDraftList()}`;
+  }
+
+  return `<div class="panel-heading"><div><p>Aufnahmesession</p><h2>${state.batchDrafts.length} Artikel bereit</h2></div>${icon("ST")}</div>
+    <div class="batch-explainer"><strong>Erst fotografieren, dann gemeinsam analysieren.</strong><p>Weitere Ansichten gehören zum aktuellen Artikel. Mit „Nächster Artikel“ beginnt das nächste Objekt.</p></div>
+    ${batchDraftList()}`;
+}
+
+function batchDraftList() {
+  if (!state.batchDrafts.length) return `<div class="recognition-empty"><strong>Noch kein Artikel abgeschlossen</strong><p>Fotografiere den ersten Artikel von mehreren Seiten.</p></div>`;
+  return `<div class="batch-draft-list">${state.batchDrafts.map((entry, index) => `<article class="batch-draft-row">
+    <img src="${entry.draft.photos[0]?.dataUrl || entry.draft.photo}" alt="Artikel ${index + 1}" />
+    <span><strong>Artikel ${index + 1}</strong><small>${entry.draft.photos.length} Ansicht${entry.draft.photos.length === 1 ? "" : "en"} · ${escapeHtml(batchEntryStatus(entry.status))}</small></span>
+    ${state.batchAnalyzing ? "" : `<button data-remove-batch="${entry.id}" type="button" title="Artikel aus Session entfernen">×</button>`}
+  </article>`).join("")}</div>`;
+}
+
+function batchEntryStatus(status) {
+  return {
+    captured: "bereit",
+    recognizing: "wird erkannt",
+    analyzing: "Strategie wird berechnet",
+    completed: "analysiert",
+    failed: "manuell prüfen"
+  }[status] || "bereit";
+}
+
+function cloneCaptureDraft(draft) {
+  return {
+    ...draft,
+    photos: (draft.photos || []).map((photo) => ({ ...photo, quality: photo.quality ? { ...photo.quality } : null }))
+  };
+}
+
+function queueCurrentBatchDraft() {
+  const photos = state.draft.photos || [];
+  if (!photos.length) return false;
+  state.batchDrafts.push({
+    id: makeId(),
+    status: "captured",
+    draft: cloneCaptureDraft(state.draft)
+  });
+  state.recognitionRequestId += 1;
+  state.draft = createEmptyDraft(state.draft.boxId);
+  state.recognition = null;
+  state.recognitionMeta = null;
+  return true;
+}
+
+async function runBatchAnalysis() {
+  if (state.batchAnalyzing) return;
+  queueCurrentBatchDraft();
+  const entries = [...state.batchDrafts];
+  if (!entries.length) return;
+
+  state.batchAnalyzing = true;
+  state.batchProgress = { total: entries.length, completed: 0, failed: 0, label: "Sammelanalyse wird vorbereitet" };
+  state.importStatus = `${entries.length} Artikel werden gemeinsam analysiert. Du kannst das Smartphone liegen lassen.`;
+  render();
+
+  const completedItemIds = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    try {
+      state.draft = cloneCaptureDraft(entry.draft);
+      state.recognition = null;
+      state.recognitionMeta = null;
+      entry.status = "recognizing";
+      state.batchProgress.label = `Artikel ${index + 1}: Produkt erkennen`;
+      render();
+
+      const recognition = await runFastRecognition();
+      if (!recognition) throw new Error("Produkt konnte nicht erkannt werden");
+
+      entry.status = "analyzing";
+      state.batchProgress.label = `Artikel ${index + 1}: Preis, Kanal und Strategie`;
+      render();
+      const item = enrichWorkflow(await analyzeWithApi());
+      item.recognition = recognition;
+      item.recognitionEvidence = recognition.evidence || null;
+      if (recognition.evidence?.status !== "ready_for_research") {
+        item.channel = "Pruefen";
+        item.stage = "Gescannt";
+        Object.assign(item, enrichWorkflow(item));
+      }
+      state.items.unshift(item);
+      state.selected = item.id;
+      await persistItem(item, `Artikel ${index + 1}`);
+      entry.status = "completed";
+      entry.itemId = item.id;
+      completedItemIds.push(item.id);
+    } catch (error) {
+      entry.status = "failed";
+      entry.error = error.message;
+      state.batchProgress.failed += 1;
+    } finally {
+      state.batchProgress.completed += 1;
+      render();
+    }
+  }
+
+  const failedEntries = entries.filter((entry) => entry.status === "failed");
+  state.batchSummary = {
+    itemIds: completedItemIds,
+    total: entries.length,
+    completed: completedItemIds.length,
+    failed: failedEntries.length,
+    createdAt: new Date().toISOString()
+  };
+  state.batchDrafts = failedEntries.map((entry) => ({ ...entry, status: "captured" }));
+  state.batchAnalyzing = false;
+  state.batchProgress = null;
+  state.draft = createEmptyDraft(state.draft.boxId);
+  state.recognition = null;
+  state.recognitionMeta = null;
+  state.view = "review";
+  state.importStatus = `${completedItemIds.length} Artikel analysiert${failedEntries.length ? ` · ${failedEntries.length} Aufnahme${failedEntries.length === 1 ? "" : "n"} erneut prüfen` : ""}. Preischecks laufen im Hintergrund.`;
+  saveLocal();
+  render();
 }
 
 function fastRecognitionPanel(photos) {
@@ -1147,15 +1326,38 @@ function reviewView(selected) {
   if (active && !reviewItems.some((item) => item.id === state.selected)) state.selected = active.id;
 
   if (!reviewItems.length) {
-    return `<section class="empty-state"><h2>Keine offenen Prüfungen</h2><p>Alles, was unsicher ist, landet hier: niedrige KI-Sicherheit, Plattform “Prüfen”, Problemfälle und teure Einzelstücke.</p><button class="primary-action inline-action" data-view="scan" type="button">${icon("ER")}Neue Artikel erfassen</button></section>`;
+    return `<div class="review-flow">${batchSummaryCard()}<section class="empty-state"><h2>Keine offenen Freigaben</h2><p>Alle analysierten Artikel sind bereits freigegeben oder warten in ihrer Verkaufsübersicht.</p><button class="primary-action inline-action" data-view="scan" type="button">${icon("ER")}Weitere Artikel scannen</button></section></div>`;
   }
 
-  return `<section class="inventory-layout review-workspace">
+  return `<div class="review-flow">${batchSummaryCard()}<section class="inventory-layout review-workspace">
     <div class="inventory-list">
-      <div class="panel-heading"><div><p>Arbeitsliste</p><h2>Prüfen</h2></div><span class="queue-count">${reviewItems.length} offen</span></div>
+      <div class="panel-heading"><div><p>Freigaben</p><h2>Was braucht deine Entscheidung?</h2></div><span class="queue-count">${reviewItems.length} offen</span></div>
       ${reviewItems.map(itemRow).join("")}
     </div>
     ${active ? inspector(active) : ""}
+  </section></div>`;
+}
+
+function batchSummaryCard() {
+  const summary = state.batchSummary;
+  if (!summary) return "";
+  const items = (summary.itemIds || []).map((id) => state.items.find((item) => item.id === id)).filter(Boolean);
+  const approved = items.filter((item) => item.approval?.status === "approved");
+  const ready = items.filter((item) => item.approval?.status !== "approved" && item.priceCheck && !["Pruefen", "Problemfall"].includes(item.channel));
+  const waiting = items.filter((item) => item.approval?.status !== "approved" && !item.priceCheck);
+  const manual = items.filter((item) => item.approval?.status !== "approved" && ["Pruefen", "Problemfall"].includes(item.channel));
+  return `<section class="batch-summary-card">
+    <div class="batch-summary-head"><div><p>Sammelanalyse abgeschlossen</p><h2>${summary.completed} Artikel verarbeitet</h2></div><button class="icon-button" data-dismiss-batch-summary type="button" title="Zusammenfassung schließen">×</button></div>
+    <div class="batch-summary-stats">
+      ${suggestion("Freigabebereit", ready.length)}
+      ${suggestion("Marktcheck läuft", waiting.length)}
+      ${suggestion("Manuell prüfen", manual.length + Number(summary.failed || 0))}
+      ${suggestion("Freigegeben", approved.length)}
+    </div>
+    <div class="batch-summary-actions">
+      <button class="primary-action" data-bulk-approve type="button" ${ready.length ? "" : "disabled"}>${icon("OK")}${ready.length ? `${ready.length} sichere Artikel freigeben` : waiting.length ? "Marktchecks laufen" : "Keine Sammelfreigabe möglich"}</button>
+      <button class="secondary-action" data-view="scan" type="button">${icon("KA")}Weitere scannen</button>
+    </div>
   </section>`;
 }
 
@@ -1171,7 +1373,8 @@ function inventoryView(selected) {
 }
 
 function itemRow(item) {
-  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${item.category}</small><small>${sourceBadge(item)}</small></span><span class="row-meta">${demoBadge(item)}<em>${euro(item.fair)}</em></span></button>`;
+  const strategy = normalizeSalesStrategy(item);
+  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${escapeHtml(workStatus(item))}</small><small class="item-recommendation">Empfehlung: ${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice || item.fair)}</small></span><span class="row-meta">${demoBadge(item)}<em>${euro(item.fair)}</em></span></button>`;
 }
 
 function inspector(item) {
@@ -1190,19 +1393,22 @@ function inspector(item) {
       <div class="inspector-title"><div><p>${item.sku} ${demoBadge(item)}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${channelClass(item.channel)}">${channelLabel(item.channel)}</span></div>
       <div class="source-strip">${sourceBadge(item)}</div>
       ${salesStrategyCard(item)}
-      <div class="price-grid">${suggestion("Minimum", euro(item.low))}${suggestion("Marktwert", euro(item.fair))}${suggestion("Optimistisch", euro(item.aggressive))}${suggestion("Erkennung", `${item.confidence}%`)}</div>
-      <div class="draft-actions">
-        <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Prüfe..." : "Preise checken"}</button>
-        <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Baue..." : "eBay-Entwurf"}</button>
+      <button class="mobile-details-toggle" data-toggle-item-details="${item.id}" type="button">${state.mobileDetailsItem === item.id ? "Weniger Details" : "Preisquellen, Zustand und Alternativen"}<span aria-hidden="true">${state.mobileDetailsItem === item.id ? "−" : "+"}</span></button>
+      <div class="item-secondary-details ${state.mobileDetailsItem === item.id ? "expanded" : ""}">
+        <div class="price-grid">${suggestion("Minimum", euro(item.low))}${suggestion("Marktwert", euro(item.fair))}${suggestion("Optimistisch", euro(item.aggressive))}${suggestion("Erkennung", `${item.confidence}%`)}</div>
+        <div class="draft-actions">
+          <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Prüfe..." : "Preise checken"}</button>
+          <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Baue..." : "eBay-Entwurf"}</button>
+        </div>
+        ${priceCheckCard(item)}
+        ${ebayDraftCard(item)}
+        ${channelPicker(item)}
+        ${whatnotRoutingCard(item)}
+        <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollständigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
+        <section class="research"><h3>Preisquellen</h3>${research.map((comp) => `<div class="research-row"><span>${comp[0]}</span><strong>${comp[1]}</strong><em>${comp[2] ? euro(comp[2]) : "Regel"}</em><small>${comp[3]}</small></div>`).join("")}</section>
+        <section class="script-box"><h3>Whatnot Skript</h3><p>${script}</p></section>
+        ${otherVisible}
       </div>
-      ${priceCheckCard(item)}
-      ${ebayDraftCard(item)}
-      ${channelPicker(item)}
-      ${whatnotRoutingCard(item)}
-      <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollständigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
-      <section class="research"><h3>Preisquellen</h3>${research.map((comp) => `<div class="research-row"><span>${comp[0]}</span><strong>${comp[1]}</strong><em>${comp[2] ? euro(comp[2]) : "Regel"}</em><small>${comp[3]}</small></div>`).join("")}</section>
-      <section class="script-box"><h3>Whatnot Skript</h3><p>${script}</p></section>
-      ${otherVisible}
     </div>
   </div>`;
 }
@@ -1230,37 +1436,38 @@ function salesStrategyCard(item) {
   const repairLabel = repairDecisionLabel(repair.recommendation);
 
   return `<section class="sales-strategy-card">
-    <div class="strategy-head">
-      <div><small>Verkaufsentscheidung</small><h3>${escapeHtml(strategy.headline)}</h3></div>
+    <div class="recommendation-banner">
+      <div><small>RAMROD empfiehlt</small><h3>${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice)}</h3><p>${escapeHtml(strategy.routeReason)}</p>${strategy.alternativeChannels.length ? `<span class="recommendation-alternatives">Alternativen: ${strategy.alternativeChannels.map(channelLabel).map(escapeHtml).join(" · ")}</span>` : ""}</div>
       <span class="strategy-action">${escapeHtml(action)}</span>
     </div>
-    <p class="strategy-rationale">${escapeHtml(strategy.rationale)}</p>
     <div class="strategy-metrics">
-      ${suggestion("Kanal", escapeHtml(channelLabel(item.channel)))}
       ${suggestion("Format", escapeHtml(salesFormatLabel(strategy.salesFormat)))}
-      ${suggestion("Zielpreis", euro(strategy.targetPrice))}
       ${suggestion("Untergrenze", euro(strategy.minimumAcceptablePrice))}
       ${suggestion("Verkaufsdauer", escapeHtml(salesTimeLabel(strategy.expectedTimeToSell)))}
     </div>
-    <div class="repair-decision ${repair.recommendation}">
-      <div><small>Aufbereitung / Reparatur</small><strong>${escapeHtml(repairLabel)}</strong><p>${escapeHtml(repair.action)}</p></div>
-      <div class="repair-economics">
-        ${suggestion("Kosten", strategyRange(repair.estimatedCostLow, repair.estimatedCostHigh))}
-        ${suggestion("Mehrerlös", strategyRange(repair.estimatedValueGainLow, repair.estimatedValueGainHigh))}
-        ${suggestion("Netto-Schätzung", euro(repair.netGainEstimate))}
-      </div>
-      <small class="strategy-caveat">${escapeHtml(repair.caveat)}</small>
-    </div>
-    <div class="strategy-columns">
-      ${strategyChecklist("Vorbereiten", strategy.preparationSteps)}
-      ${strategyChecklist("Noch prüfen", strategy.requiredChecks)}
-      ${strategyChecklist("Fotoliste", strategy.photoChecklist)}
-    </div>
-    ${strategy.detectedDefects.length ? `<div class="defect-strip"><strong>Erkannte Punkte</strong><span>${strategy.detectedDefects.map(escapeHtml).join(" · ")}</span></div>` : ""}
     <div class="approval-bar ${approved ? "approved" : ""}">
       <div><strong>${approved ? "Freigegeben" : "Bereit für deine Entscheidung"}</strong><span>${escapeHtml(approved ? item.approval.summary || strategy.approvalSummary : strategy.approvalSummary)}</span></div>
       <button class="primary-action inline-action" data-approve-sale="${item.id}" type="button" ${disabled || approved ? "disabled" : ""}>${icon(approved ? "OK" : "GO")}${approvalLabel}</button>
     </div>
+    <details class="strategy-details">
+      <summary>Warum diese Empfehlung?</summary>
+      <p class="strategy-rationale">${escapeHtml(strategy.rationale)}</p>
+      <div class="repair-decision ${repair.recommendation}">
+        <div><small>Aufbereitung / Reparatur</small><strong>${escapeHtml(repairLabel)}</strong><p>${escapeHtml(repair.action)}</p></div>
+        <div class="repair-economics">
+          ${suggestion("Kosten", strategyRange(repair.estimatedCostLow, repair.estimatedCostHigh))}
+          ${suggestion("Mehrerlös", strategyRange(repair.estimatedValueGainLow, repair.estimatedValueGainHigh))}
+          ${suggestion("Netto-Schätzung", euro(repair.netGainEstimate))}
+        </div>
+        <small class="strategy-caveat">${escapeHtml(repair.caveat)}</small>
+      </div>
+      <div class="strategy-columns">
+        ${strategyChecklist("Vorbereiten", strategy.preparationSteps)}
+        ${strategyChecklist("Noch prüfen", strategy.requiredChecks)}
+        ${strategyChecklist("Fotoliste", strategy.photoChecklist)}
+      </div>
+      ${strategy.detectedDefects.length ? `<div class="defect-strip"><strong>Erkannte Punkte</strong><span>${strategy.detectedDefects.map(escapeHtml).join(" · ")}</span></div>` : ""}
+    </details>
   </section>`;
 }
 
@@ -1482,12 +1689,12 @@ function channelPicker(item) {
   return `<section class="channel-picker" aria-label="Plattformrouting">
     <div class="channel-picker-head"><span>Verkaufskanal</span><button data-toggle-channels type="button">${moreLabel}</button></div>
     <div class="segment-control">${options.map((channel) => channelButton(channel, item)).join("")}</div>
-    <p>${state.showAllChannels ? "Weitere Kanäle sind als Roadmap sichtbar und noch gesperrt." : "Wähle, wo dieser Artikel als nächstes verkauft oder weiterbearbeitet werden soll."}</p>
+    <p>${state.showAllChannels ? "Assistierte Kanäle bereiten Inhalt und Strategie vor; gesperrte Kanäle brauchen noch einen Connector." : "Wähle, wo dieser Artikel als nächstes verkauft oder weiterbearbeitet werden soll."}</p>
   </section>`;
 }
 
 function channelButton(channel, item) {
-  const disabled = channel.status !== "bereit";
+  const disabled = channel.status === "noch nicht verfügbar";
   const selected = item.channel === channel.id;
   const attrs = disabled ? "disabled aria-disabled=\"true\"" : `data-route="${channel.id}" data-id="${item.id}"`;
   return `<button class="${selected ? "selected" : ""} ${disabled ? "locked" : ""}" ${attrs} type="button"><strong>${escapeHtml(channel.label)}</strong><small>${escapeHtml(channel.status)}</small></button>`;
@@ -1518,16 +1725,20 @@ function sellView() {
   const campaigns = queues.campaigns;
   const ebayNeedsDraft = queues.ebay.filter((item) => !item.ebayDraft);
   const ebayDrafts = queues.ebay.filter((item) => item.ebayDraft);
+  const assistedItems = visibleItems().filter((item) => item.approval?.status === "approved" && ["Kleinanzeigen", "Vinted", "Facebook Marketplace", "Spezialforum", "Strongvision", "RAMROD Shop"].includes(item.channel));
 
-  return `<section class="sell-layout">
+  return `<div class="sales-flow">
+    ${salesOverview()}
+    ${assistedItems.length ? assistedSalesQueue(assistedItems) : ""}
+    <section class="sell-layout">
     <div class="sell-column">
-      <div class="panel-heading"><div><p>eBay</p><h2>Listing Queue</h2></div><span class="queue-count">${queues.ebay.length}</span></div>
+      <div class="panel-heading"><div><p>eBay</p><h2>Angebote vorbereiten</h2></div><span class="queue-count">${queues.ebay.length}</span></div>
       <div class="sell-section">
         <h3>Bereit für eBay</h3>
         ${listingQueue(ebayNeedsDraft, "Keine offenen eBay-Entwürfe.")}
       </div>
       <div class="sell-section">
-        <h3>eBay-Entwürfe</h3>
+        <h3>Entwurf vorbereitet, noch nicht veröffentlicht</h3>
         ${listingQueue(ebayDrafts, "Noch keine eBay-Entwürfe erstellt.")}
       </div>
     </div>
@@ -1535,7 +1746,72 @@ function sellView() {
       <div class="panel-heading"><div><p>Whatnot</p><h2>Show Vorbereitung</h2></div><button class="secondary-action" id="auto-whatnot" type="button">${icon("WN")}Sortieren</button></div>
       ${campaigns.length ? campaigns.map(campaignCard).join("") : `<div class="empty-state compact-empty"><h2>Keine Kampagnen</h2><p>Setze passende Artikel auf Whatnot oder nutze “Sortieren”, um Kandidaten nach Themen zu gruppieren.</p></div>`}
     </div>
+    </section>
+  </div>`;
+}
+
+function assistedSalesQueue(items) {
+  return `<section class="assisted-sales">
+    <div class="panel-heading"><div><p>Weitere Empfehlungen</p><h2>Assistierte Verkaufskanäle</h2></div><span class="queue-count">${items.length}</span></div>
+    <p class="assisted-note">RAMROD bereitet Preis, Text, Fotos und Vorgehen vor. Die Veröffentlichung bleibt manuell, bis der jeweilige Connector verfügbar ist.</p>
+    <div class="assisted-sales-list">${items.map((item) => `<button class="assisted-sales-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(channelLabel(item.channel))} · Ziel ${euro(normalizeSalesStrategy(item).targetPrice || item.fair)}</small><em>${item.approval?.status === "approved" ? "Freigegeben" : "Freigabe offen"}</em></span><b aria-hidden="true">›</b></button>`).join("")}</div>
   </section>`;
+}
+
+function salesOverview() {
+  const items = visibleItems()
+    .filter((item) => item.approval?.status === "approved" || ["Verkaufsbereit", "Verkauft", "Versand"].includes(item.stage))
+    .sort((left, right) => String(right.approval?.approvedAt || "").localeCompare(String(left.approval?.approvedAt || "")));
+  const approved = items.filter((item) => item.approval?.status === "approved").length;
+  const prepared = items.filter((item) => salesProgress(item) >= 3).length;
+  const sold = items.filter((item) => ["Verkauft", "Versand"].includes(item.stage)).length;
+  const shipping = items.filter((item) => item.stage === "Versand").length;
+
+  return `<section class="sales-overview">
+    <div class="sales-overview-head">
+      <div><p>Deine Artikel</p><h2>Verkaufsstatus verfolgen</h2><span>Nach der Freigabe siehst du hier immer, was als Nächstes passiert.</span></div>
+      <div class="sales-overview-actions"><button class="secondary-action" data-view="inventory" type="button">${icon("DB")}Alle Artikel</button><button class="secondary-action" data-view="shipping" type="button">${icon("VS")}Versand</button></div>
+    </div>
+    <div class="sales-overview-stats">
+      ${suggestion("Freigegeben", approved)}
+      ${suggestion("Vorbereitet", prepared)}
+      ${suggestion("Verkauft", sold)}
+      ${suggestion("Im Versand", shipping)}
+    </div>
+    ${items.length
+      ? `<div class="sales-tracking-list">${items.map(salesTrackingRow).join("")}</div>`
+      : `<div class="sales-empty"><strong>Noch nichts freigegeben</strong><p>Scanne einen Artikel, prüfe die Empfehlung und gib ihn für den Verkauf frei.</p><button class="primary-action inline-action" data-view="scan" type="button">${icon("KA")}Ersten Artikel scannen</button></div>`}
+  </section>`;
+}
+
+function salesProgress(item) {
+  if (item.stage === "Versand") return 5;
+  if (item.stage === "Verkauft") return 4;
+  if ((item.channel === "eBay" && item.ebayDraft) || (item.approval?.status === "approved" && ["Whatnot", "Strongvision"].includes(item.channel))) return 3;
+  if (item.approval?.status === "approved") return 2;
+  return item.priceCheck ? 1 : 0;
+}
+
+function salesStatus(item) {
+  if (item.stage === "Versand") return { label: "Versandbereit", note: "Verkauf erkannt · jetzt packen und versenden", tone: "shipping" };
+  if (item.stage === "Verkauft") return { label: "Verkauft", note: "Der Verkauf wurde erkannt", tone: "sold" };
+  if (item.channel === "eBay" && item.ebayDraft) return { label: "eBay-Entwurf", note: "Vorbereitet · noch nicht auf eBay veröffentlicht", tone: "prepared" };
+  if (item.channel === "Whatnot" && item.approval?.status === "approved") return { label: "Whatnot-Kampagne", note: item.campaignSuggestion || "Für die passende Live-Show vorsortiert", tone: "prepared" };
+  if (["Kleinanzeigen", "Vinted", "Facebook Marketplace", "Spezialforum"].includes(item.channel) && item.approval?.status === "approved") return { label: `${channelLabel(item.channel)} freigegeben`, note: "Inhalt vorbereitet · Veröffentlichung derzeit assistiert", tone: "approved" };
+  if (item.channel === "Strongvision" && item.approval?.status === "approved") return { label: "Shop-Übergabe", note: "Freigegeben · Shop-Connector folgt", tone: "prepared" };
+  return { label: "Freigegeben", note: `Für ${channelLabel(item.channel)} bestätigt`, tone: "approved" };
+}
+
+function salesTrackingRow(item) {
+  const status = salesStatus(item);
+  const progress = salesProgress(item);
+  const steps = ["Analysiert", "Freigegeben", "Vorbereitet", "Verkauft", "Versand"];
+  return `<button class="sales-tracking-row" data-select="${item.id}" data-view-after="inventory" type="button">
+    <img src="${item.image}" alt="" />
+    <span class="sales-tracking-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(channelLabel(item.channel))} · Ziel ${euro(normalizeSalesStrategy(item).targetPrice || item.fair)}</small><em class="tracking-status ${status.tone}">${escapeHtml(status.label)}</em><small>${escapeHtml(status.note)}</small></span>
+    <span class="sales-timeline" aria-label="Fortschritt: ${escapeHtml(status.label)}">${steps.map((step, index) => `<i class="${progress >= index + 1 ? "done" : ""}"><b></b><small>${step}</small></i>`).join("")}</span>
+    <span class="tracking-arrow" aria-hidden="true">›</span>
+  </button>`;
 }
 
 function listingQueue(items, emptyText) {
@@ -1570,7 +1846,7 @@ function routeColumn(title, items, iconLabel = title.slice(0, 2).toUpperCase()) 
 }
 
 function campaignsView() {
-  const campaigns = buildWhatnotCampaigns(state.items);
+  const campaigns = buildWhatnotCampaigns(state.items.filter((item) => item.approval?.status === "approved"));
   if (!campaigns.length) {
     return `<section class="empty-state"><h2>Keine Whatnot-Kampagnen</h2><p>Setze Artikel im Verkaufskanal auf Whatnot. RAMROD sortiert sie danach automatisch in Kanäle und Kampagnen.</p><button class="primary-action inline-action" id="auto-whatnot" type="button">${icon("WN")}Kandidaten sortieren</button></section>`;
   }
@@ -1713,10 +1989,34 @@ function shippingView() {
   </section>`;
 }
 
+async function approveItemForSale(item) {
+  if (!item?.priceCheck || ["Pruefen", "Problemfall"].includes(item.channel)) {
+    throw new Error("Preischeck oder Verkaufskanal ist noch nicht freigabebereit.");
+  }
+  if (item.channel === "eBay" && !item.ebayDraft) {
+    const result = await postJson("/api/ebay-draft", { item });
+    item.ebayDraft = result.ebayDraft;
+  }
+  const strategy = normalizeSalesStrategy(item);
+  item.approval = {
+    status: "approved",
+    approvedAt: new Date().toISOString(),
+    strategyAccepted: true,
+    summary: strategy.approvalSummary
+  };
+  item.stage = "Verkaufsbereit";
+  await persistItem(item, "Verkaufsfreigabe");
+  return item;
+}
+
 function bindEvents() {
   const signOut = document.querySelector("#sign-out");
   if (signOut) signOut.addEventListener("click", () => {
     saveAuthSession(null);
+    state.batchDrafts = [];
+    state.batchSummary = null;
+    state.batchProgress = null;
+    state.draft = createEmptyDraft();
     state.authError = "";
     state.importStatus = "";
     render();
@@ -1732,6 +2032,10 @@ function bindEvents() {
     state.search = "";
     state.selected = "";
     state.items = [];
+    state.batchDrafts = [];
+    state.batchSummary = null;
+    state.batchProgress = null;
+    state.draft = createEmptyDraft();
     boxes = [];
     state.view = "today";
     await hydrateAppState();
@@ -1786,6 +2090,39 @@ function bindEvents() {
     if (button.dataset.viewAfter) state.view = button.dataset.viewAfter;
     render();
   }));
+  document.querySelector("[data-dismiss-batch-summary]")?.addEventListener("click", () => {
+    state.batchSummary = null;
+    render();
+  });
+  document.querySelectorAll("[data-toggle-item-details]").forEach((button) => button.addEventListener("click", () => {
+    state.mobileDetailsItem = state.mobileDetailsItem === button.dataset.toggleItemDetails ? "" : button.dataset.toggleItemDetails;
+    render();
+  }));
+  document.querySelector("[data-bulk-approve]")?.addEventListener("click", async () => {
+    if (state.approving || !state.batchSummary) return;
+    const ready = (state.batchSummary.itemIds || [])
+      .map((id) => state.items.find((item) => item.id === id))
+      .filter((item) => item && item.approval?.status !== "approved" && item.priceCheck && !["Pruefen", "Problemfall"].includes(item.channel));
+    if (!ready.length) return;
+    state.approving = "batch";
+    state.importStatus = `${ready.length} sichere Artikel werden freigegeben...`;
+    render();
+    let completed = 0;
+    try {
+      for (const item of ready) {
+        await approveItemForSale(item);
+        completed += 1;
+      }
+      state.view = "sell";
+      state.importStatus = `${completed} Artikel freigegeben. Du siehst jetzt, wie sie je Verkaufskanal weiterlaufen.`;
+    } catch (error) {
+      state.importStatus = `${completed}/${ready.length} freigegeben. Abbruch: ${error.message}`;
+    } finally {
+      state.approving = "";
+      saveLocal();
+      render();
+    }
+  });
   document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", async () => {
     const index = state.items.findIndex((entry) => entry.id === button.dataset.id);
     if (index === -1) return;
@@ -1799,6 +2136,17 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-toggle-channels]").forEach((button) => button.addEventListener("click", () => {
     state.showAllChannels = !state.showAllChannels;
+    render();
+  }));
+  document.querySelectorAll("[data-capture-mode]").forEach((button) => button.addEventListener("click", () => {
+    if (state.batchAnalyzing) return;
+    state.captureMode = button.dataset.captureMode === "batch" ? "batch" : "single";
+    state.recognitionRequestId += 1;
+    state.recognition = null;
+    state.recognitionMeta = null;
+    state.importStatus = state.captureMode === "batch"
+      ? "Serienaufnahme bereit: mehrere Ansichten aufnehmen, dann zum nächsten Artikel."
+      : "Einzelaufnahme bereit.";
     render();
   }));
   document.querySelectorAll("[data-price-check]").forEach((button) => button.addEventListener("click", async () => {
@@ -1852,19 +2200,7 @@ function bindEvents() {
     state.importStatus = `${item.sku} wird für den Verkauf vorbereitet...`;
     render();
     try {
-      if (item.channel === "eBay" && !item.ebayDraft) {
-        const result = await postJson("/api/ebay-draft", { item });
-        item.ebayDraft = result.ebayDraft;
-      }
-      const strategy = normalizeSalesStrategy(item);
-      item.approval = {
-        status: "approved",
-        approvedAt: new Date().toISOString(),
-        strategyAccepted: true,
-        summary: strategy.approvalSummary
-      };
-      item.stage = "Verkaufsbereit";
-      await persistItem(item, "Verkaufsfreigabe");
+      await approveItemForSale(item);
       state.view = "sell";
       state.importStatus = item.channel === "eBay"
         ? `${item.sku} freigegeben. Der eBay-Entwurf ist vorbereitet; die Live-Veröffentlichung folgt mit dem eBay-Connector.`
@@ -1908,7 +2244,8 @@ function bindEvents() {
 
   const photo = document.querySelector("#photo");
   if (photo) photo.addEventListener("change", async (event) => {
-    const remaining = Math.max(0, 4 - (state.draft.photos?.length || 0));
+    const photoLimit = state.captureMode === "batch" ? 6 : 4;
+    const remaining = Math.max(0, photoLimit - (state.draft.photos?.length || 0));
     const files = [...(event.target.files || [])].slice(0, remaining);
     if (!files.length) return;
     state.importStatus = `${files.length} Foto${files.length === 1 ? "" : "s"} wird vorbereitet...`;
@@ -1919,7 +2256,7 @@ function bindEvents() {
         const prepared = await prepareImageForAi(file);
         preparedPhotos.push(prepared);
       }
-      state.draft.photos = [...(state.draft.photos || []), ...preparedPhotos].slice(0, 4);
+      state.draft.photos = [...(state.draft.photos || []), ...preparedPhotos].slice(0, photoLimit);
       state.draft.photo = state.draft.photos[0]?.dataUrl || "";
       state.recognition = null;
       state.recognitionMeta = null;
@@ -1929,7 +2266,7 @@ function bindEvents() {
       state.importStatus = `Bildvorbereitung fehlgeschlagen: ${error.message}.`;
     }
     render();
-    if (state.draft.photos.length) await runFastRecognition();
+    if (state.captureMode === "single" && state.draft.photos.length) await runFastRecognition();
   });
 
   document.querySelectorAll("[data-remove-photo]").forEach((button) => button.addEventListener("click", async () => {
@@ -1941,8 +2278,25 @@ function bindEvents() {
     state.recognitionMeta = null;
     state.importStatus = state.draft.photos.length ? "Foto entfernt. Identität wird neu geprüft." : "Alle Fotos entfernt.";
     render();
-    if (state.draft.photos.length) await runFastRecognition();
+    if (state.captureMode === "single" && state.draft.photos.length) await runFastRecognition();
   }));
+
+  document.querySelectorAll("[data-remove-batch]").forEach((button) => button.addEventListener("click", () => {
+    if (state.batchAnalyzing) return;
+    state.batchDrafts = state.batchDrafts.filter((entry) => entry.id !== button.dataset.removeBatch);
+    state.importStatus = `${state.batchDrafts.length} Artikel in der Aufnahmesession.`;
+    render();
+  }));
+
+  const batchNext = document.querySelector("#batch-next");
+  if (batchNext) batchNext.addEventListener("click", () => {
+    if (!queueCurrentBatchDraft()) return;
+    state.importStatus = `Artikel ${state.batchDrafts.length} gespeichert. Fotografiere jetzt Artikel ${state.batchDrafts.length + 1}.`;
+    render();
+  });
+
+  const batchFinish = document.querySelector("#batch-finish");
+  if (batchFinish) batchFinish.addEventListener("click", runBatchAnalysis);
 
   const add = document.querySelector("#add-item");
   if (add) add.addEventListener("click", async () => {

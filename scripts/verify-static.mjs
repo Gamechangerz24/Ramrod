@@ -31,7 +31,17 @@ if (!html.includes("manifest.webmanifest") || !html.includes("src/pwa.js")) {
   throw new Error("index.html does not load the PWA manifest and registration script");
 }
 
-for (const token of ["Neuen Artikel erfassen", "Verkaufskanal", "Versandstation", "Whatnot Skript", "Anmelden"]) {
+for (const token of [
+  "Einen Artikel analysieren",
+  "Serienaufnahme",
+  "Scannen",
+  "Freigeben",
+  "Verkäufe",
+  "Verkaufskanal",
+  "Versandstation",
+  "Whatnot Skript",
+  "Anmelden"
+]) {
   if (!js.includes(token)) {
     throw new Error(`Missing required UI token: ${token}`);
   }
