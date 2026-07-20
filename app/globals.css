@@ -3507,10 +3507,23 @@ img {
   }
 
   .inspector {
-    grid-template-columns: minmax(260px, 0.9fr) minmax(300px, 1.1fr);
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .inspector-media {
+    border-bottom: 1px solid var(--line);
+    border-right: 0;
+    min-height: 220px;
+  }
+
+  .inspector-media img {
+    height: 220px;
+    max-height: 220px;
   }
 
   .inspector-content {
+    overflow: visible;
     padding: 14px;
   }
 
