@@ -219,6 +219,7 @@ const state = {
   authError: "",
   authNotice: "",
   authLoading: false,
+  authResetLoading: false,
   showAllChannels: false,
   recognizing: false,
   recognition: null,
@@ -859,6 +860,7 @@ function renderLogin() {
         ${state.authNotice ? `<div class="auth-notice">${escapeHtml(state.authNotice)}</div>` : ""}
         ${state.authError ? `<div class="auth-error">${escapeHtml(state.authError)}</div>` : ""}
         <button class="primary-action" type="submit" ${state.authLoading ? "disabled" : ""}>${icon("AU")}${state.authLoading ? "Anmeldung läuft..." : "Anmelden"}</button>
+        <button class="auth-link" id="forgot-password" type="button" ${state.authResetLoading ? "disabled" : ""}>${state.authResetLoading ? "Reset-Mail wird gesendet..." : "Passwort vergessen?"}</button>
       </form>
     </div>
   </section>`;
@@ -918,6 +920,32 @@ function bindPasswordResetEvents() {
 function bindAuthEvents() {
   const form = document.querySelector("#auth-form");
   if (!form) return;
+
+  document.querySelector("#forgot-password")?.addEventListener("click", async () => {
+    if (state.authResetLoading) return;
+    const email = String(form.elements.email.value || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      state.authError = "Bitte zuerst deine E-Mail-Adresse eingeben.";
+      state.authNotice = "";
+      render();
+      return;
+    }
+    state.authResetLoading = true;
+    state.authError = "";
+    state.authNotice = "";
+    render();
+    try {
+      await requestSupabasePasswordReset(email);
+      state.authResetLoading = false;
+      state.authNotice = "Reset-Mail gesendet. Bitte auch den Spam-Ordner prüfen.";
+      render();
+    } catch (error) {
+      state.authResetLoading = false;
+      state.authError = error.message;
+      render();
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (state.authLoading) return;
@@ -2063,6 +2091,22 @@ async function signInWithPassword(email, password) {
   const result = await response.json();
   if (!response.ok || !result.access_token) throw new Error(result.msg || result.error_description || result.message || "Anmeldung fehlgeschlagen.");
   return result;
+}
+
+async function requestSupabasePasswordReset(email) {
+  const config = state.runtimeConfig;
+  if (!config.supabaseUrl || !config.supabaseAnonKey) throw new Error("Supabase Auth ist nicht konfiguriert.");
+  const redirectTo = `${window.location.origin}/`;
+  const response = await fetch(`${config.supabaseUrl}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`, {
+    method: "POST",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ email })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.msg || result.error_description || result.message || "Reset-Mail konnte nicht gesendet werden.");
 }
 
 async function updateSupabasePassword(password, accessToken) {
