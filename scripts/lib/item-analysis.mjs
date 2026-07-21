@@ -206,7 +206,7 @@ export function itemAnalysisSchema() {
             additionalProperties: false,
             required: [
               "recommendedAction", "headline", "rationale", "detectedDefects", "preparationSteps",
-              "repairDecision", "routeReason", "salesFormat", "targetPrice", "minimumAcceptablePrice",
+              "repairDecision", "routeReason", "alternativeChannels", "salesFormat", "targetPrice", "minimumAcceptablePrice",
               "expectedTimeToSell", "requiredChecks", "photoChecklist", "approvalSummary"
             ],
             properties: {
