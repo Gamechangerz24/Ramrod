@@ -24,6 +24,7 @@ try {
     "ramrod_create_mission",
     "ramrod_fail_step",
     "ramrod_get_agent_control",
+    "ramrod_heartbeat_step",
     "ramrod_request_approval"
   ]);
   assert.ok(!listed.tools.some((tool) => /approve|publish|browser/i.test(tool.name)));

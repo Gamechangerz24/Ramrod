@@ -78,6 +78,7 @@ The stdio adapter exposes:
 - `ramrod_create_mission`
 - `ramrod_request_approval`
 - `ramrod_claim_step`
+- `ramrod_heartbeat_step`
 - `ramrod_complete_step`
 - `ramrod_fail_step`
 
@@ -101,6 +102,7 @@ mcp_servers:
       RAMROD_AGENT_EXECUTION_MODES: browser,api,connector
       RAMROD_AGENT_ACTION_TYPES: read,research,prepare
       RAMROD_AGENT_STEP_KEYS: inspect_requirements,prepare_account_data,verify_connector,prepare_listing,verify_listing,prepare_channel_drafts,monitor_distribution,measure_campaign,verify_order
+      RAMROD_AGENT_LEASE_SECONDS: "900"
 ```
 
 There is intentionally no MCP tool for approval, direct publication, credential export, or arbitrary browser execution. External writes remain excluded from the default Hermes allowlist. They can only be added deliberately after the matching connector is tested and the database approval gate remains authoritative.
@@ -128,10 +130,27 @@ The VPS remains the always-on control plane. The Mac mini may run Hermes, local 
 1. Agent Control and the step executor migrations are active.
 2. The always-on VPS safe runner prepares inventory selection, channel plans, clusters, content drafts, and item validation.
 3. The Agenten view shows runners, leases, attempts, progress, and approvals.
+4. The isolated Mac Mini Hermes profile can claim browser, research, and preparation steps through four restricted MCP tools.
+
+### Mac Mini Hermes Scheduler
+
+The RAMROD Hermes profile runs independently from the existing CREATORS profile. The launch agent in `deploy/live.ramrod.hermes-cron.plist` invokes one scheduler tick every minute; the configured job claims at most one RAMROD step per run. Long browser research uses a bounded lease plus `ramrod_heartbeat_step` to prevent duplicate execution.
+
+Install it for the signed-in `link` user:
+
+```bash
+mkdir -p "$HOME/Library/Logs/RAMROD"
+cp deploy/live.ramrod.hermes-cron.plist "$HOME/Library/LaunchAgents/"
+launchctl bootout "gui/$(id -u)/live.ramrod.hermes-cron" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/live.ramrod.hermes-cron.plist"
+launchctl kickstart -k "gui/$(id -u)/live.ramrod.hermes-cron"
+```
+
+Do not install a second Hermes Telegram gateway with cloned credentials. RAMROD approvals use the control-plane Telegram webhook; the scheduler only runs the isolated cron profile.
 
 ## Next Delivery Phase
 
-1. Configure Telegram and the Hermes MCP adapter on the Mac Mini.
+1. Configure the dedicated RAMROD Telegram approval bot and allowed chat IDs.
 2. Build an eBay draft executor that consumes only the allowlisted connector step.
 3. Store every external attempt and verify the returned listing URL and ID.
 4. Add order webhooks, atomic inventory reservation, and cross-channel delisting.

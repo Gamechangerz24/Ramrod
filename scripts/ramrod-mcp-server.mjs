@@ -13,6 +13,7 @@ const workerName = String(process.env.RAMROD_AGENT_WORKER_NAME || "Hermes MCP Ru
 const executionModes = parseList(process.env.RAMROD_AGENT_EXECUTION_MODES || "browser,api,connector");
 const actionTypes = parseList(process.env.RAMROD_AGENT_ACTION_TYPES || "read,research,prepare");
 const stepKeys = parseList(process.env.RAMROD_AGENT_STEP_KEYS || "inspect_requirements,prepare_account_data,verify_connector,prepare_listing,verify_listing,prepare_channel_drafts,monitor_distribution,measure_campaign,verify_order");
+const leaseSeconds = clampNumber(process.env.RAMROD_AGENT_LEASE_SECONDS, 30, 3600, 900);
 
 if (!controlPlaneUrl || !agentToken || !organizationId) {
   console.error("RAMROD_CONTROL_PLANE_URL, RAMROD_AGENT_TOKEN and RAMROD_ORGANIZATION_ID are required.");
@@ -70,8 +71,20 @@ server.registerTool("ramrod_claim_step", {
     executionModes,
     actionTypes,
     stepKeys,
+    leaseSeconds,
     metadata: { runner: "hermes-mcp" }
   })
+})));
+
+server.registerTool("ramrod_heartbeat_step", {
+  title: "RAMROD-Schrittlease verlängern",
+  description: "Verlängert die Lease eines vom selben Hermes-Runner übernommenen Schritts während längerer, erlaubter Recherchearbeiten.",
+  inputSchema: {
+    stepId: z.string().uuid()
+  }
+}, async (input) => toolResult(await controlPlaneRequest(`/api/agent-steps/${input.stepId}/heartbeat`, {
+  method: "POST",
+  body: JSON.stringify({ workerKey, leaseSeconds })
 })));
 
 server.registerTool("ramrod_complete_step", {
@@ -134,4 +147,9 @@ console.error("RAMROD MCP adapter connected over stdio.");
 
 function parseList(value) {
   return [...new Set(String(value || "").split(",").map((entry) => entry.trim().toLowerCase()).filter(Boolean))];
+}
+
+function clampNumber(value, minimum, maximum, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
 }
