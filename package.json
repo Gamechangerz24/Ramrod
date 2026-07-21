@@ -20,9 +20,14 @@
     "test:market-decision": "node scripts/e2e-market-decision-test.mjs",
     "worker": "node scripts/ramrod-worker.mjs",
     "worker:once": "node scripts/ramrod-worker.mjs --once",
-    "worker:smoke": "node scripts/worker-smoke-test.mjs"
+    "worker:smoke": "node scripts/worker-smoke-test.mjs",
+    "mcp": "node scripts/ramrod-mcp-server.mjs",
+    "test:agent-control": "node scripts/test-agent-control.mjs",
+    "test:mcp": "node scripts/test-mcp-adapter.mjs"
   },
   "dependencies": {
-    "three": "^0.184.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "three": "^0.184.0",
+    "zod": "^3.25.76"
   }
 }

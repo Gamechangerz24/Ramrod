@@ -17,6 +17,8 @@ Strongvision, private inventories, and future customer organizations.
 - Organization switcher with isolated inventories
 - CREATORS platform-admin overview
 - Separate public RAMROD shop organization
+- Agent missions with explicit risk and human approval checkpoints
+- Restricted Hermes MCP adapter and optional Telegram approvals
 
 ## Local Run
 
@@ -86,6 +88,18 @@ seller context. The public shop reads only `SHOP_ORGANIZATION_SLUG` (default:
 Set platform admins either through Supabase app metadata (`ramrod_role=admin`),
 the `platform_admins` table, or during the pilot through
 `RAMROD_PLATFORM_ADMIN_EMAILS`.
+
+## Agent Control
+
+Apply `supabase/migrations/20260722100000_agent_control_layer.sql` after the
+multi-tenant migration. It adds durable missions, ordered steps, marketplace
+account references, approval requests, publication attempts, and connector
+events. The Agenten area then becomes available in RAMROD.
+
+Hermes can use `npm run mcp` to read the control state, create missions, and
+request approval. It cannot approve its own actions. Telegram and the signed-in
+RAMROD interface are separate human control channels. See
+`docs/AGENT_CONTROL_LAYER.md` for the threat boundary and configuration.
 
 ## Sensitive Data
 

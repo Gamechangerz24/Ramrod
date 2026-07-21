@@ -15,6 +15,17 @@ import {
 } from "./lib/item-recognition.mjs";
 import { channelRegistryVersion, publicChannelRegistry } from "./lib/channel-registry.mjs";
 import { reconcileSalesDecision } from "./lib/sales-decision.mjs";
+import {
+  buildAgentPlan,
+  buildApprovalSummary,
+  buildTelegramApprovalMessage,
+  firstApprovalStep,
+  isUuid,
+  parseTelegramApprovalCallback,
+  publicAgentPlaybooks,
+  redactAgentPayload,
+  telegramApprovalKeyboard
+} from "./lib/agent-control.mjs";
 
 loadDotEnv(".env.local");
 
@@ -37,6 +48,16 @@ const storageBucket = process.env.SUPABASE_STORAGE_BUCKET || "ramrod-item-images
 const imageAnalysisMode = String(process.env.RAMROD_IMAGE_ANALYSIS_MODE || "openai").toLowerCase();
 const workerApiToken = process.env.RAMROD_WORKER_TOKEN || "";
 const workerApiPaths = new Set(["/api/price-check", "/api/ebay-draft", "/api/recognize-image", "/api/analyze-image"]);
+const agentApiToken = process.env.RAMROD_AGENT_TOKEN || "";
+const telegramBotToken = process.env.RAMROD_TELEGRAM_BOT_TOKEN || "";
+const telegramWebhookSecret = process.env.RAMROD_TELEGRAM_WEBHOOK_SECRET || "";
+const telegramApprovalChatId = String(process.env.RAMROD_TELEGRAM_APPROVAL_CHAT_ID || "").trim();
+const telegramAllowedChatIds = new Set(
+  String(process.env.RAMROD_TELEGRAM_ALLOWED_CHAT_IDS || telegramApprovalChatId)
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+);
 const authRequired = String(process.env.AUTH_REQUIRED || "false").toLowerCase() === "true";
 const shopPreviewMode = String(process.env.SHOP_PREVIEW_MODE || "false").toLowerCase() === "true";
 const shopHostRouting = String(process.env.SHOP_HOST_ROUTING || "false").toLowerCase() === "true";
@@ -101,14 +122,22 @@ const server = createServer(async (request, response) => {
           recognitionModel,
           strategyModel: model,
           ebay: Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET),
-          serpApi: Boolean(process.env.SERPAPI_API_KEY)
-        }
+          serpApi: Boolean(process.env.SERPAPI_API_KEY),
+          telegramApprovals: Boolean(telegramBotToken && telegramWebhookSecret && telegramApprovalChatId),
+          agentControl: Boolean(agentApiToken)
+        },
+        agentPlaybooks: publicAgentPlaybooks()
       });
       return;
     }
 
     if (request.method === "GET" && pathname === "/api/shop/catalog") {
       await handleShopCatalog(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/telegram/webhook") {
+      await handleTelegramWebhook(request, response);
       return;
     }
 
@@ -123,6 +152,27 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "GET" && pathname === "/api/app-state") {
       await handleAppState(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/agent-control") {
+      await handleAgentControl(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/agent-runs") {
+      await handleCreateAgentRun(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/approval-requests") {
+      await handleCreateApprovalRequest(request, response);
+      return;
+    }
+
+    const approvalDecisionMatch = /^\/api\/approvals\/([0-9a-f-]{36})\/(approve|reject)$/i.exec(pathname);
+    if (request.method === "POST" && approvalDecisionMatch) {
+      await handleApprovalDecision(request, response, approvalDecisionMatch[1], approvalDecisionMatch[2]);
       return;
     }
 
@@ -225,6 +275,14 @@ async function authenticateRequest(request, pathname) {
     };
   }
 
+  if (isAgentApiPath(pathname) && agentApiToken && safeTokenEquals(bearerToken, agentApiToken)) {
+    return {
+      ok: true,
+      status: 200,
+      user: { id: "ramrod-agent", email: "agent@ramrod.internal", service: true, agent: true }
+    };
+  }
+
   try {
     const authResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
       headers: {
@@ -250,6 +308,12 @@ async function authenticateRequest(request, pathname) {
   }
 }
 
+function isAgentApiPath(pathname) {
+  return pathname === "/api/agent-control"
+    || pathname === "/api/agent-runs"
+    || pathname === "/api/approval-requests";
+}
+
 function safeTokenEquals(left, right) {
   const leftBuffer = Buffer.from(String(left));
   const rightBuffer = Buffer.from(String(right));
@@ -267,6 +331,7 @@ async function handleAppState(request, response) {
       platformAdmin: false,
       boxes: [],
       items: [],
+      agentControl: unavailableAgentControl("Supabase ist nicht konfiguriert."),
       message: "Supabase is not configured."
     });
     return;
@@ -283,20 +348,22 @@ async function handleAppState(request, response) {
         activeOrganization: null,
         platformAdmin: tenant.platformAdmin,
         boxes: [],
-        items: []
+        items: [],
+        agentControl: unavailableAgentControl("Kein Kundenbereich ausgewählt.")
       });
       return;
     }
 
     const organizationId = tenant.activeOrganization.id;
     const organizationFilter = encodeURIComponent(organizationId);
-    const [boxes, items, priceJobs, adminOverview] = await Promise.all([
+    const [boxes, items, priceJobs, adminOverview, agentControl] = await Promise.all([
       supabaseSelect(`/boxes?select=id,code,label,location,status,customer_id&customer_id=eq.${organizationFilter}&order=code.asc`),
       supabaseSelect(`/items?select=*&customer_id=eq.${organizationFilter}&order=created_at.desc&limit=500`),
       persistence.writable
         ? supabaseSelect(`/jobs?select=id,item_id,status,attempts,max_attempts,created_at,updated_at,result,error&customer_id=eq.${organizationFilter}&job_type=eq.price_check&order=created_at.desc&limit=500`)
         : [],
-      tenant.platformAdmin ? buildAdminOverview(tenant.organizations) : []
+      tenant.platformAdmin ? buildAdminOverview(tenant.organizations) : [],
+      buildAgentControlSnapshot(organizationId)
     ]);
     const latestPriceJobByItem = new Map();
     for (const job of priceJobs) {
@@ -313,7 +380,8 @@ async function handleAppState(request, response) {
       adminOverview,
       tenantMode: tenant.tenantMode,
       boxes: boxes.map(mapDbBoxToUi),
-      items: items.map((item) => mapDbItemToUi(item, boxes, latestPriceJobByItem.get(item.id)))
+      items: items.map((item) => mapDbItemToUi(item, boxes, latestPriceJobByItem.get(item.id))),
+      agentControl
     });
   } catch (error) {
     sendJson(response, 200, {
@@ -323,9 +391,349 @@ async function handleAppState(request, response) {
       platformAdmin: false,
       boxes: [],
       items: [],
+      agentControl: unavailableAgentControl(redactSecret(error.message)),
       message: redactSecret(error.message)
     });
   }
+}
+
+function unavailableAgentControl(message = "Agent Control ist noch nicht eingerichtet.") {
+  return {
+    available: false,
+    message,
+    playbooks: publicAgentPlaybooks(),
+    runs: [],
+    approvals: [],
+    channelAccounts: []
+  };
+}
+
+async function buildAgentControlSnapshot(organizationId) {
+  if (!organizationId) return unavailableAgentControl("Kein Kundenbereich ausgewählt.");
+  const organizationFilter = encodeURIComponent(organizationId);
+  try {
+    const [runs, approvals, channelAccounts] = await Promise.all([
+      supabaseSelect(`/agent_runs?select=id,organization_id,item_id,channel_account_id,agent_type,objective,status,risk_level,plan,result,error,started_at,completed_at,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=40`),
+      supabaseSelect(`/approval_requests?select=id,organization_id,agent_run_id,agent_step_id,approval_type,status,summary,payload,expires_at,decided_at,decision_note,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=60`),
+      supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,external_account_ref,browser_profile_key,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=80`)
+    ]);
+    const runIds = runs.map((run) => run.id).filter(Boolean);
+    const steps = runIds.length
+      ? await supabaseSelect(`/agent_steps?select=id,agent_run_id,ordinal,step_key,title,action_type,execution_mode,status,risk_level,approval_required,summary,output,error,started_at,completed_at,created_at,updated_at&agent_run_id=in.(${encodeURIComponent(runIds.join(","))})&order=ordinal.asc`)
+      : [];
+    const stepsByRun = new Map();
+    for (const step of steps) {
+      if (!stepsByRun.has(step.agent_run_id)) stepsByRun.set(step.agent_run_id, []);
+      stepsByRun.get(step.agent_run_id).push(step);
+    }
+    return {
+      available: true,
+      message: "",
+      telegramConfigured: Boolean(telegramBotToken && telegramWebhookSecret && telegramApprovalChatId),
+      agentApiConfigured: Boolean(agentApiToken),
+      playbooks: publicAgentPlaybooks(),
+      runs: runs.map((run) => ({ ...run, steps: stepsByRun.get(run.id) || [] })),
+      approvals,
+      channelAccounts
+    };
+  } catch (error) {
+    return unavailableAgentControl(`Migration ausstehend: ${redactSecret(error.message)}`);
+  }
+}
+
+async function handleAgentControl(request, response) {
+  const tenant = await resolveTenantContext(request);
+  if (!tenant.activeOrganization) {
+    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
+    return;
+  }
+  sendJson(response, 200, { agentControl: await buildAgentControlSnapshot(tenant.activeOrganization.id) });
+}
+
+async function handleCreateAgentRun(request, response) {
+  if (!supabasePersistenceStatus().writable) {
+    sendJson(response, 503, { error: "agent_control_not_writable", message: "Die Agentensteuerung benötigt den Supabase Service Role Key." });
+    return;
+  }
+  const tenant = await resolveTenantContext(request);
+  if (!tenant.activeOrganization) {
+    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
+    return;
+  }
+
+  let body;
+  let plan;
+  try {
+    body = JSON.parse(await readRequestBody(request, 128 * 1024));
+    plan = buildAgentPlan({
+      agentType: body.agentType,
+      objective: body.objective,
+      channelId: body.channelId,
+      itemId: body.itemId
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: "invalid_agent_mission", message: redactSecret(error.message) });
+    return;
+  }
+
+  const organizationId = tenant.activeOrganization.id;
+  if (plan.itemId) {
+    if (!isUuid(plan.itemId)) {
+      sendJson(response, 400, { error: "invalid_item", message: "itemId muss eine gültige UUID sein." });
+      return;
+    }
+    const item = await supabaseSelect(`/items?select=id&customer_id=eq.${encodeURIComponent(organizationId)}&id=eq.${encodeURIComponent(plan.itemId)}&limit=1`);
+    if (!item[0]) {
+      sendJson(response, 404, { error: "item_not_found", message: "Der Artikel gehört nicht zu diesem Kundenbereich." });
+      return;
+    }
+  }
+
+  try {
+    const runRows = await supabaseInsert("/agent_runs", {
+      organization_id: organizationId,
+      item_id: plan.itemId,
+      agent_type: plan.agentType,
+      objective: plan.objective,
+      status: plan.status,
+      risk_level: plan.riskLevel,
+      requested_by: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
+      plan: redactAgentPayload(plan),
+      context: redactAgentPayload({ channelId: plan.channelId, source: request.ramrodUser?.agent ? "mcp" : "ramrod_ui" })
+    });
+    const run = runRows[0];
+    if (!run) throw new Error("Agentenmission wurde nicht zurückgegeben.");
+    const stepRows = await supabaseInsert("/agent_steps", plan.steps.map((step) => ({
+      agent_run_id: run.id,
+      ordinal: step.ordinal,
+      step_key: step.key,
+      title: step.title,
+      action_type: step.actionType,
+      execution_mode: step.executionMode,
+      status: step.status,
+      risk_level: step.riskLevel,
+      approval_required: step.approvalRequired,
+      summary: step.summary,
+      input: redactAgentPayload({ channelId: plan.channelId, itemId: plan.itemId })
+    })));
+    const approvalPlan = firstApprovalStep(plan);
+    const approvalStep = approvalPlan
+      ? stepRows.find((step) => step.step_key === approvalPlan.key)
+      : null;
+    const approval = approvalStep
+      ? await createApprovalForStep({
+        organization: tenant.activeOrganization,
+        run: { ...run, label: plan.label },
+        step: approvalStep,
+        requestedBy: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
+        itemId: plan.itemId,
+        channelId: plan.channelId
+      })
+      : null;
+    const snapshot = await buildAgentControlSnapshot(organizationId);
+    sendJson(response, 201, { run, steps: stepRows, approval, snapshot });
+  } catch (error) {
+    sendJson(response, 500, { error: "agent_mission_create_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleCreateApprovalRequest(request, response) {
+  const tenant = await resolveTenantContext(request);
+  if (!tenant.activeOrganization) {
+    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
+    return;
+  }
+  const body = JSON.parse(await readRequestBody(request, 64 * 1024));
+  if (!isUuid(body.runId) || !isUuid(body.stepId)) {
+    sendJson(response, 400, { error: "invalid_approval_request", message: "runId und stepId müssen gültige UUIDs sein." });
+    return;
+  }
+  const organizationId = tenant.activeOrganization.id;
+  const [runs, steps] = await Promise.all([
+    supabaseSelect(`/agent_runs?select=*&id=eq.${encodeURIComponent(body.runId)}&organization_id=eq.${encodeURIComponent(organizationId)}&limit=1`),
+    supabaseSelect(`/agent_steps?select=*&id=eq.${encodeURIComponent(body.stepId)}&agent_run_id=eq.${encodeURIComponent(body.runId)}&limit=1`)
+  ]);
+  if (!runs[0] || !steps[0] || !steps[0].approval_required) {
+    sendJson(response, 404, { error: "approval_step_not_found", message: "Der freigabepflichtige Schritt wurde nicht gefunden." });
+    return;
+  }
+  try {
+    const approval = await createApprovalForStep({
+      organization: tenant.activeOrganization,
+      run: runs[0],
+      step: steps[0],
+      requestedBy: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
+      customSummary: body.summary
+    });
+    sendJson(response, 201, { approval, snapshot: await buildAgentControlSnapshot(organizationId) });
+  } catch (error) {
+    sendJson(response, 500, { error: "approval_create_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function createApprovalForStep({ organization, run, step, requestedBy = null, itemId = null, channelId = null, customSummary = "" }) {
+  const existing = await supabaseSelect(`/approval_requests?select=*&agent_step_id=eq.${encodeURIComponent(step.id)}&status=eq.pending&limit=1`);
+  if (existing[0]) return existing[0];
+  let itemTitle = "";
+  if (itemId) {
+    const items = await supabaseSelect(`/items?select=title&id=eq.${encodeURIComponent(itemId)}&customer_id=eq.${encodeURIComponent(organization.id)}&limit=1`).catch(() => []);
+    itemTitle = items[0]?.title || "";
+  }
+  const summary = String(customSummary || "").trim().slice(0, 240) || buildApprovalSummary({
+    organizationName: organization.name,
+    run,
+    step,
+    itemTitle,
+    channelName: channelId || ""
+  });
+  const rows = await supabaseInsert("/approval_requests", {
+    organization_id: organization.id,
+    agent_run_id: run.id,
+    agent_step_id: step.id,
+    approval_type: step.action_type || "external_action",
+    status: "pending",
+    summary,
+    payload: redactAgentPayload({ itemId, itemTitle, channelId, riskLevel: step.risk_level, actionType: step.action_type }),
+    expires_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+    requested_by: requestedBy
+  });
+  const approval = rows[0];
+  if (approval) {
+    await sendTelegramApproval({ organization, run, step, approval, itemTitle, channelName: channelId || "" }).catch((error) => {
+      console.error("Telegram approval delivery failed:", redactSecret(error.message));
+    });
+  }
+  return approval;
+}
+
+async function handleApprovalDecision(request, response, approvalId, action) {
+  if (!isUuid(approvalId)) {
+    sendJson(response, 400, { error: "invalid_approval", message: "Ungültige Freigabe-ID." });
+    return;
+  }
+  const tenant = await resolveTenantContext(request);
+  if (!tenant.activeOrganization) {
+    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
+    return;
+  }
+  const bodyText = await readRequestBody(request, 16 * 1024);
+  const body = bodyText ? JSON.parse(bodyText) : {};
+  try {
+    const result = await decideApproval({
+      approvalId,
+      decision: action === "approve" ? "approved" : "rejected",
+      organizationId: tenant.activeOrganization.id,
+      actorId: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
+      note: String(body.note || "Entscheidung in RAMROD").slice(0, 500)
+    });
+    sendJson(response, 200, { ...result, snapshot: await buildAgentControlSnapshot(tenant.activeOrganization.id) });
+  } catch (error) {
+    sendJson(response, 400, { error: "approval_decision_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function decideApproval({ approvalId, decision, organizationId = null, actorId = null, note = "" }) {
+  const organizationFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : "";
+  const rows = await supabaseSelect(`/approval_requests?select=*&id=eq.${encodeURIComponent(approvalId)}${organizationFilter}&limit=1`);
+  const approval = rows[0];
+  if (!approval) throw new Error("Freigabe nicht gefunden.");
+  if (approval.status !== "pending") return { approval, repeated: true };
+  const approved = decision === "approved";
+  const decidedRows = await supabaseUpdate(`/approval_requests?id=eq.${encodeURIComponent(approval.id)}&status=eq.pending`, {
+    status: approved ? "approved" : "rejected",
+    decided_by: actorId,
+    decided_at: new Date().toISOString(),
+    decision_note: String(note || "").slice(0, 500)
+  });
+  if (!decidedRows[0]) throw new Error("Freigabe wurde bereits entschieden.");
+  await Promise.all([
+    supabaseUpdate(`/agent_steps?id=eq.${encodeURIComponent(approval.agent_step_id)}`, {
+      status: approved ? "approved" : "cancelled"
+    }),
+    supabaseUpdate(`/agent_runs?id=eq.${encodeURIComponent(approval.agent_run_id)}`, {
+      status: approved ? "ready" : "cancelled",
+      ...(approved ? {} : { completed_at: new Date().toISOString() })
+    }),
+    supabaseInsert("/audit_events", {
+      actor_id: actorId,
+      organization_id: approval.organization_id,
+      entity_type: "approval_request",
+      entity_id: approval.id,
+      event_type: approved ? "agent_action_approved" : "agent_action_rejected",
+      payload: redactAgentPayload({ agentRunId: approval.agent_run_id, agentStepId: approval.agent_step_id, note })
+    })
+  ]);
+  return { approval: decidedRows[0], repeated: false };
+}
+
+async function sendTelegramApproval({ organization, run, step, approval, itemTitle = "", channelName = "" }) {
+  if (!telegramBotToken || !telegramApprovalChatId || !approval?.id) return null;
+  const telegramResponse = await telegramApi("sendMessage", {
+    chat_id: telegramApprovalChatId,
+    text: buildTelegramApprovalMessage({ organizationName: organization.name, run, step, itemTitle, channelName, approvalId: approval.id }),
+    reply_markup: telegramApprovalKeyboard(approval.id)
+  });
+  const message = telegramResponse.result;
+  if (message?.message_id) {
+    await supabaseUpdate(`/approval_requests?id=eq.${encodeURIComponent(approval.id)}`, {
+      telegram_chat_id: Number(message.chat?.id || telegramApprovalChatId),
+      telegram_message_id: Number(message.message_id)
+    });
+  }
+  return message || null;
+}
+
+async function handleTelegramWebhook(request, response) {
+  if (!telegramWebhookSecret) {
+    sendJson(response, 503, { error: "telegram_not_configured" });
+    return;
+  }
+  const suppliedSecret = String(request.headers["x-telegram-bot-api-secret-token"] || "");
+  if (!suppliedSecret || !safeTokenEquals(suppliedSecret, telegramWebhookSecret)) {
+    sendJson(response, 401, { error: "invalid_telegram_secret" });
+    return;
+  }
+  const update = JSON.parse(await readRequestBody(request, 256 * 1024));
+  const callback = update.callback_query;
+  const parsed = parseTelegramApprovalCallback(callback?.data);
+  if (!callback || !parsed) {
+    sendJson(response, 200, { ok: true, ignored: true });
+    return;
+  }
+  const chatId = String(callback.message?.chat?.id || callback.from?.id || "");
+  if (!telegramAllowedChatIds.has(chatId)) {
+    await telegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: "Keine Berechtigung.", show_alert: true }).catch(() => null);
+    sendJson(response, 200, { ok: true, ignored: true });
+    return;
+  }
+  try {
+    const result = await decideApproval({
+      approvalId: parsed.approvalId,
+      decision: parsed.decision,
+      note: `Entscheidung via Telegram Chat ${chatId}`
+    });
+    await telegramApi("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: parsed.decision === "approved" ? "Freigegeben. RAMROD kann fortfahren." : "Abgelehnt. Mission wurde gestoppt.",
+      show_alert: false
+    });
+    sendJson(response, 200, { ok: true, repeated: result.repeated });
+  } catch (error) {
+    await telegramApi("answerCallbackQuery", { callback_query_id: callback.id, text: redactSecret(error.message).slice(0, 180), show_alert: true }).catch(() => null);
+    sendJson(response, 200, { ok: true, error: "decision_failed" });
+  }
+}
+
+async function telegramApi(method, payload) {
+  if (!telegramBotToken) throw new Error("Telegram Bot Token fehlt.");
+  const result = await fetch(`https://api.telegram.org/bot${telegramBotToken}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const body = await result.json();
+  if (!result.ok || !body.ok) throw new Error(body.description || `Telegram HTTP ${result.status}`);
+  return body;
 }
 
 async function resolveTenantContext(request) {
@@ -1781,6 +2189,14 @@ async function supabaseUpsert(path, payload) {
   return supabaseRequest(path, {
     method: "POST",
     headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(payload)
+  }, supabaseServiceRoleKey);
+}
+
+async function supabaseUpdate(path, payload) {
+  return supabaseRequest(path, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
     body: JSON.stringify(payload)
   }, supabaseServiceRoleKey);
 }

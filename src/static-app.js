@@ -200,6 +200,9 @@ const state = {
   activeOrganization: null,
   platformAdmin: false,
   adminOverview: [],
+  agentControl: { available: false, playbooks: [], runs: [], approvals: [], channelAccounts: [] },
+  startingAgent: "",
+  decidingApproval: "",
   creatingOrganization: false,
   selected: "itm-001",
   search: "",
@@ -596,6 +599,7 @@ async function hydrateAppState() {
     state.activeOrganizationId = state.activeOrganization?.id || "";
     state.platformAdmin = Boolean(payload.platformAdmin);
     state.adminOverview = payload.adminOverview || [];
+    state.agentControl = payload.agentControl || state.agentControl;
     if (state.activeOrganizationId) localStorage.setItem(organizationStorageKey, state.activeOrganizationId);
 
     boxes = payload.boxes || [];
@@ -937,6 +941,7 @@ function render() {
     campaigns: queues.campaigns.length
   };
   const organization = activeOrganization();
+  const systemView = ["admin", "agents"].includes(state.view);
 
   app.innerHTML = `
     ${organizationRail()}
@@ -950,6 +955,7 @@ function render() {
         ${navButton("shipping", "VS", "Versand")}
         ${navButton("inventory", "DB", "Bestand")}
         ${navButton("archive", "AR", "Archiv")}
+        ${navButton("agents", "AG", "Agenten")}
       </nav>
       <nav class="mobile-nav-list" aria-label="Mobiler Arbeitsablauf">
         ${mobileNavButton("scan", "KA", "Scannen")}
@@ -961,12 +967,12 @@ function render() {
       <header class="topbar">
         <div><p>${escapeHtml(organization.name)} · ${escapeHtml(roleLabel(organization.role))}</p><h1>${pageTitle()}</h1></div>
         <div class="topbar-actions">
-          ${state.view === "admin" ? "" : `<div class="search-box">${icon("SU")}<input id="search" value="${escapeHtml(state.search)}" placeholder="SKU, Titel, Plattform..." /></div>`}
+          ${systemView ? "" : `<div class="search-box">${icon("SU")}<input id="search" value="${escapeHtml(state.search)}" placeholder="SKU, Titel, Plattform..." /></div>`}
           ${state.runtimeConfig.authRequired ? `<button class="icon-button" id="sign-out" type="button" title="Abmelden">${icon("AU")}</button>` : ""}
         </div>
       </header>
       ${state.importStatus ? `<div class="status-strip">${escapeHtml(state.importStatus)}</div>` : ""}
-      ${state.view === "admin" ? "" : `<section class="metrics" aria-label="Kennzahlen">
+      ${systemView ? "" : `<section class="metrics" aria-label="Kennzahlen">
         ${metric("AR", "Artikel", stats.count)}
         ${metric("AI", "Automatisch", `${stats.count ? Math.round((stats.auto / stats.count) * 100) : 0}%`)}
         ${metric("PR", "Prüfen", stats.review)}
@@ -1107,6 +1113,7 @@ function pageTitle() {
     shipping: "Versand",
     inventory: "Bestand",
     archive: "Archiv",
+    agents: "Agenten",
     admin: "Plattform-Admin"
   }[state.view] || "RAMROD";
 }
@@ -1116,7 +1123,7 @@ function navButton(id, iconLabel, label) {
 }
 
 function mobileNavButton(id, iconLabel, label) {
-  const groupedViews = id === "sell" ? ["sell", "inventory", "archive", "shipping", "campaigns", "routing"] : [id];
+  const groupedViews = id === "sell" ? ["sell", "inventory", "archive", "shipping", "campaigns", "routing", "agents"] : [id];
   return `<button class="nav-button ${groupedViews.includes(state.view) ? "active" : ""}" data-view="${id}" type="button" title="${label}">${icon(iconLabel)}<span>${label}</span></button>`;
 }
 
@@ -1147,6 +1154,7 @@ function viewMarkup(selected) {
   if (state.view === "campaigns") return campaignsView();
   if (state.view === "shipping") return shippingView();
   if (state.view === "archive") return archiveView();
+  if (state.view === "agents") return agentsView();
   if (state.view === "admin") return adminView();
   return inventoryView(selected);
 }
@@ -2141,7 +2149,7 @@ function salesOverview() {
   return `<section class="sales-overview">
     <div class="sales-overview-head">
       <div><p>Deine Artikel</p><h2>Verkaufsstatus verfolgen</h2><span>Nach der Freigabe siehst du hier immer, was als Nächstes passiert.</span></div>
-      <div class="sales-overview-actions"><button class="secondary-action" data-view="inventory" type="button">${icon("DB")}Alle Artikel</button><button class="secondary-action" data-view="archive" type="button">${icon("AR")}Archiv</button><button class="secondary-action" data-view="shipping" type="button">${icon("VS")}Versand</button></div>
+      <div class="sales-overview-actions"><button class="secondary-action" data-view="agents" type="button">${icon("AG")}Agenten</button><button class="secondary-action" data-view="inventory" type="button">${icon("DB")}Alle Artikel</button><button class="secondary-action" data-view="archive" type="button">${icon("AR")}Archiv</button><button class="secondary-action" data-view="shipping" type="button">${icon("VS")}Versand</button></div>
     </div>
     <div class="sales-overview-stats">
       ${suggestion("Freigegeben", approved)}
@@ -2296,6 +2304,140 @@ function channelPlanRow(plan) {
     <div class="channel-action-tags">${actions}</div>
     <p>${escapeHtml(reasons)} Verkaufsregel: ${plan.saleLockPolicy.delistEverywhereExceptSoldChannel ? "bei Verkauf überall entfernen" : "manuell prüfen"}.</p>
   </article>`;
+}
+
+function agentsView() {
+  const control = state.agentControl || {};
+  if (!control.available) {
+    return `<section class="agent-control-view">
+      <div class="agent-hero">
+        <div><p>Autonomie-Zentrale</p><h2>Agenten sicher steuern</h2><span>Missionen planen, externe Aktionen freigeben und jede Ausführung nachvollziehen.</span></div>
+        <span class="agent-state waiting">Einrichtung offen</span>
+      </div>
+      <section class="agent-setup">
+        <div>${icon("DB")}<h3>Datenmodell aktivieren</h3><p>${escapeHtml(control.message || "Die Agent-Control-Migration muss noch in Supabase ausgeführt werden.")}</p></div>
+        <code>supabase/migrations/20260722100000_agent_control_layer.sql</code>
+      </section>
+    </section>`;
+  }
+
+  const runs = Array.isArray(control.runs) ? control.runs : [];
+  const approvals = (control.approvals || []).filter((entry) => entry.status === "pending");
+  const accounts = Array.isArray(control.channelAccounts) ? control.channelAccounts : [];
+  const activeRuns = runs.filter((run) => ["queued", "planning", "waiting_approval", "ready", "running"].includes(run.status));
+  const completedRuns = runs.filter((run) => run.status === "succeeded");
+  const connectedAccounts = accounts.filter((account) => account.status === "connected");
+  const missions = [
+    { type: "onboard_channel_account", icon: "EB", title: "eBay-Konto verbinden", text: "Anforderungen prüfen, Konto vorbereiten und OAuth nach deiner Freigabe verbinden.", channelId: "ebay" },
+    { type: "distribute_inventory", icon: "RT", title: "Bestand verteilen", text: "Verkaufsbereite Artikel nach Preis, Zielgruppe und Kanalpassung aufteilen." },
+    { type: "create_demand_campaign", icon: "MK", title: "Kampagne aufbauen", text: "Passende Artikel bündeln und Content für Shop, Social und Live-Verkauf vorbereiten." },
+    { type: "reconcile_sale", icon: "VK", title: "Verkäufe synchronisieren", text: "Bestellungen prüfen, Einzelstücke reservieren und parallele Angebote kontrolliert beenden." }
+  ];
+
+  return `<section class="agent-control-view">
+    <div class="agent-hero">
+      <div><p>Autonomie-Zentrale</p><h2>RAMROD arbeitet, du entscheidest</h2><span>Agenten recherchieren und bereiten vor. Veröffentlichungen, Konten und Rechte bleiben unter menschlicher Kontrolle.</span></div>
+      <div class="agent-provider-state"><span class="agent-state ${control.telegramConfigured ? "online" : "waiting"}">${control.telegramConfigured ? "Telegram bereit" : "Telegram offen"}</span><span class="agent-state ${control.agentApiConfigured ? "online" : "waiting"}">${control.agentApiConfigured ? "Hermes bereit" : "Hermes offen"}</span></div>
+    </div>
+
+    <div class="agent-stats" aria-label="Agentenstatus">
+      ${agentStat("Aktive Missionen", activeRuns.length)}
+      ${agentStat("Deine Freigaben", approvals.length, approvals.length ? "attention" : "")}
+      ${agentStat("Verbundene Konten", connectedAccounts.length)}
+      ${agentStat("Abgeschlossen", completedRuns.length)}
+    </div>
+
+    <section class="agent-section">
+      <div class="panel-heading"><div><p>Neue Mission</p><h2>Was soll RAMROD übernehmen?</h2></div></div>
+      <div class="agent-mission-grid">${missions.map((mission) => `<article class="agent-mission-card">
+        <span class="agent-mission-icon">${mission.icon}</span>
+        <div><h3>${escapeHtml(mission.title)}</h3><p>${escapeHtml(mission.text)}</p></div>
+        <button class="primary-action" data-start-agent="${mission.type}" ${mission.channelId ? `data-agent-channel="${mission.channelId}"` : ""} type="button" ${state.startingAgent ? "disabled" : ""}>${state.startingAgent === mission.type ? "Wird geplant..." : "Mission starten"}</button>
+      </article>`).join("")}</div>
+    </section>
+
+    <section class="agent-section approvals-section">
+      <div class="panel-heading"><div><p>Kontrollpunkt</p><h2>Freigaben</h2></div><span class="queue-count">${approvals.length}</span></div>
+      <div class="approval-list">${approvals.length ? approvals.map(agentApprovalCard).join("") : `<div class="agent-empty"><strong>Keine Entscheidung offen</strong><p>Agenten können lesen und vorbereiten. Sobald eine externe Aktion ansteht, erscheint sie hier.</p></div>`}</div>
+    </section>
+
+    <div class="agent-columns">
+      <section class="agent-section">
+        <div class="panel-heading"><div><p>Aktivität</p><h2>Letzte Missionen</h2></div></div>
+        <div class="agent-run-list">${runs.length ? runs.map(agentRunRow).join("") : `<div class="agent-empty"><strong>Noch keine Mission</strong><p>Starte oben den ersten kontrollierten Auftrag.</p></div>`}</div>
+      </section>
+      <section class="agent-section">
+        <div class="panel-heading"><div><p>Connectoren</p><h2>Verkaufskonten</h2></div></div>
+        <div class="agent-account-list">${accounts.length ? accounts.map(agentAccountRow).join("") : `<div class="agent-empty"><strong>Noch kein Konto verbunden</strong><p>Mit „eBay-Konto verbinden“ beginnt das geführte Onboarding.</p></div>`}</div>
+      </section>
+    </div>
+  </section>`;
+}
+
+function agentStat(label, value, tone = "") {
+  return `<div class="agent-stat ${tone}"><strong>${Number(value || 0)}</strong><span>${escapeHtml(label)}</span></div>`;
+}
+
+function agentApprovalCard(approval) {
+  const payload = approval.payload || {};
+  return `<article class="approval-card">
+    <div class="approval-copy"><span class="risk-badge ${escapeHtml(payload.riskLevel || "high")}">${escapeHtml(agentRiskLabel(payload.riskLevel))}</span><div><strong>${escapeHtml(approval.summary)}</strong><small>${escapeHtml(payload.channelId ? channelLabel(payload.channelId) : "Externe Aktion")} · gültig bis ${escapeHtml(formatAgentDate(approval.expires_at))}</small></div></div>
+    <div class="approval-actions"><button class="secondary-action reject" data-agent-decision="reject" data-approval-id="${approval.id}" type="button" ${state.decidingApproval ? "disabled" : ""}>Ablehnen</button><button class="primary-action" data-agent-decision="approve" data-approval-id="${approval.id}" type="button" ${state.decidingApproval ? "disabled" : ""}>${state.decidingApproval === approval.id ? "Wird gespeichert..." : "Freigeben"}</button></div>
+  </article>`;
+}
+
+function agentRunRow(run) {
+  const plan = run.plan || {};
+  const steps = Array.isArray(run.steps) ? run.steps : [];
+  return `<article class="agent-run-row">
+    <div class="agent-run-head"><span class="agent-state ${agentStatusTone(run.status)}">${escapeHtml(agentStatusLabel(run.status))}</span><time>${escapeHtml(formatAgentDate(run.created_at))}</time></div>
+    <strong>${escapeHtml(plan.label || agentTypeLabel(run.agent_type))}</strong>
+    <p>${escapeHtml(run.objective)}</p>
+    <div class="agent-step-tags">${steps.map((step) => `<span class="${agentStatusTone(step.status)}">${step.status === "succeeded" ? "✓ " : ""}${escapeHtml(step.title)}</span>`).join("")}</div>
+  </article>`;
+}
+
+function agentAccountRow(account) {
+  return `<article class="agent-account-row"><span>${String(account.channel_id || "CH").slice(0, 2).toUpperCase()}</span><div><strong>${escapeHtml(account.display_name)}</strong><small>${escapeHtml(channelLabel(account.channel_id))} · ${escapeHtml(account.auth_mode || "oauth")}</small></div><em class="agent-state ${agentStatusTone(account.status)}">${escapeHtml(agentAccountStatusLabel(account.status))}</em></article>`;
+}
+
+function agentTypeLabel(value) {
+  return {
+    onboard_channel_account: "Verkaufskonto einrichten",
+    publish_item: "Artikel veröffentlichen",
+    distribute_inventory: "Artikel verteilen",
+    create_demand_campaign: "Kampagne planen",
+    reconcile_sale: "Verkauf synchronisieren"
+  }[value] || "Agentenmission";
+}
+
+function agentStatusLabel(value) {
+  return {
+    queued: "Wartet", planning: "Plant", waiting_approval: "Freigabe nötig", ready: "Freigegeben",
+    running: "Läuft", succeeded: "Abgeschlossen", failed: "Fehlgeschlagen", cancelled: "Gestoppt",
+    planned: "Geplant", approved: "Freigegeben", skipped: "Übersprungen"
+  }[value] || String(value || "Offen");
+}
+
+function agentStatusTone(value) {
+  if (["connected", "ready", "approved", "succeeded", "online"].includes(value)) return "online";
+  if (["failed", "error", "rejected", "cancelled", "suspended"].includes(value)) return "failed";
+  return "waiting";
+}
+
+function agentAccountStatusLabel(value) {
+  return { planned: "Geplant", onboarding: "Einrichtung", connected: "Verbunden", action_required: "Aktion nötig", suspended: "Pausiert", disconnected: "Getrennt", error: "Fehler" }[value] || value || "Offen";
+}
+
+function agentRiskLabel(value) {
+  return { low: "Niedrig", medium: "Mittel", high: "Hoch", critical: "Kritisch" }[value] || "Hoch";
+}
+
+function formatAgentDate(value) {
+  if (!value) return "offen";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "offen";
+  return new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
 function adminView() {
@@ -2456,6 +2598,47 @@ function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => {
     state.view = button.dataset.view;
     render();
+  }));
+  document.querySelectorAll("[data-start-agent]").forEach((button) => button.addEventListener("click", async () => {
+    if (state.startingAgent) return;
+    const agentType = button.dataset.startAgent;
+    state.startingAgent = agentType;
+    state.importStatus = "RAMROD plant die Mission und prüft die Sicherheitsgrenzen...";
+    render();
+    try {
+      const result = await postJson("/api/agent-runs", {
+        agentType,
+        channelId: button.dataset.agentChannel || undefined
+      });
+      state.agentControl = result.snapshot || state.agentControl;
+      state.importStatus = result.approval
+        ? "Mission geplant. Vor der ersten externen Aktion ist deine Freigabe nötig."
+        : "Mission geplant und zur Ausführung bereit.";
+    } catch (error) {
+      state.importStatus = `Mission konnte nicht gestartet werden: ${error.message}`;
+    } finally {
+      state.startingAgent = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-agent-decision]").forEach((button) => button.addEventListener("click", async () => {
+    const approvalId = button.dataset.approvalId;
+    if (!approvalId || state.decidingApproval) return;
+    state.decidingApproval = approvalId;
+    state.importStatus = button.dataset.agentDecision === "approve" ? "Freigabe wird protokolliert..." : "Mission wird gestoppt...";
+    render();
+    try {
+      const result = await postJson(`/api/approvals/${approvalId}/${button.dataset.agentDecision}`, {});
+      state.agentControl = result.snapshot || state.agentControl;
+      state.importStatus = button.dataset.agentDecision === "approve"
+        ? "Aktion freigegeben. Der Agent darf bis zum nächsten Kontrollpunkt fortfahren."
+        : "Aktion abgelehnt. Die Mission wurde gestoppt.";
+    } catch (error) {
+      state.importStatus = `Entscheidung konnte nicht gespeichert werden: ${error.message}`;
+    } finally {
+      state.decidingApproval = "";
+      render();
+    }
   }));
   document.querySelectorAll("[data-box]").forEach((button) => button.addEventListener("click", () => {
     state.boxFilter = button.dataset.box || "";

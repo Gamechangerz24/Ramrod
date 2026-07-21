@@ -19,6 +19,14 @@ const updates = {
   SHOP_ORGANIZATION_SLUG: "creators"
 };
 
+const ensureKeys = [
+  "RAMROD_AGENT_TOKEN",
+  "RAMROD_TELEGRAM_BOT_TOKEN",
+  "RAMROD_TELEGRAM_WEBHOOK_SECRET",
+  "RAMROD_TELEGRAM_APPROVAL_CHAT_ID",
+  "RAMROD_TELEGRAM_ALLOWED_CHAT_IDS"
+];
+
 let text = readFileSync(envPath, "utf8");
 for (const [key, value] of Object.entries(updates)) {
   const line = `${key}=${value}`;
@@ -26,8 +34,13 @@ for (const [key, value] of Object.entries(updates)) {
   text = pattern.test(text) ? text.replace(pattern, line) : `${text.trimEnd()}\n${line}\n`;
 }
 
+for (const key of ensureKeys) {
+  const pattern = new RegExp(`^${key}=.*$`, "m");
+  if (!pattern.test(text)) text = `${text.trimEnd()}\n${key}=\n`;
+}
+
 const temporaryPath = `${envPath}.tmp`;
 writeFileSync(temporaryPath, text, { mode: 0o600 });
 chmodSync(temporaryPath, 0o600);
 renameSync(temporaryPath, envPath);
-console.log(JSON.stringify({ updatedKeys: Object.keys(updates) }));
+console.log(JSON.stringify({ updatedKeys: Object.keys(updates), ensuredKeys: ensureKeys }));

@@ -43,6 +43,8 @@ for (const token of [
   "Jetzt pflegen",
   "Versandstation",
   "Whatnot Skript",
+  "Autonomie-Zentrale",
+  "Agenten sicher steuern",
   "Anmelden"
 ]) {
   if (!js.includes(token)) {

@@ -3815,7 +3815,358 @@ img {
   }
 }
 
+.agent-control-view {
+  display: grid;
+  gap: 18px;
+  padding: 18px 22px 34px;
+}
+
+.agent-hero {
+  align-items: end;
+  background: var(--dark);
+  border-top: 3px solid var(--orange);
+  color: #fff;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  min-height: 158px;
+  padding: 24px 26px;
+}
+
+.agent-hero p,
+.agent-section .panel-heading p {
+  color: var(--orange);
+  font-size: 11px;
+  font-weight: 950;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.agent-hero h2 {
+  font-size: 34px;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.agent-hero > div > span {
+  color: #c7cbd1;
+  display: block;
+  line-height: 1.45;
+  margin-top: 9px;
+  max-width: 760px;
+}
+
+.agent-provider-state {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.agent-state {
+  border: 1px solid #d8dee6;
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.2;
+  padding: 6px 9px;
+}
+
+.agent-state.online,
+.agent-step-tags .online {
+  background: #eaf6ef;
+  border-color: #b8ddc8;
+  color: var(--green);
+}
+
+.agent-state.waiting,
+.agent-step-tags .waiting {
+  background: #fff5df;
+  border-color: #f1d59c;
+  color: #8b5b0a;
+}
+
+.agent-state.failed,
+.agent-step-tags .failed {
+  background: #ffefed;
+  border-color: #eac1bd;
+  color: var(--red);
+}
+
+.agent-stats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.agent-stat {
+  align-items: baseline;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  min-height: 72px;
+  padding: 14px 16px;
+}
+
+.agent-stat strong {
+  font-size: 28px;
+}
+
+.agent-stat span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.agent-stat.attention {
+  border-color: #f0ba83;
+  box-shadow: inset 3px 0 0 var(--orange);
+}
+
+.agent-section {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  min-width: 0;
+  padding: 18px;
+}
+
+.agent-mission-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.agent-mission-card {
+  align-content: start;
+  background: #f8f9fa;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+}
+
+.agent-mission-icon {
+  align-items: center;
+  background: var(--dark);
+  border-radius: 6px;
+  color: var(--orange);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 950;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.agent-mission-card h3 {
+  font-size: 18px;
+  line-height: 1.2;
+  margin: 0 0 7px;
+  overflow-wrap: anywhere;
+}
+
+.agent-mission-card p,
+.agent-empty p,
+.agent-run-row p,
+.agent-setup p {
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-mission-card .primary-action {
+  align-self: end;
+  justify-content: center;
+  min-height: 42px;
+  width: 100%;
+}
+
+.approval-list,
+.agent-run-list,
+.agent-account-list {
+  display: grid;
+  gap: 8px;
+}
+
+.approval-card {
+  align-items: center;
+  border: 1px solid #f0ba83;
+  box-shadow: inset 3px 0 0 var(--orange);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 13px 14px;
+}
+
+.approval-copy {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.approval-copy > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.approval-copy strong,
+.approval-copy small {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.approval-copy small {
+  color: var(--muted);
+}
+
+.risk-badge {
+  background: #fff1e7;
+  border-radius: 4px;
+  color: #9d3f00;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 950;
+  padding: 6px 8px;
+  text-transform: uppercase;
+}
+
+.risk-badge.critical {
+  background: #ffdfdc;
+  color: #8d1f18;
+}
+
+.approval-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.approval-actions button {
+  min-height: 40px;
+}
+
+.approval-actions .reject {
+  color: var(--red);
+}
+
+.agent-columns {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+}
+
+.agent-run-row {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 7px;
+  padding: 11px 2px 14px;
+}
+
+.agent-run-row:last-child {
+  border-bottom: 0;
+}
+
+.agent-run-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.agent-run-head time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-step-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.agent-step-tags span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 5px 7px;
+}
+
+.agent-account-row {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  padding: 11px 0;
+}
+
+.agent-account-row > span {
+  align-items: center;
+  background: var(--dark);
+  border-radius: 5px;
+  color: var(--orange);
+  display: flex;
+  font-size: 11px;
+  font-weight: 950;
+  height: 38px;
+  justify-content: center;
+}
+
+.agent-account-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agent-account-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.agent-empty {
+  padding: 18px 2px;
+}
+
+.agent-empty strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.agent-setup {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.agent-setup code {
+  background: #f0f2f4;
+  border: 1px solid var(--line);
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  white-space: normal;
+}
+
 @media (max-width: 1180px) {
+  .agent-mission-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-columns {
+    grid-template-columns: 1fr;
+  }
   .app-shell {
     grid-template-columns: 56px 164px minmax(0, 1fr);
   }
@@ -4591,6 +4942,89 @@ img {
 
   .release-fields-form .secondary-action {
     grid-column: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .agent-control-view {
+    gap: 12px;
+    padding: 12px 10px 110px;
+  }
+
+  .agent-hero {
+    align-items: start;
+    display: grid;
+    min-height: 0;
+    padding: 18px;
+  }
+
+  .agent-hero h2 {
+    font-size: 27px;
+  }
+
+  .agent-provider-state {
+    align-items: start;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .agent-stats,
+  .agent-mission-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-stat {
+    align-items: start;
+    display: grid;
+    gap: 2px;
+    min-height: 74px;
+    padding: 11px;
+  }
+
+  .agent-stat strong {
+    font-size: 24px;
+  }
+
+  .agent-section {
+    padding: 13px;
+  }
+
+  .agent-mission-card {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .agent-mission-card h3 {
+    font-size: 16px;
+  }
+
+  .agent-mission-card p {
+    font-size: 12px;
+  }
+
+  .agent-mission-card .primary-action {
+    font-size: 12px;
+    padding: 8px;
+  }
+
+  .approval-card,
+  .approval-copy {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .approval-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .approval-actions button {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .agent-account-row {
+    align-items: start;
   }
 }
 
