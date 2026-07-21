@@ -26,4 +26,6 @@ services:
       RAMROD_CONTROL_PLANE_URL: http://ramrod:3001
       RAMROD_AGENT_WORKER_KEY: vps-safe-runner
       RAMROD_AGENT_WORKER_NAME: RAMROD VPS Safe Runner
+    healthcheck:
+      disable: true
     restart: unless-stopped
