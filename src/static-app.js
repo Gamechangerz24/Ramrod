@@ -249,6 +249,7 @@ function createEmptyDraft(boxId = "SV-001") {
     barcode: "",
     photo: "",
     photos: [],
+    photoSetComplete: false,
     weight: "0.25"
   };
 }
@@ -1183,17 +1184,19 @@ function scanView() {
   const currentBatchNumber = state.batchDrafts.length + 1;
   const capturedCount = state.batchDrafts.length + (photos.length ? 1 : 0);
   const activeStep = state.analyzing ? 4 : state.recognition ? 3 : state.recognizing ? 2 : 1;
+  const recognitionStatus = state.recognition?.evidence?.status || "";
+  const recognitionCanProceed = recognitionStatus === "ready_for_research" || recognitionStatus === "manual_review_ready";
   const actionLabel = state.analyzing
     ? "Analyse läuft..."
     : state.recognizing
       ? "Produkt wird erkannt..."
-      : state.recognition?.evidence?.status === "ready_for_research"
+      : recognitionCanProceed
         ? "Preis, Kanal und Strategie ermitteln"
         : state.recognition
-          ? "Analyse mit Prüfung fortsetzen"
+          ? "Fotosatz zuerst abschließen"
           : "Artikel analysieren";
-  const actionDisabled = state.analyzing || state.recognizing || (!photos.length && !devMode);
-  const needsPhotoEvidence = Boolean(state.recognition && state.recognition.evidence?.status !== "ready_for_research");
+  const actionDisabled = state.analyzing || state.recognizing || (!photos.length && !devMode) || Boolean(state.recognition && !recognitionCanProceed);
+  const needsPhotoEvidence = Boolean(state.recognition && !recognitionCanProceed);
   const manualFields = `<details class="capture-details">
     <summary>Optionale Angaben</summary>
     <div class="form-grid">
@@ -1381,6 +1384,7 @@ function fastRecognitionPanel(photos) {
   const visibleText = recognition.visibleText || [];
   const statusLabel = {
     ready_for_research: "Bereit für Quellenabgleich",
+    manual_review_ready: "Weiter mit manueller Prüfung",
     needs_more_evidence: "Zusatzbeleg erforderlich",
     needs_better_photo: "Besseres Foto erforderlich"
   }[evidence.status] || "Prüfung erforderlich";
@@ -1403,27 +1407,37 @@ function fastRecognitionPanel(photos) {
     </div>
     ${visibleText.length ? `<section class="recognition-evidence"><strong>Sichtbar gelesen</strong><div>${visibleText.slice(0, 8).map((entry) => `<span>${escapeHtml(entry)}</span>`).join("")}</div></section>` : ""}
     ${missing.length ? `<section class="recognition-missing"><strong>Noch nicht belegt</strong><p>${missing.slice(0, 5).map(escapeHtml).join(" · ")}</p></section>` : ""}
-    ${requests.length ? `<section class="requested-photos"><strong>Nächstes hilfreiches Foto</strong>${requests.slice(0, 3).map((entry) => `<div>${icon("KA")}<span>${escapeHtml(entry.instruction)}</span></div>`).join("")}</section>` : ""}
+    ${requests.length && evidence.status !== "manual_review_ready" ? `<section class="requested-photos"><strong>Nächstes hilfreiches Foto</strong>${requests.slice(0, 3).map((entry) => `<div>${icon("KA")}<span>${escapeHtml(entry.instruction)}</span></div>`).join("")}</section>` : ""}
     ${scanReleaseGuide(recognition)}`;
 }
 
 function scanReleaseGuide(recognition) {
   const evidence = recognition.evidence || {};
   const identityReady = evidence.status === "ready_for_research";
+  const manualReviewReady = evidence.status === "manual_review_ready";
+  const canProceed = identityReady || manualReviewReady;
   const missing = Array.isArray(recognition.missingEvidence) ? recognition.missingEvidence.filter(Boolean) : [];
   const request = recognition.requestedPhotos?.[0]?.instruction || "Zusätzliche Kennzeichnung oder Rückseite fotografieren";
-  return `<section class="scan-release-guide ${identityReady ? "ready" : "blocked"}">
+  const photoCount = state.draft.photos?.length || 0;
+  const photoLimit = state.captureMode === "batch" ? 6 : 4;
+  return `<section class="scan-release-guide ${identityReady ? "ready" : manualReviewReady ? "manual" : "blocked"}">
     <div class="release-guide-head">
-      <div><small>Nächster Schritt</small><strong>${identityReady ? "Markt und Verkaufsstrategie berechnen" : "Identität vervollständigen"}</strong></div>
-      <span>${identityReady ? "1/3 bereit" : "Foto fehlt"}</span>
+      <div><small>Nächster Schritt</small><strong>${identityReady ? "Markt und Verkaufsstrategie berechnen" : manualReviewReady ? "Marktrecherche starten, Details später prüfen" : "Identität vervollständigen"}</strong></div>
+      <span>${identityReady ? "1/3 bereit" : manualReviewReady ? "Manuelle Prüfung" : "Foto prüfen"}</span>
     </div>
     <div class="release-guide-list">
       ${releaseGuideRow(true, "Produkt erkannt", recognition.identity?.title || "Produktkandidat erkannt")}
-      ${releaseGuideRow(identityReady, identityReady ? "Bildbelege ausreichend" : "Zusatzbeleg fehlt", identityReady ? "RAMROD kann mit der Marktrecherche fortfahren." : (missing.join(" · ") || request))}
-      ${releaseGuideRow(false, "Preisquellen abgleichen", identityReady ? "Startet automatisch mit dem nächsten Button." : "Startet nach ausreichender Produkterkennung.", true)}
+      ${releaseGuideRow(canProceed, identityReady ? "Bildbelege ausreichend" : manualReviewReady ? "Fotosatz abgeschlossen" : "Zusatzbeleg fehlt", identityReady ? "RAMROD kann mit der Marktrecherche fortfahren." : manualReviewReady ? "Nicht lesbare Merkmale werden vor der Verkaufsfreigabe einmal manuell bestätigt." : (missing.join(" · ") || request))}
+      ${releaseGuideRow(false, "Preisquellen abgleichen", canProceed ? "Startet automatisch mit dem nächsten Button." : "Startet nach Foto oder bewusstem Abschluss des Fotosatzes.", true)}
       ${releaseGuideRow(false, "Pflichtangaben prüfen", "Werden nach der Analyse einzeln angezeigt und können dort direkt ergänzt werden.", true)}
     </div>
-    <button class="${identityReady ? "primary-action" : "secondary-action"} release-guide-action" ${identityReady ? "data-run-next-step" : "data-capture-more"} type="button">${icon(identityReady ? "AI" : "KA")}${identityReady ? "Preis, Kanal und Strategie ermitteln" : "Fehlendes Foto aufnehmen"}</button>
+    ${canProceed
+      ? `<button class="primary-action release-guide-action" data-run-next-step type="button">${icon("AI")}Preis, Kanal und Strategie ermitteln</button>`
+      : `<div class="release-guide-actions">
+          ${photoCount < photoLimit ? `<button class="secondary-action release-guide-action" data-capture-more type="button">${icon("KA")}Hilfreiches Foto aufnehmen</button>` : ""}
+          <button class="secondary-action quiet-action release-guide-action" data-complete-photo-set type="button">${icon("OK")}Alle sinnvollen Fotos vorhanden</button>
+        </div>
+        <p class="manual-review-note">Du bleibst nicht hängen: Danach geht es zur Preisrecherche. Unsichere Merkmale müssen vor der Veröffentlichung bestätigt werden.</p>`}
   </section>`;
 }
 
@@ -2466,6 +2480,20 @@ function bindEvents() {
   document.querySelectorAll("[data-capture-more]").forEach((button) => button.addEventListener("click", () => {
     document.querySelector("#photo")?.click();
   }));
+  document.querySelectorAll("[data-complete-photo-set]").forEach((button) => button.addEventListener("click", () => {
+    if (!state.recognition) return;
+    state.draft.photoSetComplete = true;
+    state.recognition.evidence = {
+      ...(state.recognition.evidence || {}),
+      originalStatus: state.recognition.evidence?.originalStatus || state.recognition.evidence?.status || "needs_more_evidence",
+      status: "manual_review_ready",
+      operatorPhotoComplete: true,
+      releaseGate: "blocked_until_manual_confirmation",
+      autoApprovalEligible: false
+    };
+    state.importStatus = "Fotosatz abgeschlossen. RAMROD recherchiert jetzt Preis und Kanal; offene Merkmale bestätigst du vor der Freigabe.";
+    render();
+  }));
   document.querySelectorAll("[data-run-next-step]").forEach((button) => button.addEventListener("click", () => {
     document.querySelector("#add-item")?.click();
   }));
@@ -2578,6 +2606,7 @@ function bindEvents() {
       }
       state.draft.photos = [...(state.draft.photos || []), ...preparedPhotos].slice(0, photoLimit);
       state.draft.photo = state.draft.photos[0]?.dataUrl || "";
+      state.draft.photoSetComplete = false;
       state.recognition = null;
       state.recognitionMeta = null;
       const weakest = Math.min(...state.draft.photos.map((entry) => entry.quality?.score ?? 100));
@@ -2594,6 +2623,7 @@ function bindEvents() {
     state.recognitionRequestId += 1;
     state.draft.photos = (state.draft.photos || []).filter((_, photoIndex) => photoIndex !== index);
     state.draft.photo = state.draft.photos[0]?.dataUrl || "";
+    state.draft.photoSetComplete = false;
     state.recognition = null;
     state.recognitionMeta = null;
     state.importStatus = state.draft.photos.length ? "Foto entfernt. Identität wird neu geprüft." : "Alle Fotos entfernt.";

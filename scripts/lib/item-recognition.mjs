@@ -76,6 +76,7 @@ export function scoreItemRecognition(input, context = {}) {
   const clientQualityScores = (context.clientImageQualities || [])
     .map((entry) => Number(entry?.score))
     .filter(Number.isFinite);
+  const modelConfidence = clampInteger(recognition.modelConfidence, 0, 100, 0);
   const evidenceText = [
     ...visibleText,
     ...identifiers.map((entry) => entry.value),
@@ -89,10 +90,13 @@ export function scoreItemRecognition(input, context = {}) {
 
   let qualityScore = recognition.image?.usable === false ? 20 : 100;
   qualityScore -= Math.min(60, actionableImageIssues.length * 15);
-  if (clientQualityScores.length) qualityScore = Math.min(qualityScore, Math.min(...clientQualityScores));
+  // A weak detail shot must not invalidate an otherwise usable multi-angle set.
+  // The model still has the final say through image.usable and image.issues.
+  if (clientQualityScores.length) qualityScore = Math.min(qualityScore, Math.max(...clientQualityScores));
   qualityScore = clampInteger(qualityScore, 0, 100, 0);
 
   let identityScore = 5;
+  if (identity.title && identity.productType) identityScore += Math.round(modelConfidence * 0.5);
   identityScore += Math.round(titleCoverage * 35);
   identityScore += Math.min(30, identifiers.length * 15 + (barcode ? 15 : 0));
   identityScore += Math.min(20, supportedFields.length * 4);
@@ -104,7 +108,7 @@ export function scoreItemRecognition(input, context = {}) {
   const score = clampInteger(Math.round(identityScore * (qualityScore / 100)), 0, 90, 0);
   const status = qualityScore < 55
     ? "needs_better_photo"
-    : score < 65 || criticalMissing.length
+    : score < 55 || criticalMissing.length
       ? "needs_more_evidence"
       : "ready_for_research";
   const requestedPhotos = mergeRequestedPhotos(
@@ -138,8 +142,10 @@ export function scoreItemRecognition(input, context = {}) {
 function requiredIdentityFields(identity) {
   const text = `${identity.category || ""} ${identity.productType || ""}`.toLowerCase();
   const fields = ["title", "productType"];
+  const isControllerOrAccessory = /joy.?con|controller|gamepad|zubehoer|zubehör|accessor|peripher/.test(text);
   if (/game|spiel|software|videospiel/.test(text)) fields.push("platform");
-  if (/konsole|console|elektronik|electronic|geraet|gerät|appliance/.test(text)) fields.push("brand", "modelNumber");
+  if (isControllerOrAccessory) fields.push("brand", "platform");
+  if (!isControllerOrAccessory && /konsole|console|elektronik|electronic|geraet|gerät|appliance/.test(text)) fields.push("brand", "modelNumber");
   if (/figur|figure|collectible|toy|spielzeug/.test(text)) fields.push("brand");
   if (/karte|card|tcg/.test(text)) fields.push("edition", "region");
   return [...new Set(fields)];

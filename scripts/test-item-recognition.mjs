@@ -78,4 +78,32 @@ assert.ok(figureWithoutMaker.evidence.criticalMissing.includes("brand"));
 assert.ok(figureWithoutMaker.requestedPhotos.some((photo) => photo.type === "label"));
 assert.ok(figureWithoutMaker.requestedPhotos.some((photo) => photo.type === "contents"));
 
+const joyConPhotoSet = scoreItemRecognition({
+  image: { rotation: 0, usable: true, issues: [] },
+  identity: {
+    title: "Nintendo Switch Joy-Con Paar Neon-Rot und Neon-Blau",
+    productType: "Joy-Con Controller Zubehör",
+    category: "Gaming-Zubehör",
+    brand: "Nintendo",
+    franchise: "",
+    platform: "Nintendo Switch",
+    edition: "",
+    region: "",
+    modelNumber: ""
+  },
+  visibleText: [],
+  identifiers: [],
+  alternatives: [],
+  missingEvidence: [],
+  requestedPhotos: [],
+  modelConfidence: 92
+}, {
+  imageCount: 4,
+  clientImageQualities: [{ score: 91 }, { score: 88 }, { score: 34 }, { score: 86 }]
+});
+
+assert.equal(joyConPhotoSet.evidence.status, "ready_for_research");
+assert.ok(!joyConPhotoSet.evidence.criticalMissing.includes("modelNumber"));
+assert.equal(joyConPhotoSet.evidence.qualityScore, 91);
+
 console.log("Item recognition evidence tests passed.");

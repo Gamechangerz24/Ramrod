@@ -1152,6 +1152,11 @@ img {
   border-color: #9fcbb0;
 }
 
+.scan-release-guide.manual {
+  background: #fffaf1;
+  border-color: #e6bd73;
+}
+
 .release-guide-head,
 .release-checklist-head {
   align-items: center;
@@ -1246,6 +1251,22 @@ img {
   justify-content: center;
   margin: 0;
   width: 100%;
+}
+
+.release-guide-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.quiet-action {
+  background: transparent;
+}
+
+.manual-review-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: -3px 0 0;
 }
 
 .release-checklist {
