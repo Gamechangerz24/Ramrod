@@ -134,7 +134,7 @@ The VPS remains the always-on control plane. The Mac mini may run Hermes, local 
 
 ### Mac Mini Hermes Scheduler
 
-The RAMROD Hermes profile runs independently from the existing CREATORS profile. The launch agent in `deploy/live.ramrod.hermes-cron.plist` invokes one scheduler tick every minute; the configured job claims at most one RAMROD step per run. Long browser research uses a bounded lease plus `ramrod_heartbeat_step` to prevent duplicate execution.
+The RAMROD Hermes profile runs independently from the existing CREATORS profile. The launch agent in `deploy/live.ramrod.hermes-cron.plist` invokes one scheduler tick every minute; the configured job claims at most one RAMROD step per run. Long browser research uses a bounded lease plus `ramrod_heartbeat_step` to prevent duplicate execution. `HERMES_MAX_ITERATIONS=15` provides a hard per-run tool-loop budget in addition to the prompt policy.
 
 Install it for the signed-in `link` user:
 

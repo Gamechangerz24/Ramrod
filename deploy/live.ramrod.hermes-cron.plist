@@ -18,6 +18,8 @@
   <dict>
     <key>HOME</key>
     <string>/Users/link</string>
+    <key>HERMES_MAX_ITERATIONS</key>
+    <string>15</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
