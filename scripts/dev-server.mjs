@@ -885,7 +885,7 @@ async function handleSaveItem(request, response) {
     }
 
     let automationJob = null;
-    if (saved && !item.priceCheck && automaticPriceCheckSources.has(item.sourceType)) {
+    if (saved && !item.priceCheck && !item.archivedAt && item.stage !== "Archiviert" && automaticPriceCheckSources.has(item.sourceType)) {
       const queued = await createWorkerJob({
         customerId: customer.id,
         itemId: saved.id,

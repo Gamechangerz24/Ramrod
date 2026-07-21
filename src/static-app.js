@@ -769,7 +769,17 @@ function suggestion(label, value) {
 }
 
 function visibleItems(items = state.items) {
-  return state.boxFilter ? items.filter((item) => item.boxId === state.boxFilter) : items;
+  const active = items.filter((item) => !isArchived(item));
+  return state.boxFilter ? active.filter((item) => item.boxId === state.boxFilter) : active;
+}
+
+function archivedItems(items = state.items) {
+  const archived = items.filter(isArchived);
+  return state.boxFilter ? archived.filter((item) => item.boxId === state.boxFilter) : archived;
+}
+
+function isArchived(item) {
+  return Boolean(item.archivedAt) || ["archiv", "archiviert", "archived"].includes(String(item.stage || "").toLowerCase());
 }
 
 function getWorkQueues(items = visibleItems()) {
@@ -939,6 +949,7 @@ function render() {
         ${navButton("sell", "VK", "Verkaufen")}
         ${navButton("shipping", "VS", "Versand")}
         ${navButton("inventory", "DB", "Bestand")}
+        ${navButton("archive", "AR", "Archiv")}
       </nav>
       <nav class="mobile-nav-list" aria-label="Mobiler Arbeitsablauf">
         ${mobileNavButton("scan", "KA", "Scannen")}
@@ -1095,6 +1106,7 @@ function pageTitle() {
     sell: "Verkäufe",
     shipping: "Versand",
     inventory: "Bestand",
+    archive: "Archiv",
     admin: "Plattform-Admin"
   }[state.view] || "RAMROD";
 }
@@ -1104,7 +1116,7 @@ function navButton(id, iconLabel, label) {
 }
 
 function mobileNavButton(id, iconLabel, label) {
-  const groupedViews = id === "sell" ? ["sell", "inventory", "shipping", "campaigns", "routing"] : [id];
+  const groupedViews = id === "sell" ? ["sell", "inventory", "archive", "shipping", "campaigns", "routing"] : [id];
   return `<button class="nav-button ${groupedViews.includes(state.view) ? "active" : ""}" data-view="${id}" type="button" title="${label}">${icon(iconLabel)}<span>${label}</span></button>`;
 }
 
@@ -1134,6 +1146,7 @@ function viewMarkup(selected) {
   if (state.view === "routing") return routingView();
   if (state.view === "campaigns") return campaignsView();
   if (state.view === "shipping") return shippingView();
+  if (state.view === "archive") return archiveView();
   if (state.view === "admin") return adminView();
   return inventoryView(selected);
 }
@@ -1495,6 +1508,7 @@ function mobileReviewAccordion(items) {
               ${suggestion("Zustand", escapeHtml(item.condition || "Bitte prüfen"))}
               ${suggestion("Lieferumfang", escapeHtml(item.completeness || "Bitte prüfen"))}
             </div>
+            ${itemLifecycleActions(item)}
             ${salesStrategyCard(item)}
           </div>` : ""}
         </article>`;
@@ -1533,9 +1547,33 @@ function inventoryView(selected) {
   const active = filtered.find((item) => item.id === selected?.id) || filtered[0];
   if (active && active.id !== state.selected) state.selected = active.id;
   return `<section class="inventory-layout">
-    <div class="inventory-list"><div class="panel-heading"><div><p>Bestand</p><h2>Artikelkarten</h2></div><button class="icon-button" data-view="scan" title="Artikel hinzufügen">${icon("PL")}</button></div>${filtered.map(itemRow).join("")}</div>
+    <div class="inventory-list"><div class="panel-heading"><div><p>Bestand</p><h2>Artikelkarten</h2></div><div class="panel-actions"><button class="icon-button" data-view="archive" title="Archiv öffnen">${icon("AR")}</button><button class="icon-button" data-view="scan" title="Artikel hinzufügen">${icon("PL")}</button></div></div>${filtered.map(itemRow).join("")}</div>
     ${active ? inspector(active) : `<section class="empty-state compact-empty"><h2>Kein Treffer</h2><p>Ändere Suche oder Lagerfilter, um wieder Artikel zu sehen.</p></section>`}
   </section>`;
+}
+
+function archiveView() {
+  const needle = state.search.toLowerCase();
+  const items = archivedItems().filter((item) => [item.title, item.sku, item.category, item.boxId, item.archiveReason].join(" ").toLowerCase().includes(needle));
+  return `<section class="archive-view">
+    <div class="panel-heading"><div><p>Artikelverwaltung</p><h2>Archivierte Artikel</h2></div><span class="queue-count">${items.length}</span></div>
+    <p class="archive-intro">Archivierte Artikel sind aus Freigabe, Verkauf, Bestand und Versand entfernt. Alle Daten bleiben erhalten und können wiederhergestellt werden.</p>
+    ${items.length ? `<div class="archive-list">${items.map(archivedItemRow).join("")}</div>` : `<div class="empty-state compact-empty"><h2>Archiv ist leer</h2><p>Artikel, die du nicht mehr verkaufen möchtest, erscheinen später hier.</p><button class="secondary-action inline-action" data-view="inventory" type="button">${icon("DB")}Zum Bestand</button></div>`}
+  </section>`;
+}
+
+function archivedItemRow(item) {
+  return `<article class="archive-row">
+    <img src="${item.image}" alt="" />
+    <div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.sku)} · ${escapeHtml(item.boxId || "Ohne Kiste")}</span><small>${escapeHtml(item.archiveReason || "Nicht mehr für den Verkauf vorgesehen")} · ${formatArchiveDate(item.archivedAt)}</small></div>
+    <button class="secondary-action" data-restore-item="${item.id}" type="button">${icon("RS")}Wiederherstellen</button>
+  </article>`;
+}
+
+function formatArchiveDate(value) {
+  const date = new Date(value || 0);
+  if (!Number.isFinite(date.getTime()) || !value) return "Zeitpunkt unbekannt";
+  return `Archiviert am ${new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short" }).format(date)}`;
 }
 
 function itemRow(item) {
@@ -1575,8 +1613,16 @@ function inspector(item) {
         <section class="script-box"><h3>Whatnot Skript</h3><p>${script}</p></section>
         ${otherVisible}
       </div>
+      ${itemLifecycleActions(item)}
     </div>
   </div>`;
+}
+
+function itemLifecycleActions(item) {
+  return `<section class="item-lifecycle-actions">
+    <div><small>Artikelverwaltung</small><strong>Nicht mehr verkaufen?</strong><p>Der Artikel verschwindet aus allen Arbeitslisten, bleibt aber vollständig im Archiv erhalten.</p></div>
+    <button class="secondary-action" data-archive-item="${item.id}" type="button">${icon("AR")}Archivieren</button>
+  </section>`;
 }
 
 function salesStrategyCard(item) {
@@ -2095,7 +2141,7 @@ function salesOverview() {
   return `<section class="sales-overview">
     <div class="sales-overview-head">
       <div><p>Deine Artikel</p><h2>Verkaufsstatus verfolgen</h2><span>Nach der Freigabe siehst du hier immer, was als Nächstes passiert.</span></div>
-      <div class="sales-overview-actions"><button class="secondary-action" data-view="inventory" type="button">${icon("DB")}Alle Artikel</button><button class="secondary-action" data-view="shipping" type="button">${icon("VS")}Versand</button></div>
+      <div class="sales-overview-actions"><button class="secondary-action" data-view="inventory" type="button">${icon("DB")}Alle Artikel</button><button class="secondary-action" data-view="archive" type="button">${icon("AR")}Archiv</button><button class="secondary-action" data-view="shipping" type="button">${icon("VS")}Versand</button></div>
     </div>
     <div class="sales-overview-stats">
       ${suggestion("Freigegeben", approved)}
@@ -2425,6 +2471,32 @@ function bindEvents() {
     const itemId = button.dataset.toggleReviewItem;
     state.mobileReviewItem = state.mobileReviewItem === itemId ? "" : itemId;
     state.selected = itemId;
+    render();
+  }));
+  document.querySelectorAll("[data-archive-item]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.archiveItem);
+    if (!item || isArchived(item)) return;
+    item.archivedFromStage = item.stage || "Gescannt";
+    item.archivedAt = new Date().toISOString();
+    item.archiveReason = "Nicht mehr für den Verkauf vorgesehen";
+    item.stage = "Archiviert";
+    state.mobileReviewItem = "";
+    state.mobileDetailsItem = "";
+    state.selected = visibleItems().find((entry) => entry.id !== item.id)?.id || "";
+    await persistItem(item, "Archivstatus");
+    state.importStatus = `${item.sku} wurde archiviert und aus allen Verkaufslisten entfernt.`;
+    render();
+  }));
+  document.querySelectorAll("[data-restore-item]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.restoreItem);
+    if (!item || !isArchived(item)) return;
+    item.stage = item.archivedFromStage || (item.approval?.status === "approved" ? "Verkaufsbereit" : "Freigabe");
+    item.restoredAt = new Date().toISOString();
+    item.archivedAt = "";
+    item.archiveReason = "";
+    state.selected = item.id;
+    await persistItem(item, "Archivstatus");
+    state.importStatus = `${item.sku} wurde wiederhergestellt.`;
     render();
   }));
   document.querySelector("[data-dismiss-batch-summary]")?.addEventListener("click", () => {

@@ -3344,6 +3344,93 @@ img {
   display: none;
 }
 
+.item-lifecycle-actions {
+  align-items: center;
+  background: #f7f9fb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.item-lifecycle-actions > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.item-lifecycle-actions small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.item-lifecycle-actions p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.archive-view {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.archive-intro {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: -6px 0 16px;
+}
+
+.archive-list {
+  display: grid;
+  gap: 8px;
+}
+
+.archive-row {
+  align-items: center;
+  background: #fbfcfd;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  padding: 10px;
+}
+
+.archive-row > img {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  height: 64px;
+  object-fit: cover;
+  width: 64px;
+}
+
+.archive-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.archive-row strong,
+.archive-row span,
+.archive-row small {
+  overflow-wrap: anywhere;
+}
+
+.archive-row span,
+.archive-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .item-secondary-details {
   display: grid;
   gap: 14px;
@@ -4119,6 +4206,37 @@ img {
     display: grid;
     gap: 7px;
     grid-template-columns: 1fr;
+  }
+
+  .item-lifecycle-actions {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .item-lifecycle-actions .secondary-action {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .archive-view {
+    padding: 12px;
+  }
+
+  .archive-row {
+    align-items: start;
+    grid-template-columns: 58px minmax(0, 1fr);
+    padding: 9px;
+  }
+
+  .archive-row > img {
+    height: 58px;
+    width: 58px;
+  }
+
+  .archive-row .secondary-action {
+    grid-column: 1 / -1;
+    justify-content: center;
+    width: 100%;
   }
 
   .status-strip {
