@@ -225,3 +225,5 @@ create policy "tenant manage connector events" on public.connector_events for al
 
 comment on column public.organization_channel_accounts.secret_ref is
   'Reference to an external secret vault only. Never store credentials, tokens, cookies or passwords here.';
+
+notify pgrst, 'reload schema';

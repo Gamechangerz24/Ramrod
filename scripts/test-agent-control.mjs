@@ -18,6 +18,7 @@ for (const agentType of agentTypeIds) {
   assert.ok(plan.steps.length >= 4);
   assert.ok(["low", "medium", "high", "critical"].includes(plan.riskLevel));
   assert.ok(firstApprovalStep(plan), `${agentType} must stop at a human approval`);
+  assert.equal(plan.steps.filter((step) => step.status === "waiting_approval").length, 1);
 }
 
 const accountPlan = buildAgentPlan({
