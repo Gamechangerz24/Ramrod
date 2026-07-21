@@ -21,7 +21,18 @@ The first playbooks cover:
 - creating a demand campaign
 - reconciling a sale and removing parallel listings
 
-An approved mission is marked `ready`. The browser/API executor that performs the approved step is the next delivery phase. It must write evidence and external IDs back into `publication_runs`, `listings`, and `connector_events`.
+Missions begin with their safe preparation steps. A human approval is created only when the preceding research and draft work is complete. The approved external step can then be leased by a capability-compatible runner.
+
+## Durable Step Executor
+
+The migration `20260722143000_agent_step_executor.sql` adds atomic step claiming, leases, heartbeats, retries, attempt limits, and stale-runner recovery.
+
+- The VPS safe runner executes only allowlisted `ramrod` and `agent` preparation steps.
+- A runner can never skip an unfinished predecessor.
+- Approval-required steps can only be claimed with status `approved`.
+- Each leased step belongs to exactly one registered worker until completion or lease expiry.
+- Results, failures, attempts, and the responsible runner remain visible in Agent Control.
+- Connector and browser actions require a separate executor with an explicit capability allowlist.
 
 ## Security Boundary
 
@@ -61,11 +72,14 @@ Telegram sends the webhook secret in `X-Telegram-Bot-Api-Secret-Token`. RAMROD a
 
 ## Hermes MCP Adapter
 
-The stdio adapter exposes only:
+The stdio adapter exposes:
 
 - `ramrod_get_agent_control`
 - `ramrod_create_mission`
 - `ramrod_request_approval`
+- `ramrod_claim_step`
+- `ramrod_complete_step`
+- `ramrod_fail_step`
 
 Example Hermes MCP configuration:
 
@@ -82,9 +96,14 @@ mcp_servers:
       RAMROD_CONTROL_PLANE_URL: https://admin.ramrod.live
       RAMROD_AGENT_TOKEN: <agent-service-token>
       RAMROD_ORGANIZATION_ID: <organization-uuid>
+      RAMROD_AGENT_WORKER_KEY: macmini-hermes
+      RAMROD_AGENT_WORKER_NAME: Mac Mini Hermes Runner
+      RAMROD_AGENT_EXECUTION_MODES: browser,api,connector
+      RAMROD_AGENT_ACTION_TYPES: read,research,prepare
+      RAMROD_AGENT_STEP_KEYS: inspect_requirements,prepare_account_data,verify_connector,prepare_listing,verify_listing,prepare_channel_drafts,monitor_distribution,measure_campaign,verify_order
 ```
 
-There is intentionally no MCP tool for approval, direct publication, credential export, or arbitrary browser execution.
+There is intentionally no MCP tool for approval, direct publication, credential export, or arbitrary browser execution. External writes remain excluded from the default Hermes allowlist. They can only be added deliberately after the matching connector is tested and the database approval gate remains authoritative.
 
 ## Runtime Shape
 
@@ -104,11 +123,16 @@ API connector or isolated browser worker
 
 The VPS remains the always-on control plane. The Mac mini may run Hermes, local vision, research, and isolated browser workers, but no unique business state lives there.
 
+## Current Delivery State
+
+1. Agent Control and the step executor migrations are active.
+2. The always-on VPS safe runner prepares inventory selection, channel plans, clusters, content drafts, and item validation.
+3. The Agenten view shows runners, leases, attempts, progress, and approvals.
+
 ## Next Delivery Phase
 
-1. Apply the migration and verify the Agenten view.
-2. Configure Telegram and the Hermes MCP adapter.
-3. Build an eBay executor that consumes only approved `ready` runs.
-4. Store every external attempt and verify the returned listing URL and ID.
-5. Add order webhooks, atomic inventory reservation, and cross-channel delisting.
-6. Add content and browser adapters one channel at a time, each with a capability allowlist and kill switch.
+1. Configure Telegram and the Hermes MCP adapter on the Mac Mini.
+2. Build an eBay draft executor that consumes only the allowlisted connector step.
+3. Store every external attempt and verify the returned listing URL and ID.
+4. Add order webhooks, atomic inventory reservation, and cross-channel delisting.
+5. Add content and browser adapters one channel at a time, each with a capability allowlist and kill switch.

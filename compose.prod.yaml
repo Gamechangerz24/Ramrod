@@ -12,3 +12,18 @@ services:
     ports:
       - "127.0.0.1:3001:3001"
     restart: unless-stopped
+  agent-runner:
+    build:
+      context: .
+    command: ["npm", "run", "agent:runner"]
+    depends_on:
+      ramrod:
+        condition: service_healthy
+    env_file:
+      - ./deploy/.env.production
+    environment:
+      NODE_ENV: production
+      RAMROD_CONTROL_PLANE_URL: http://ramrod:3001
+      RAMROD_AGENT_WORKER_KEY: vps-safe-runner
+      RAMROD_AGENT_WORKER_NAME: RAMROD VPS Safe Runner
+    restart: unless-stopped

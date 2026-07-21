@@ -19,7 +19,6 @@ import {
   buildAgentPlan,
   buildApprovalSummary,
   buildTelegramApprovalMessage,
-  firstApprovalStep,
   isUuid,
   parseTelegramApprovalCallback,
   publicAgentPlaybooks,
@@ -80,6 +79,7 @@ const workerJobTypes = new Set(["health_check", "price_check", "ebay_draft", "re
 const automaticPriceCheckSources = new Set(["live_openai", "batch_openai", "local_qwen"]);
 let ebayAppTokenCache = null;
 let multiTenantSchemaAvailable = null;
+let lastAgentMaintenanceAt = 0;
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -167,6 +167,17 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && pathname === "/api/approval-requests") {
       await handleCreateApprovalRequest(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/agent-steps/claim") {
+      await handleClaimAgentStep(request, response);
+      return;
+    }
+
+    const agentStepActionMatch = /^\/api\/agent-steps\/([0-9a-f-]{36})\/(complete|fail|heartbeat)$/i.exec(pathname);
+    if (request.method === "POST" && agentStepActionMatch) {
+      await handleAgentStepAction(request, response, agentStepActionMatch[1], agentStepActionMatch[2]);
       return;
     }
 
@@ -311,7 +322,9 @@ async function authenticateRequest(request, pathname) {
 function isAgentApiPath(pathname) {
   return pathname === "/api/agent-control"
     || pathname === "/api/agent-runs"
-    || pathname === "/api/approval-requests";
+    || pathname === "/api/approval-requests"
+    || pathname === "/api/agent-steps/claim"
+    || /^\/api\/agent-steps\/[0-9a-f-]{36}\/(complete|fail|heartbeat)$/i.test(pathname);
 }
 
 function safeTokenEquals(left, right) {
@@ -404,7 +417,8 @@ function unavailableAgentControl(message = "Agent Control ist noch nicht eingeri
     playbooks: publicAgentPlaybooks(),
     runs: [],
     approvals: [],
-    channelAccounts: []
+    channelAccounts: [],
+    runners: []
   };
 }
 
@@ -412,14 +426,15 @@ async function buildAgentControlSnapshot(organizationId) {
   if (!organizationId) return unavailableAgentControl("Kein Kundenbereich ausgewählt.");
   const organizationFilter = encodeURIComponent(organizationId);
   try {
-    const [runs, approvals, channelAccounts] = await Promise.all([
+    const [runs, approvals, channelAccounts, workers] = await Promise.all([
       supabaseSelect(`/agent_runs?select=id,organization_id,item_id,channel_account_id,agent_type,objective,status,risk_level,plan,result,error,started_at,completed_at,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=40`),
       supabaseSelect(`/approval_requests?select=id,organization_id,agent_run_id,agent_step_id,approval_type,status,summary,payload,expires_at,decided_at,decision_note,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=60`),
-      supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,external_account_ref,browser_profile_key,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=80`)
+      supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,external_account_ref,browser_profile_key,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=80`),
+      supabaseSelect("/workers?select=id,worker_key,name,status,capabilities,metadata,last_seen_at,created_at,updated_at&order=last_seen_at.desc&limit=80")
     ]);
     const runIds = runs.map((run) => run.id).filter(Boolean);
     const steps = runIds.length
-      ? await supabaseSelect(`/agent_steps?select=id,agent_run_id,ordinal,step_key,title,action_type,execution_mode,status,risk_level,approval_required,summary,output,error,started_at,completed_at,created_at,updated_at&agent_run_id=in.(${encodeURIComponent(runIds.join(","))})&order=ordinal.asc`)
+      ? await supabaseSelect(`/agent_steps?select=id,agent_run_id,ordinal,step_key,title,action_type,execution_mode,status,risk_level,approval_required,summary,output,error,attempts,max_attempts,locked_by,locked_at,lease_expires_at,started_at,completed_at,created_at,updated_at&agent_run_id=in.(${encodeURIComponent(runIds.join(","))})&order=ordinal.asc`)
       : [];
     const stepsByRun = new Map();
     for (const step of steps) {
@@ -434,7 +449,8 @@ async function buildAgentControlSnapshot(organizationId) {
       playbooks: publicAgentPlaybooks(),
       runs: runs.map((run) => ({ ...run, steps: stepsByRun.get(run.id) || [] })),
       approvals,
-      channelAccounts
+      channelAccounts,
+      runners: workers.filter((entry) => entry.metadata?.runner || entry.capabilities?.some((capability) => String(capability).startsWith("agent:")))
     };
   } catch (error) {
     return unavailableAgentControl(`Migration ausstehend: ${redactSecret(error.message)}`);
@@ -448,6 +464,221 @@ async function handleAgentControl(request, response) {
     return;
   }
   sendJson(response, 200, { agentControl: await buildAgentControlSnapshot(tenant.activeOrganization.id) });
+}
+
+async function handleClaimAgentStep(request, response) {
+  if (!request.ramrodUser?.agent && authRequired) {
+    sendJson(response, 403, { error: "agent_service_required", message: "Agentenschritte können nur von einem registrierten Runner übernommen werden." });
+    return;
+  }
+  if (!supabasePersistenceStatus().writable) {
+    sendJson(response, 503, { error: "agent_executor_not_writable", message: "Der Agent Runner benötigt den Supabase Service Role Key." });
+    return;
+  }
+
+  let body;
+  try {
+    body = JSON.parse(await readRequestBody(request, 128 * 1024));
+  } catch (error) {
+    sendJson(response, 400, { error: "invalid_agent_claim", message: redactSecret(error.message) });
+    return;
+  }
+
+  const workerKey = cleanAgentWorkerKey(body.workerKey);
+  if (!workerKey) {
+    sendJson(response, 400, { error: "invalid_worker_key", message: "workerKey wird benötigt." });
+    return;
+  }
+  const executionModes = cleanAgentCapabilityList(body.executionModes, 16);
+  const actionTypes = cleanAgentCapabilityList(body.actionTypes, 24);
+  const stepKeys = cleanAgentCapabilityList(body.stepKeys, 50);
+  if (!executionModes.length || !actionTypes.length || !stepKeys.length) {
+    sendJson(response, 400, { error: "missing_agent_capabilities", message: "executionModes, actionTypes und stepKeys dürfen nicht leer sein." });
+    return;
+  }
+
+  const requestedOrganizationId = String(body.organizationId || request.headers["x-ramrod-organization"] || "").trim();
+  if (requestedOrganizationId && !isUuid(requestedOrganizationId)) {
+    sendJson(response, 400, { error: "invalid_organization", message: "organizationId muss eine gültige UUID sein." });
+    return;
+  }
+
+  try {
+    await runAgentMaintenanceIfDue();
+    const worker = await registerAgentWorker({
+      workerKey,
+      workerName: String(body.workerName || workerKey).trim().slice(0, 160),
+      executionModes,
+      actionTypes,
+      stepKeys,
+      metadata: body.metadata
+    });
+    const rows = await supabaseRpc("claim_ramrod_agent_step", {
+      p_worker_id: worker.id,
+      p_organization_id: requestedOrganizationId || null,
+      p_execution_modes: executionModes,
+      p_action_types: actionTypes,
+      p_step_keys: stepKeys,
+      p_lease_seconds: clampNumber(body.leaseSeconds, 30, 3600, 180)
+    });
+    const step = rows[0] || null;
+    if (!step) {
+      sendJson(response, 200, { worker, step: null });
+      return;
+    }
+    sendJson(response, 200, await hydrateAgentStepClaim(worker, step));
+  } catch (error) {
+    sendJson(response, 500, { error: "agent_step_claim_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleAgentStepAction(request, response, stepId, action) {
+  if (!request.ramrodUser?.agent && authRequired) {
+    sendJson(response, 403, { error: "agent_service_required", message: "Agentenschritte können nur von einem registrierten Runner aktualisiert werden." });
+    return;
+  }
+  if (!isUuid(stepId)) {
+    sendJson(response, 400, { error: "invalid_agent_step", message: "Ungültige Agentenschritt-ID." });
+    return;
+  }
+  const bodyText = await readRequestBody(request, 512 * 1024);
+  const body = bodyText ? JSON.parse(bodyText) : {};
+  const workerKey = cleanAgentWorkerKey(body.workerKey);
+  if (!workerKey) {
+    sendJson(response, 400, { error: "invalid_worker_key", message: "workerKey wird benötigt." });
+    return;
+  }
+
+  try {
+    const workers = await supabaseSelect(`/workers?select=*&worker_key=eq.${encodeURIComponent(workerKey)}&limit=1`);
+    const worker = workers[0];
+    if (!worker) {
+      sendJson(response, 404, { error: "agent_worker_not_found", message: "Runner wurde nicht gefunden." });
+      return;
+    }
+
+    if (action === "heartbeat") {
+      const renewed = await supabaseRpc("renew_ramrod_agent_step_lease", {
+        p_step_id: stepId,
+        p_worker_id: worker.id,
+        p_lease_seconds: clampNumber(body.leaseSeconds, 30, 3600, 180)
+      });
+      if (renewed !== true) {
+        sendJson(response, 409, { error: "agent_step_lease_lost", message: "Der Runner besitzt diesen Schritt nicht mehr." });
+        return;
+      }
+      sendJson(response, 200, { renewed: true });
+      return;
+    }
+
+    const succeeded = action === "complete";
+    const rows = await supabaseRpc("finish_ramrod_agent_step", {
+      p_step_id: stepId,
+      p_worker_id: worker.id,
+      p_succeeded: succeeded,
+      p_output: succeeded ? redactAgentPayload(body.output || {}) : null,
+      p_error: succeeded ? null : redactAgentPayload(body.error || { code: "agent_step_failed", message: "Runner meldete einen Fehler.", retryable: true }),
+      p_retry_delay_seconds: clampNumber(body.retryDelaySeconds, 1, 86400, 30)
+    });
+    const step = rows[0];
+    if (!step) {
+      sendJson(response, 409, { error: "agent_step_lease_lost", message: "Der Runner besitzt diesen Schritt nicht mehr." });
+      return;
+    }
+    await supabaseUpdate(`/workers?id=eq.${encodeURIComponent(worker.id)}`, { status: "online", last_seen_at: new Date().toISOString() });
+    const runRows = await supabaseSelect(`/agent_runs?select=organization_id&id=eq.${encodeURIComponent(step.agent_run_id)}&limit=1`);
+    if (runRows[0]?.organization_id) {
+      await supabaseInsert("/audit_events", {
+        actor_id: null,
+        organization_id: runRows[0].organization_id,
+        entity_type: "agent_step",
+        entity_id: step.id,
+        event_type: succeeded ? "agent_step_succeeded" : "agent_step_failed",
+        payload: redactAgentPayload({ workerId: worker.id, workerKey: worker.worker_key, runId: step.agent_run_id, stepKey: step.step_key, attempts: step.attempts })
+      }).catch((error) => console.error("Agent step audit failed:", redactSecret(error.message)));
+    }
+    const approval = succeeded ? await ensureNextAgentApproval(step.agent_run_id) : null;
+    sendJson(response, 200, { step, approval });
+  } catch (error) {
+    sendJson(response, 500, { error: "agent_step_update_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function registerAgentWorker({ workerKey, workerName, executionModes, actionTypes, stepKeys, metadata }) {
+  const rows = await supabaseUpsert("/workers?on_conflict=worker_key", {
+    worker_key: workerKey,
+    name: workerName || workerKey,
+    status: "online",
+    capabilities: [
+      ...executionModes.map((entry) => `agent:mode:${entry}`),
+      ...actionTypes.map((entry) => `agent:action:${entry}`),
+      ...stepKeys.map((entry) => `agent:step:${entry}`)
+    ],
+    max_concurrency: 1,
+    metadata: redactAgentPayload({ ...(metadata && typeof metadata === "object" ? metadata : {}), runner: true }),
+    last_seen_at: new Date().toISOString()
+  });
+  if (!rows[0]?.id) throw new Error("Supabase hat keine Runner-ID zurückgegeben.");
+  return rows[0];
+}
+
+async function hydrateAgentStepClaim(worker, step) {
+  const runs = await supabaseSelect(`/agent_runs?select=*&id=eq.${encodeURIComponent(step.agent_run_id)}&limit=1`);
+  const run = runs[0];
+  if (!run) throw new Error("Agentenmission wurde nicht gefunden.");
+  const [organizations, priorSteps, itemRows, candidateRows] = await Promise.all([
+    supabaseSelect(`/customers?select=id,name,slug,organization_type,short_code&id=eq.${encodeURIComponent(run.organization_id)}&limit=1`),
+    supabaseSelect(`/agent_steps?select=id,ordinal,step_key,title,status,output,error,completed_at&agent_run_id=eq.${encodeURIComponent(run.id)}&ordinal=lt.${step.ordinal}&order=ordinal.asc`),
+    run.item_id ? supabaseSelect(`/items?select=*&id=eq.${encodeURIComponent(run.item_id)}&customer_id=eq.${encodeURIComponent(run.organization_id)}&limit=1`) : Promise.resolve([]),
+    ["distribute_inventory", "create_demand_campaign"].includes(run.agent_type)
+      ? supabaseSelect(`/items?select=*&customer_id=eq.${encodeURIComponent(run.organization_id)}&order=updated_at.desc&limit=200`)
+      : Promise.resolve([])
+  ]);
+  return redactAgentPayload({
+    worker,
+    step,
+    run,
+    organization: organizations[0] || null,
+    item: itemRows[0] || null,
+    candidates: candidateRows,
+    priorSteps
+  });
+}
+
+async function ensureNextAgentApproval(runId) {
+  const [runs, steps] = await Promise.all([
+    supabaseSelect(`/agent_runs?select=*&id=eq.${encodeURIComponent(runId)}&limit=1`),
+    supabaseSelect(`/agent_steps?select=*&agent_run_id=eq.${encodeURIComponent(runId)}&status=eq.waiting_approval&order=ordinal.asc&limit=1`)
+  ]);
+  const run = runs[0];
+  const step = steps[0];
+  if (!run || !step) return null;
+  const organizations = await supabaseSelect(`/customers?select=*&id=eq.${encodeURIComponent(run.organization_id)}&limit=1`);
+  const organization = organizations[0];
+  if (!organization) return null;
+  return createApprovalForStep({
+    organization,
+    run,
+    step,
+    itemId: run.item_id,
+    channelId: run.context?.channelId || step.input?.channelId || null
+  });
+}
+
+async function runAgentMaintenanceIfDue() {
+  if (Date.now() - lastAgentMaintenanceAt < 60_000) return;
+  lastAgentMaintenanceAt = Date.now();
+  await supabaseRpc("requeue_stale_ramrod_agent_steps", {});
+}
+
+function cleanAgentWorkerKey(value) {
+  const key = String(value || "").trim();
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:-]{2,119}$/.test(key) ? key : "";
+}
+
+function cleanAgentCapabilityList(value, maxItems) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((entry) => String(entry || "").trim().toLowerCase()).filter((entry) => /^[a-z0-9][a-z0-9_-]{0,79}$/.test(entry)))].slice(0, maxItems);
 }
 
 async function handleCreateAgentRun(request, response) {
@@ -516,7 +747,7 @@ async function handleCreateAgentRun(request, response) {
       summary: step.summary,
       input: redactAgentPayload({ channelId: plan.channelId, itemId: plan.itemId })
     })));
-    const approvalPlan = firstApprovalStep(plan);
+    const approvalPlan = plan.steps.find((step) => step.status === "waiting_approval") || null;
     const approvalStep = approvalPlan
       ? stepRows.find((step) => step.step_key === approvalPlan.key)
       : null;
@@ -2197,6 +2428,13 @@ async function supabaseUpdate(path, payload) {
   return supabaseRequest(path, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
+    body: JSON.stringify(payload)
+  }, supabaseServiceRoleKey);
+}
+
+async function supabaseRpc(name, payload = {}) {
+  return supabaseRequest(`/rpc/${name}`, {
+    method: "POST",
     body: JSON.stringify(payload)
   }, supabaseServiceRoleKey);
 }

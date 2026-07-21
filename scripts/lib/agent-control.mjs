@@ -85,7 +85,7 @@ export function buildAgentPlan({ agentType, objective, channelId = null, itemId 
   const steps = playbook.steps.map((entry, index) => ({
     ...entry,
     ordinal: index + 1,
-    status: index === firstApprovalIndex ? "waiting_approval" : "planned"
+    status: index === 0 && index === firstApprovalIndex ? "waiting_approval" : "planned"
   }));
   const highestRisk = steps.reduce((highest, entry) => riskRank[entry.riskLevel] > riskRank[highest] ? entry.riskLevel : highest, "low");
 
@@ -96,7 +96,7 @@ export function buildAgentPlan({ agentType, objective, channelId = null, itemId 
     channelId: cleanIdentifier(channelId),
     itemId: cleanIdentifier(itemId),
     riskLevel: highestRisk,
-    status: steps.some((entry) => entry.approvalRequired) ? "waiting_approval" : "ready",
+    status: steps[0]?.status === "waiting_approval" ? "waiting_approval" : "ready",
     steps
   };
 }

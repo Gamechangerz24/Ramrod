@@ -2324,9 +2324,12 @@ function agentsView() {
   const runs = Array.isArray(control.runs) ? control.runs : [];
   const approvals = (control.approvals || []).filter((entry) => entry.status === "pending");
   const accounts = Array.isArray(control.channelAccounts) ? control.channelAccounts : [];
+  const runners = Array.isArray(control.runners) ? control.runners : [];
   const activeRuns = runs.filter((run) => ["queued", "planning", "waiting_approval", "ready", "running"].includes(run.status));
   const completedRuns = runs.filter((run) => run.status === "succeeded");
   const connectedAccounts = accounts.filter((account) => account.status === "connected");
+  const onlineRunners = runners.filter(agentRunnerOnline);
+  const hermesRunner = runners.find((runner) => runner.metadata?.runner === "hermes-mcp");
   const missions = [
     { type: "onboard_channel_account", icon: "EB", title: "eBay-Konto verbinden", text: "Anforderungen prüfen, Konto vorbereiten und OAuth nach deiner Freigabe verbinden.", channelId: "ebay" },
     { type: "distribute_inventory", icon: "RT", title: "Bestand verteilen", text: "Verkaufsbereite Artikel nach Preis, Zielgruppe und Kanalpassung aufteilen." },
@@ -2337,13 +2340,14 @@ function agentsView() {
   return `<section class="agent-control-view">
     <div class="agent-hero">
       <div><p>Autonomie-Zentrale</p><h2>RAMROD arbeitet, du entscheidest</h2><span>Agenten recherchieren und bereiten vor. Veröffentlichungen, Konten und Rechte bleiben unter menschlicher Kontrolle.</span></div>
-      <div class="agent-provider-state"><span class="agent-state ${control.telegramConfigured ? "online" : "waiting"}">${control.telegramConfigured ? "Telegram bereit" : "Telegram offen"}</span><span class="agent-state ${control.agentApiConfigured ? "online" : "waiting"}">${control.agentApiConfigured ? "Hermes bereit" : "Hermes offen"}</span></div>
+      <div class="agent-provider-state"><span class="agent-state ${onlineRunners.length ? "online" : "waiting"}">${onlineRunners.length ? `${onlineRunners.length} Runner aktiv` : "Runner wartet"}</span><span class="agent-state ${hermesRunner && agentRunnerOnline(hermesRunner) ? "online" : "waiting"}">${hermesRunner && agentRunnerOnline(hermesRunner) ? "Hermes verbunden" : "Hermes offen"}</span><span class="agent-state ${control.telegramConfigured ? "online" : "waiting"}">${control.telegramConfigured ? "Telegram bereit" : "Telegram offen"}</span></div>
     </div>
 
     <div class="agent-stats" aria-label="Agentenstatus">
       ${agentStat("Aktive Missionen", activeRuns.length)}
       ${agentStat("Deine Freigaben", approvals.length, approvals.length ? "attention" : "")}
       ${agentStat("Verbundene Konten", connectedAccounts.length)}
+      ${agentStat("Aktive Runner", onlineRunners.length)}
       ${agentStat("Abgeschlossen", completedRuns.length)}
     </div>
 
@@ -2367,7 +2371,9 @@ function agentsView() {
         <div class="agent-run-list">${runs.length ? runs.map(agentRunRow).join("") : `<div class="agent-empty"><strong>Noch keine Mission</strong><p>Starte oben den ersten kontrollierten Auftrag.</p></div>`}</div>
       </section>
       <section class="agent-section">
-        <div class="panel-heading"><div><p>Connectoren</p><h2>Verkaufskonten</h2></div></div>
+        <div class="panel-heading"><div><p>Ausführung</p><h2>Runner</h2></div></div>
+        <div class="agent-runner-list">${runners.length ? runners.map(agentRunnerRow).join("") : `<div class="agent-empty"><strong>Noch kein Runner gemeldet</strong><p>Der VPS-Runner erscheint hier, sobald die Executor-Migration aktiv ist.</p></div>`}</div>
+        <div class="panel-heading agent-subheading"><div><p>Connectoren</p><h2>Verkaufskonten</h2></div></div>
         <div class="agent-account-list">${accounts.length ? accounts.map(agentAccountRow).join("") : `<div class="agent-empty"><strong>Noch kein Konto verbunden</strong><p>Mit „eBay-Konto verbinden“ beginnt das geführte Onboarding.</p></div>`}</div>
       </section>
     </div>
@@ -2399,6 +2405,17 @@ function agentRunRow(run) {
 
 function agentAccountRow(account) {
   return `<article class="agent-account-row"><span>${String(account.channel_id || "CH").slice(0, 2).toUpperCase()}</span><div><strong>${escapeHtml(account.display_name)}</strong><small>${escapeHtml(channelLabel(account.channel_id))} · ${escapeHtml(account.auth_mode || "oauth")}</small></div><em class="agent-state ${agentStatusTone(account.status)}">${escapeHtml(agentAccountStatusLabel(account.status))}</em></article>`;
+}
+
+function agentRunnerRow(runner) {
+  const online = agentRunnerOnline(runner);
+  const mode = runner.metadata?.runner === "hermes-mcp" ? "Hermes / Browser" : runner.metadata?.runner === "safe" ? "Interne Vorbereitung" : "Agent Runner";
+  return `<article class="agent-account-row agent-runner-row"><span>RN</span><div><strong>${escapeHtml(runner.name || runner.worker_key)}</strong><small>${escapeHtml(mode)} · zuletzt ${escapeHtml(formatAgentDate(runner.last_seen_at))}</small></div><em class="agent-state ${online ? "online" : "waiting"}">${online ? runner.status === "busy" ? "Arbeitet" : "Bereit" : "Offline"}</em></article>`;
+}
+
+function agentRunnerOnline(runner) {
+  const seen = new Date(runner?.last_seen_at || 0).getTime();
+  return ["online", "busy"].includes(runner?.status) && Number.isFinite(seen) && Date.now() - seen < 2 * 60 * 1000;
 }
 
 function agentTypeLabel(value) {

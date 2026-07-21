@@ -22,7 +22,10 @@
     "worker:once": "node scripts/ramrod-worker.mjs --once",
     "worker:smoke": "node scripts/worker-smoke-test.mjs",
     "mcp": "node scripts/ramrod-mcp-server.mjs",
+    "agent:runner": "node scripts/ramrod-agent-runner.mjs",
+    "agent:once": "node scripts/ramrod-agent-runner.mjs --once",
     "test:agent-control": "node scripts/test-agent-control.mjs",
+    "test:agent-executor": "node scripts/test-agent-executor.mjs",
     "test:mcp": "node scripts/test-mcp-adapter.mjs"
   },
   "dependencies": {

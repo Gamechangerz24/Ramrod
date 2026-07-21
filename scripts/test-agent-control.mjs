@@ -18,7 +18,7 @@ for (const agentType of agentTypeIds) {
   assert.ok(plan.steps.length >= 4);
   assert.ok(["low", "medium", "high", "critical"].includes(plan.riskLevel));
   assert.ok(firstApprovalStep(plan), `${agentType} must stop at a human approval`);
-  assert.equal(plan.steps.filter((step) => step.status === "waiting_approval").length, 1);
+  assert.equal(plan.steps.filter((step) => step.status === "waiting_approval").length, 0);
 }
 
 const accountPlan = buildAgentPlan({
@@ -26,7 +26,7 @@ const accountPlan = buildAgentPlan({
   objective: "Ein eBay-Verkaufskonto für CREATORS sicher verbinden.",
   channelId: "ebay"
 });
-assert.equal(accountPlan.status, "waiting_approval");
+assert.equal(accountPlan.status, "ready");
 assert.equal(firstApprovalStep(accountPlan).key, "create_external_account");
 assert.equal(accountPlan.riskLevel, "critical");
 

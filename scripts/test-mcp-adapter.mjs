@@ -19,7 +19,10 @@ try {
   await client.connect(transport);
   const listed = await client.listTools();
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
+    "ramrod_claim_step",
+    "ramrod_complete_step",
     "ramrod_create_mission",
+    "ramrod_fail_step",
     "ramrod_get_agent_control",
     "ramrod_request_approval"
   ]);
