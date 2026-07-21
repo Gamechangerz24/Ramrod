@@ -1,0 +1,30 @@
+insert into public.channels (id, name, type, status, automation_level, config)
+values
+  ('ebay', 'eBay', 'marketplace', 'draft-ready', 'api-first', '{"publishingMode":"api-draft","statusLabel":"Entwurf bereit"}'::jsonb),
+  ('whatnot', 'Whatnot', 'live-commerce', 'assisted', 'semi-automatic', '{"publishingMode":"campaign-export","statusLabel":"Show vorbereitet"}'::jsonb),
+  ('kleinanzeigen', 'Kleinanzeigen', 'classifieds', 'assisted', 'manual-or-browser', '{"publishingMode":"assisted-post","statusLabel":"Assistiert"}'::jsonb),
+  ('ramrod_shop', 'RAMROD Shop', 'owned-commerce', 'building', 'api-first', '{"publishingMode":"owned-catalog","statusLabel":"Im Aufbau"}'::jsonb),
+  ('instagram', 'Instagram', 'discovery-commerce', 'assisted', 'content-assisted', '{"publishingMode":"content-draft","statusLabel":"Content assistiert"}'::jsonb),
+  ('vinted', 'Vinted', 'marketplace', 'assisted', 'manual-or-browser', '{"publishingMode":"assisted-post","statusLabel":"Assistiert"}'::jsonb),
+  ('facebook_marketplace', 'Facebook Marketplace', 'classifieds', 'assisted', 'manual-or-browser', '{"publishingMode":"assisted-post","statusLabel":"Assistiert"}'::jsonb),
+  ('cardmarket', 'Cardmarket', 'specialized-marketplace', 'planned', 'api-possible', '{"publishingMode":"connector-planned","statusLabel":"Connector geplant"}'::jsonb),
+  ('bricklink', 'BrickLink', 'specialized-marketplace', 'planned', 'api-possible', '{"publishingMode":"connector-planned","statusLabel":"Connector geplant"}'::jsonb),
+  ('discogs', 'Discogs', 'specialized-marketplace', 'planned', 'api-possible', '{"publishingMode":"connector-planned","statusLabel":"Connector geplant"}'::jsonb),
+  ('reverb', 'Reverb', 'specialized-marketplace', 'planned', 'api-possible', '{"publishingMode":"connector-planned","statusLabel":"Connector geplant"}'::jsonb),
+  ('catawiki', 'Catawiki', 'curated-auction', 'assisted', 'semi-automatic', '{"publishingMode":"expert-submission","statusLabel":"Einreichung assistiert"}'::jsonb),
+  ('etsy', 'Etsy', 'marketplace', 'planned', 'api-possible', '{"publishingMode":"connector-planned","statusLabel":"Connector geplant"}'::jsonb),
+  ('spezialforum', 'Spezialforum', 'community-market', 'assisted', 'content-assisted', '{"publishingMode":"content-draft","statusLabel":"Beitrag assistiert"}'::jsonb),
+  ('tiktok_shop', 'TikTok Shop', 'discovery-commerce', 'planned', 'api-first', '{"publishingMode":"connector-planned","statusLabel":"Geplant"}'::jsonb),
+  ('google_shopping', 'Google Shopping', 'product-discovery', 'planned', 'feed', '{"publishingMode":"catalog-feed","statusLabel":"Shop-Feed geplant"}'::jsonb),
+  ('kaufland', 'Kaufland', 'catalog-marketplace', 'planned', 'api-first', '{"publishingMode":"connector-planned","statusLabel":"Geplant"}'::jsonb),
+  ('amazon', 'Amazon', 'catalog-marketplace', 'planned', 'api-first', '{"publishingMode":"connector-planned","statusLabel":"Später"}'::jsonb),
+  ('otto', 'OTTO Market', 'catalog-marketplace', 'planned', 'api-first', '{"publishingMode":"connector-planned","statusLabel":"Später"}'::jsonb),
+  ('hood', 'Hood.de', 'marketplace', 'planned', 'api-unknown', '{"publishingMode":"connector-planned","statusLabel":"Später"}'::jsonb),
+  ('strongvision_web', 'Strongvision', 'client-system', 'planned', 'sync', '{"publishingMode":"client-catalog","statusLabel":"Kundensync geplant"}'::jsonb),
+  ('liquidation_basket', 'Liquidation Basket', 'fallback', 'assisted', 'quote-or-manual', '{"publishingMode":"quote-basket","statusLabel":"Angebot assistiert"}'::jsonb)
+on conflict (id) do update set
+  name = excluded.name,
+  type = excluded.type,
+  status = excluded.status,
+  automation_level = excluded.automation_level,
+  config = excluded.config;

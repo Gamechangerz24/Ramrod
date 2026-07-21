@@ -28,6 +28,10 @@ assert.equal(massEffect.channel, "eBay");
 assert.equal(massEffect.salesStrategy.recommendedAction, "clean_and_sell");
 assert.equal(massEffect.salesStrategy.repairDecision.recommendation, "not_applicable");
 assert.equal(massEffect.salesStrategy.targetPrice, 23);
+assert.equal(massEffect.salesStrategy.channelPlan.primary.name, "eBay");
+assert.ok(massEffect.salesStrategy.channelPlan.parallel.some((entry) => entry.name === "RAMROD Shop"));
+assert.ok(massEffect.salesStrategy.channelPlan.discovery.some((entry) => entry.name === "Instagram"));
+assert.equal(massEffect.salesStrategy.channelPlan.fallback.name, "Whatnot");
 
 const suspectedScratch = reconcileSalesDecision({
   title: "Mass Effect Collector's Edition",
@@ -125,7 +129,8 @@ const handbag = reconcileSalesDecision({
 });
 
 assert.equal(handbag.channel, "Vinted");
-assert.deepEqual(handbag.salesStrategy.alternativeChannels, ["Kleinanzeigen"]);
+assert.ok(handbag.salesStrategy.alternativeChannels.includes("Kleinanzeigen"));
+assert.ok(handbag.salesStrategy.alternativeChannels.includes("Instagram"));
 
 const householdBundle = reconcileSalesDecision({
   title: "Gemischtes Spielzeugpaket zur Abholung",
@@ -160,5 +165,64 @@ const unknown = reconcileSalesDecision({
 
 assert.equal(unknown.channel, "Pruefen");
 assert.equal(unknown.reviewRequired, true);
+assert.equal(unknown.salesStrategy.channelPlan.primary.activation, "blocked");
+
+const singleCard = decisionFor({
+  title: "Pokemon Glurak Einzelkarte Base Set deutsch",
+  category: "TCG Einzelkarte",
+  fair: 90
+});
+assert.equal(singleCard.channel, "Cardmarket");
+assert.equal(singleCard.salesStrategy.channelPlan.primary.name, "Cardmarket");
+assert.ok(singleCard.salesStrategy.channelPlan.parallel.some((entry) => entry.name === "RAMROD Shop"));
+assert.equal(singleCard.salesStrategy.channelPlan.fallback.name, "eBay");
+
+const lego = decisionFor({
+  title: "LEGO Star Wars Minifigur Set 75257",
+  category: "LEGO Minifigur",
+  fair: 45
+});
+assert.equal(lego.channel, "BrickLink");
+assert.ok(lego.salesStrategy.channelPlan.discovery.some((entry) => entry.name === "Instagram"));
+
+const vinyl = decisionFor({
+  title: "Pink Floyd The Wall Vinyl LP Erstpressung",
+  category: "Schallplatte Vinyl",
+  fair: 65
+});
+assert.equal(vinyl.channel, "Discogs");
+assert.equal(vinyl.salesStrategy.channelPlan.fallback.name, "eBay");
+
+const guitar = decisionFor({
+  title: "Fender Stratocaster E-Gitarre",
+  category: "Musikinstrument Gitarre",
+  fair: 720
+});
+assert.equal(guitar.channel, "Reverb");
+
+const rareDesign = decisionFor({
+  title: "Limitierte Mid Century Designobjekt Keramik",
+  category: "Vintage Deko",
+  fair: 420
+});
+assert.equal(rareDesign.channel, "Catawiki");
+
+function decisionFor({ title, category, fair }) {
+  return reconcileSalesDecision({
+    title,
+    category,
+    condition: "Sehr gut",
+    completeness: "Vollständig",
+    confidence: 91,
+    recognitionEvidence: { score: 88 }
+  }, {
+    method: "multi-source",
+    low: Math.round(fair * 0.7),
+    fair,
+    aggressive: Math.round(fair * 1.25),
+    confidence: 78,
+    evidence: [{ price: fair * 0.9 }, { price: fair }, { price: fair * 1.1 }]
+  });
+}
 
 console.log("Sales decision guardrail tests passed.");

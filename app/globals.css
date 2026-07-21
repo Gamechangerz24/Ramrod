@@ -2066,7 +2066,7 @@ img {
 .strategy-metrics {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .repair-decision {
@@ -3164,6 +3164,148 @@ img {
   margin-top: 8px;
 }
 
+.channel-plan-card {
+  background: #f7f9fb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.channel-plan-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.channel-plan-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.channel-plan-head small {
+  color: var(--orange);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.channel-plan-head strong {
+  overflow-wrap: anywhere;
+}
+
+.channel-plan-head > span {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 5px 8px;
+}
+
+.channel-plan-steps {
+  display: grid;
+  gap: 7px;
+}
+
+.channel-plan-step {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-left: 4px solid #9aa4af;
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 28px minmax(0, 1fr) minmax(94px, auto);
+  min-width: 0;
+  padding: 9px;
+}
+
+.channel-plan-step.ready {
+  border-left-color: var(--green);
+}
+
+.channel-plan-step.assisted {
+  border-left-color: var(--gold);
+}
+
+.channel-plan-step.planned {
+  border-left-color: #7e8996;
+}
+
+.channel-plan-step.blocked {
+  border-left-color: var(--red);
+}
+
+.channel-plan-index {
+  align-items: center;
+  background: var(--dark);
+  border-radius: 6px;
+  color: var(--orange);
+  display: flex;
+  font-size: 12px;
+  font-weight: 1000;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.channel-plan-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.channel-plan-copy small,
+.channel-plan-status span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.channel-plan-copy strong,
+.channel-plan-copy p {
+  overflow-wrap: anywhere;
+}
+
+.channel-plan-copy p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.channel-plan-status {
+  display: grid;
+  gap: 3px;
+  justify-items: end;
+  min-width: 0;
+  text-align: right;
+}
+
+.channel-plan-status strong {
+  color: var(--orange);
+}
+
+.channel-plan-status span {
+  max-width: 150px;
+  overflow-wrap: anywhere;
+}
+
+.channel-plan-policy {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+  padding-left: 4px;
+}
+
 .strategy-details {
   border-top: 1px solid var(--line);
 }
@@ -3503,7 +3645,7 @@ img {
   }
 }
 
-@media (min-width: 1181px) and (max-width: 1399px) {
+@media (min-width: 1181px) and (max-width: 1499px) {
   .inventory-layout {
     grid-template-columns: minmax(320px, 0.36fr) minmax(0, 1fr);
   }
@@ -3851,6 +3993,29 @@ img {
 
   .recommendation-banner h3 {
     font-size: 20px;
+  }
+
+  .channel-plan-card {
+    padding: 10px;
+  }
+
+  .channel-plan-head {
+    align-items: start;
+  }
+
+  .channel-plan-step {
+    align-items: start;
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .channel-plan-status {
+    grid-column: 2;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .channel-plan-status span {
+    max-width: none;
   }
 
   .sales-strategy-card {

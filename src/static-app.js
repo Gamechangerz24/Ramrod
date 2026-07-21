@@ -160,21 +160,22 @@ const whatnotChannels = [
   }
 ];
 
-const primaryChannels = [
-  { id: "eBay", label: "eBay", status: "bereit", note: "Entwurf" },
-  { id: "Whatnot", label: "Whatnot", status: "bereit", note: "Show-Batch" },
-  { id: "Kleinanzeigen", label: "Kleinanzeigen", status: "assistiert", note: "Abholung" }
+const fallbackChannelCatalog = [
+  { id: "ebay", name: "eBay", status: "draft-ready", statusLabel: "Entwurf bereit", spotlight: true, selectable: true },
+  { id: "whatnot", name: "Whatnot", status: "assisted", statusLabel: "Show vorbereitet", spotlight: true, selectable: true },
+  { id: "kleinanzeigen", name: "Kleinanzeigen", status: "assisted", statusLabel: "Assistiert", spotlight: true, selectable: true },
+  { id: "vinted", name: "Vinted", status: "assisted", statusLabel: "Assistiert", selectable: true },
+  { id: "facebook_marketplace", name: "Facebook Marketplace", status: "assisted", statusLabel: "Assistiert", selectable: true },
+  { id: "instagram", name: "Instagram", status: "assisted", statusLabel: "Content assistiert", selectable: false },
+  { id: "spezialforum", name: "Spezialforum", status: "assisted", statusLabel: "Beitrag assistiert", selectable: true },
+  { id: "ramrod_shop", name: "RAMROD Shop", status: "building", statusLabel: "Im Aufbau", selectable: false },
+  { id: "cardmarket", name: "Cardmarket", status: "planned", statusLabel: "Connector geplant", selectable: false },
+  { id: "bricklink", name: "BrickLink", status: "planned", statusLabel: "Connector geplant", selectable: false },
+  { id: "discogs", name: "Discogs", status: "planned", statusLabel: "Connector geplant", selectable: false },
+  { id: "reverb", name: "Reverb", status: "planned", statusLabel: "Connector geplant", selectable: false },
+  { id: "catawiki", name: "Catawiki", status: "assisted", statusLabel: "Einreichung assistiert", selectable: true }
 ];
-
-const futureChannels = [
-  { id: "Vinted", label: "Vinted", status: "assistiert", note: "Mode" },
-  { id: "Facebook Marketplace", label: "Facebook Marketplace", status: "assistiert", note: "Lokal" },
-  { id: "Spezialforum", label: "Spezialforum", status: "assistiert", note: "Fachpublikum" },
-  { id: "RAMROD Shop", label: "RAMROD Shop", status: "noch nicht verfügbar", note: "Roadmap" },
-  { id: "Strongvision", label: "Strongvision", status: "noch nicht verfügbar", note: "Website/DB" },
-  ...["Shopify Hub", "WooCommerce", "Kaufland", "Amazon", "Hood.de", "Etsy", "BrickLink", "Cardmarket", "Discogs", "Catawiki", "Liquidation Basket"]
-    .map((label) => ({ id: label, label, status: "noch nicht verfügbar", note: "Roadmap" }))
-];
+let runtimeChannelCatalog = fallbackChannelCatalog;
 
 const app = document.querySelector("#app");
 const euro = (value) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
@@ -206,7 +207,7 @@ const state = {
   importStatus: "Lade lokale App...",
   channelPlan: null,
   persistence: { configured: false, writable: false },
-  runtimeConfig: { authRequired: false, supabaseUrl: "", supabaseAnonKey: "", providers: {} },
+  runtimeConfig: { authRequired: false, supabaseUrl: "", supabaseAnonKey: "", channels: [], providers: {} },
   authSession: loadAuthSession(),
   recoverySession: loadRecoverySession(),
   authError: "",
@@ -361,6 +362,7 @@ function normalizeSalesStrategy(item) {
   const low = Number(item.low) || Math.max(1, Math.round(fair * 0.65));
   const defaultAction = text.includes("defekt") ? "parts_or_defect" : hasVisibleIssue ? "clean_and_sell" : "sell_as_is";
   const defaultRepair = text.includes("defekt") ? "needs_quote" : hasVisibleIssue ? "repair_if_cheap" : "not_applicable";
+  const channelPlan = normalizeChannelPlan(item, strategy, fair, low);
 
   return {
     recommendedAction: strategy.recommendedAction || defaultAction,
@@ -385,7 +387,8 @@ function normalizeSalesStrategy(item) {
     routeReason: strategy.routeReason || `${channelLabel(item.channel)} passt aktuell am besten zu Wert, Artikeltyp und Bearbeitungsaufwand.`,
     alternativeChannels: Array.isArray(strategy.alternativeChannels) && strategy.alternativeChannels.length
       ? strategy.alternativeChannels
-      : channelAlternatives(item.channel),
+      : channelPlanAlternatives(channelPlan),
+    channelPlan,
     salesFormat: strategy.salesFormat || (item.channel === "Whatnot" ? "live_show" : item.channel === "Bundle" ? "bundle" : "fixed_price"),
     targetPrice: Number(strategy.targetPrice || fair),
     minimumAcceptablePrice: Number(strategy.minimumAcceptablePrice || low),
@@ -398,6 +401,81 @@ function normalizeSalesStrategy(item) {
       : ["Gesamtansicht vorne und hinten", "Typenschild oder relevante Kennzeichnung", "Mängel als Nahaufnahme", "Lieferumfang auf einem Bild"],
     approvalSummary: strategy.approvalSummary || `Nach Prüfung für ${channelLabel(item.channel)} zum Zielpreis ${euro(fair)} vorbereiten.`
   };
+}
+
+function normalizeChannelPlan(item, strategy, fair, low) {
+  const source = strategy.channelPlan || {};
+  const primary = normalizeChannelPlanEntry(source.primary, {
+    name: channelLabel(item.channel),
+    role: "primary",
+    roleLabel: item.channel === "Pruefen" ? "Vor Freigabe" : "Hauptverkauf",
+    score: item.channel === "Pruefen" ? 0 : 80,
+    targetPrice: fair,
+    activation: item.channel === "Pruefen" ? "blocked" : "after-approval",
+    reason: strategy.routeReason || `${channelLabel(item.channel)} passt aktuell am besten zu diesem Artikel.`
+  });
+  const legacyAlternatives = Array.isArray(strategy.alternativeChannels) && strategy.alternativeChannels.length
+    ? strategy.alternativeChannels
+    : channelAlternatives(item.channel);
+  const parallel = Array.isArray(source.parallel) && source.parallel.length
+    ? source.parallel.map((entry) => normalizeChannelPlanEntry(entry))
+    : legacyAlternatives.slice(0, 2).map((name, index) => normalizeChannelPlanEntry(null, {
+      name: channelLabel(name),
+      role: "parallel",
+      roleLabel: index === 0 ? "Ergänzung" : "Zweitmarkt",
+      score: 70 - index * 5,
+      targetPrice: fair,
+      activation: "manual-after-approval",
+      reason: "Als ergänzender Kanal nach Freigabe prüfen."
+    }));
+  const discovery = Array.isArray(source.discovery)
+    ? source.discovery.map((entry) => normalizeChannelPlanEntry(entry))
+    : [];
+  const fallback = source.fallback
+    ? normalizeChannelPlanEntry(source.fallback)
+    : null;
+
+  return {
+    version: Number(source.version || 1),
+    primary,
+    parallel,
+    discovery,
+    fallback,
+    inventoryPolicy: {
+      sourceOfTruth: source.inventoryPolicy?.sourceOfTruth || "RAMROD",
+      publishParallelOnlyWithSaleSync: source.inventoryPolicy?.publishParallelOnlyWithSaleSync !== false,
+      reserveOnSale: source.inventoryPolicy?.reserveOnSale !== false,
+      delistOtherChannels: source.inventoryPolicy?.delistOtherChannels !== false,
+      note: source.inventoryPolicy?.note || "RAMROD führt den Bestand zentral und verhindert Doppelverkäufe."
+    },
+    floorPrice: low
+  };
+}
+
+function normalizeChannelPlanEntry(entry, fallback = {}) {
+  const value = { ...fallback, ...(entry || {}) };
+  const registry = channelCatalog().find((channel) => channel.id === value.id || channel.name === value.name);
+  return {
+    id: value.id || registry?.id || channelClass(value.name || "offen"),
+    name: value.name || registry?.name || "Offen",
+    role: value.role || "parallel",
+    roleLabel: value.roleLabel || "Ergänzung",
+    score: Number(value.score || 0),
+    targetPrice: Number(value.targetPrice || 0),
+    activation: value.activation || "after-approval",
+    reason: value.reason || "Als ergänzenden Verkaufskanal prüfen.",
+    status: value.status || registry?.status || "planned",
+    statusLabel: value.statusLabel || registry?.statusLabel || "Geplant",
+    publishingMode: value.publishingMode || registry?.publishingMode || "manual",
+    automationLevel: value.automationLevel || registry?.automationLevel || "manual",
+    delistSupported: value.delistSupported ?? registry?.delistSupported ?? false
+  };
+}
+
+function channelPlanAlternatives(plan) {
+  return [...plan.parallel, ...plan.discovery, ...(plan.fallback ? [plan.fallback] : [])]
+    .map((entry) => entry.name)
+    .filter(Boolean);
 }
 
 function classifyWhatnot(item) {
@@ -499,6 +577,9 @@ async function hydrateAppState() {
   render();
   try {
     state.runtimeConfig = await fetchPublicJson("/api/config");
+    runtimeChannelCatalog = Array.isArray(state.runtimeConfig.channels) && state.runtimeConfig.channels.length
+      ? state.runtimeConfig.channels
+      : fallbackChannelCatalog;
     state.booting = false;
     if (state.runtimeConfig.authRequired && !state.authSession?.access_token) {
       state.importStatus = "";
@@ -764,7 +845,17 @@ function roleLabel(role) {
   }[role] || "Operator";
 }
 
+function channelCatalog() {
+  return (runtimeChannelCatalog || fallbackChannelCatalog).map((channel) => ({
+    ...channel,
+    label: channel.name || channel.label || channel.id,
+    routeId: channel.name || channel.label || channel.id
+  }));
+}
+
 function channelLabel(channel) {
+  const registryMatch = channelCatalog().find((entry) => entry.id === channel || entry.name === channel || entry.routeId === channel);
+  if (registryMatch) return registryMatch.name;
   return {
     Pruefen: "Prüfen",
     eBay: "eBay",
@@ -1467,9 +1558,10 @@ function salesStrategyCard(item) {
 
   return `<section class="sales-strategy-card ${blockers.length ? "has-release-blockers" : "release-ready"}">
     <div class="recommendation-banner">
-      <div><small>RAMROD empfiehlt</small><h3>${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice)}</h3><p>${escapeHtml(strategy.routeReason)}</p>${strategy.alternativeChannels.length ? `<span class="recommendation-alternatives">Alternativen: ${strategy.alternativeChannels.map(channelLabel).map(escapeHtml).join(" · ")}</span>` : ""}</div>
+      <div><small>RAMROD empfiehlt</small><h3>${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice)}</h3><p>${escapeHtml(strategy.routeReason)}</p></div>
       <span class="strategy-action">${escapeHtml(action)}</span>
     </div>
+    ${channelPlanCard(strategy.channelPlan)}
     <div class="strategy-metrics">
       ${suggestion("Format", escapeHtml(salesFormatLabel(strategy.salesFormat)))}
       ${suggestion("Untergrenze", euro(strategy.minimumAcceptablePrice))}
@@ -1501,6 +1593,52 @@ function salesStrategyCard(item) {
       ${strategy.detectedDefects.length ? `<div class="defect-strip"><strong>Erkannte Punkte</strong><span>${strategy.detectedDefects.map(escapeHtml).join(" · ")}</span></div>` : ""}
     </details>
   </section>`;
+}
+
+function channelPlanCard(plan) {
+  if (!plan?.primary) return "";
+  const nextChannels = [...(plan.parallel || []), ...(plan.discovery || [])];
+  return `<section class="channel-plan-card" aria-label="Verkaufsplan">
+    <div class="channel-plan-head">
+      <div><small>Verkaufsplan</small><strong>Wo der Artikel verkauft und beworben wird</strong></div>
+      <span>${nextChannels.length + (plan.fallback ? 1 : 0)} weitere</span>
+    </div>
+    <div class="channel-plan-steps">
+      ${channelPlanStep(plan.primary, 1, "Jetzt")}
+      ${nextChannels.map((entry, index) => channelPlanStep(entry, index + 2, entry.role === "discovery" ? "Reichweite" : "Parallel")).join("")}
+      ${plan.fallback ? channelPlanStep(plan.fallback, nextChannels.length + 2, "Falls unverkauft") : ""}
+    </div>
+    <p class="channel-plan-policy">${escapeHtml(plan.inventoryPolicy?.note || "RAMROD hält den Bestand zentral und verhindert Doppelverkäufe.")}</p>
+  </section>`;
+}
+
+function channelPlanStep(entry, index, phase) {
+  const statusTone = ["draft-ready", "connected"].includes(entry.status)
+    ? "ready"
+    : entry.status === "assisted"
+      ? "assisted"
+      : entry.activation === "blocked"
+        ? "blocked"
+        : "planned";
+  return `<article class="channel-plan-step ${statusTone}">
+    <span class="channel-plan-index">${index}</span>
+    <div class="channel-plan-copy"><small>${escapeHtml(phase)} · ${escapeHtml(entry.roleLabel || "Kanal")}</small><strong>${escapeHtml(channelLabel(entry.name))}</strong><p>${escapeHtml(entry.reason || "Als Verkaufskanal prüfen.")}</p></div>
+    <div class="channel-plan-status"><strong>${entry.targetPrice ? euro(entry.targetPrice) : ""}</strong><span>${escapeHtml(entry.statusLabel || channelActivationLabel(entry.activation))}</span></div>
+  </article>`;
+}
+
+function channelActivationLabel(value) {
+  return {
+    blocked: "Prüfung nötig",
+    "after-approval": "Nach Freigabe",
+    "manual-after-approval": "Manuell nach Freigabe",
+    "when-connector-ready": "Nach Connector",
+    "when-shop-sync-ready": "Nach Shop-Sync",
+    "content-after-approval": "Content vorbereiten",
+    "after-14-days": "Nach 14 Tagen",
+    "after-30-days": "Nach 30 Tagen",
+    "expert-review": "Expertenprüfung"
+  }[value] || "Geplant";
 }
 
 function releaseRequirements(item) {
@@ -1579,7 +1717,7 @@ function releaseChecklist(item, requirements) {
         ${!entry.ready && entry.id === "sources" ? `<button data-price-check="${item.id}" type="button" ${entry.pending || state.priceChecking === item.id ? "disabled" : ""}>${entry.pending || state.priceChecking === item.id ? "Prüfung läuft" : "Jetzt prüfen"}</button>` : ""}
       </div>`).join("")}
     </div>
-    ${!channelRequirement.ready ? `<div class="release-channel-choice"><strong>Verkaufskanal auswählen</strong><div class="segment-control">${primaryChannels.map((channel) => channelButton(channel, item)).join("")}</div></div>` : ""}
+    ${!channelRequirement.ready ? `<div class="release-channel-choice"><strong>Verkaufskanal auswählen</strong><div class="segment-control">${channelCatalog().filter((channel) => channel.spotlight).map((channel) => channelButton(channel, item)).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -1812,21 +1950,28 @@ function ebayDraftCard(item) {
 }
 
 function channelPicker(item) {
-  const options = state.showAllChannels ? [...primaryChannels, ...futureChannels] : primaryChannels;
+  const catalog = channelCatalog();
+  const selectedChannel = catalog.find((channel) => channel.routeId === item.channel || channel.id === item.channel);
+  const spotlight = catalog.filter((channel) => channel.spotlight);
+  const compact = [selectedChannel, ...spotlight]
+    .filter(Boolean)
+    .filter((channel, index, entries) => entries.findIndex((entry) => entry.id === channel.id) === index)
+    .slice(0, 3);
+  const options = state.showAllChannels ? catalog : compact;
   const moreLabel = state.showAllChannels ? "Weniger anzeigen" : "Mehr anzeigen";
   const needsChannel = !item.channel || ["Pruefen", "Problemfall"].includes(item.channel);
   return `<section class="channel-picker ${needsChannel ? "attention-required" : ""}" aria-label="Plattformrouting">
     <div class="channel-picker-head"><span>Verkaufskanal</span><button data-toggle-channels type="button">${moreLabel}</button></div>
     <div class="segment-control">${options.map((channel) => channelButton(channel, item)).join("")}</div>
-    <p>${state.showAllChannels ? "Assistierte Kanäle bereiten Inhalt und Strategie vor; gesperrte Kanäle brauchen noch einen Connector." : "Wähle, wo dieser Artikel als nächstes verkauft oder weiterbearbeitet werden soll."}</p>
+    <p>${state.showAllChannels ? "RAMROD trennt fertige Entwürfe, assistierte Übergaben und geplante Connectoren klar voneinander." : "Der Hauptkanal kommt aus dem Verkaufsplan. Du kannst ihn hier bewusst ändern."}</p>
   </section>`;
 }
 
 function channelButton(channel, item) {
-  const disabled = channel.status === "noch nicht verfügbar";
-  const selected = item.channel === channel.id;
-  const attrs = disabled ? "disabled aria-disabled=\"true\"" : `data-route="${channel.id}" data-id="${item.id}"`;
-  return `<button class="${selected ? "selected" : ""} ${disabled ? "locked" : ""}" ${attrs} type="button"><strong>${escapeHtml(channel.label)}</strong><small>${escapeHtml(channel.status)}</small></button>`;
+  const disabled = channel.selectable === false;
+  const selected = item.channel === channel.routeId || item.channel === channel.id;
+  const attrs = disabled ? "disabled aria-disabled=\"true\"" : `data-route="${escapeHtml(channel.routeId)}" data-id="${item.id}"`;
+  return `<button class="${selected ? "selected" : ""} ${disabled ? "locked" : ""}" ${attrs} type="button"><strong>${escapeHtml(channel.label)}</strong><small>${escapeHtml(channel.statusLabel || channel.status || "Geplant")}</small></button>`;
 }
 
 function routingView() {
@@ -1854,7 +1999,7 @@ function sellView() {
   const campaigns = queues.campaigns;
   const ebayNeedsDraft = queues.ebay.filter((item) => !item.ebayDraft);
   const ebayDrafts = queues.ebay.filter((item) => item.ebayDraft);
-  const assistedItems = visibleItems().filter((item) => item.approval?.status === "approved" && ["Kleinanzeigen", "Vinted", "Facebook Marketplace", "Spezialforum", "Strongvision", "RAMROD Shop"].includes(item.channel));
+  const assistedItems = visibleItems().filter((item) => item.approval?.status === "approved" && !["eBay", "Whatnot", "Pruefen", "Problemfall"].includes(item.channel));
 
   return `<div class="sales-flow">
     ${salesOverview()}
@@ -1883,7 +2028,11 @@ function assistedSalesQueue(items) {
   return `<section class="assisted-sales">
     <div class="panel-heading"><div><p>Weitere Empfehlungen</p><h2>Assistierte Verkaufskanäle</h2></div><span class="queue-count">${items.length}</span></div>
     <p class="assisted-note">RAMROD bereitet Preis, Text, Fotos und Vorgehen vor. Die Veröffentlichung bleibt manuell, bis der jeweilige Connector verfügbar ist.</p>
-    <div class="assisted-sales-list">${items.map((item) => `<button class="assisted-sales-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(channelLabel(item.channel))} · Ziel ${euro(normalizeSalesStrategy(item).targetPrice || item.fair)}</small><em>${item.approval?.status === "approved" ? "Freigegeben" : "Freigabe offen"}</em></span><b aria-hidden="true">›</b></button>`).join("")}</div>
+    <div class="assisted-sales-list">${items.map((item) => {
+      const strategy = normalizeSalesStrategy(item);
+      const connector = strategy.channelPlan?.primary?.statusLabel || "Assistiert";
+      return `<button class="assisted-sales-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(channelLabel(item.channel))} · Ziel ${euro(strategy.targetPrice || item.fair)}</small><em>${escapeHtml(connector)} · Verkaufsplan freigegeben</em></span><b aria-hidden="true">›</b></button>`;
+    }).join("")}</div>
   </section>`;
 }
 
@@ -1926,7 +2075,10 @@ function salesStatus(item) {
   if (item.stage === "Verkauft") return { label: "Verkauft", note: "Der Verkauf wurde erkannt", tone: "sold" };
   if (item.channel === "eBay" && item.ebayDraft) return { label: "eBay-Entwurf", note: "Vorbereitet · noch nicht auf eBay veröffentlicht", tone: "prepared" };
   if (item.channel === "Whatnot" && item.approval?.status === "approved") return { label: "Whatnot-Kampagne", note: item.campaignSuggestion || "Für die passende Live-Show vorsortiert", tone: "prepared" };
-  if (["Kleinanzeigen", "Vinted", "Facebook Marketplace", "Spezialforum"].includes(item.channel) && item.approval?.status === "approved") return { label: `${channelLabel(item.channel)} freigegeben`, note: "Inhalt vorbereitet · Veröffentlichung derzeit assistiert", tone: "approved" };
+  if (!["eBay", "Whatnot", "Pruefen", "Problemfall", "Strongvision"].includes(item.channel) && item.approval?.status === "approved") {
+    const primary = normalizeSalesStrategy(item).channelPlan?.primary;
+    return { label: `${channelLabel(item.channel)} freigegeben`, note: `${primary?.statusLabel || "Inhalt vorbereitet"} · RAMROD zeigt den nächsten Übergabeschritt`, tone: "approved" };
+  }
   if (item.channel === "Strongvision" && item.approval?.status === "approved") return { label: "Shop-Übergabe", note: "Freigegeben · Shop-Connector folgt", tone: "prepared" };
   return { label: "Freigegeben", note: `Für ${channelLabel(item.channel)} bestätigt`, tone: "approved" };
 }
@@ -1934,10 +2086,12 @@ function salesStatus(item) {
 function salesTrackingRow(item) {
   const status = salesStatus(item);
   const progress = salesProgress(item);
+  const strategy = normalizeSalesStrategy(item);
+  const additionalChannels = (strategy.channelPlan?.parallel?.length || 0) + (strategy.channelPlan?.discovery?.length || 0);
   const steps = ["Analysiert", "Freigegeben", "Vorbereitet", "Verkauft", "Versand"];
   return `<button class="sales-tracking-row" data-select="${item.id}" data-view-after="inventory" type="button">
     <img src="${item.image}" alt="" />
-    <span class="sales-tracking-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(channelLabel(item.channel))} · Ziel ${euro(normalizeSalesStrategy(item).targetPrice || item.fair)}</small><em class="tracking-status ${status.tone}">${escapeHtml(status.label)}</em><small>${escapeHtml(status.note)}</small></span>
+    <span class="sales-tracking-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(channelLabel(item.channel))} · Ziel ${euro(strategy.targetPrice || item.fair)}${additionalChannels ? ` · +${additionalChannels} Reichweitenkanäle` : ""}</small><em class="tracking-status ${status.tone}">${escapeHtml(status.label)}</em><small>${escapeHtml(status.note)}</small></span>
     <span class="sales-timeline" aria-label="Fortschritt: ${escapeHtml(status.label)}">${steps.map((step, index) => `<i class="${progress >= index + 1 ? "done" : ""}"><b></b><small>${step}</small></i>`).join("")}</span>
     <span class="tracking-arrow" aria-hidden="true">›</span>
   </button>`;
@@ -2278,10 +2432,18 @@ function bindEvents() {
   document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", async () => {
     const index = state.items.findIndex((entry) => entry.id === button.dataset.id);
     if (index === -1) return;
+    const selectedChannel = button.dataset.route;
+    const previousStrategy = state.items[index].salesStrategy || {};
     state.items[index] = enrichWorkflow({
       ...state.items[index],
-      channel: button.dataset.route,
-      whatnotEligible: button.dataset.route === "Whatnot" ? true : false
+      channel: selectedChannel,
+      whatnotEligible: selectedChannel === "Whatnot",
+      salesStrategy: {
+        ...previousStrategy,
+        routeReason: `${channelLabel(selectedChannel)} wurde bewusst als Hauptkanal gewählt.`,
+        alternativeChannels: channelAlternatives(selectedChannel),
+        channelPlan: null
+      }
     });
     await persistItem(state.items[index], "Verkaufskanal");
     render();

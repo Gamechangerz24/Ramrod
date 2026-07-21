@@ -1,3 +1,5 @@
+import { channelPlanEntry } from "./channel-registry.mjs";
+
 export function reconcileSalesDecision(item, priceCheck) {
   const title = String(item?.title || "").trim();
   const categoryText = [title, item?.category, item?.franchise, item?.productType]
@@ -36,6 +38,13 @@ export function reconcileSalesDecision(item, priceCheck) {
   const isLocalGeneral = /staubsauger|kindersitz|kinderwagen|möbel|moebel|sofa|esstisch|haushaltsgerät|haushaltsgeraet|waschmaschine|kühlschrank|kuehlschrank|fahrrad|fitnessgerät|fitnessgeraet/.test(categoryText);
   const isEverydayBundle = /spielzeugpaket|kleiderpaket|haushaltspaket|kinderkleidung.?paket|haushaltsauflösung|haushaltsaufloesung/.test(categoryText);
   const isSpecialist = /modelleisenbahn|modellbahn|analogkamera|plattenspieler|verstärker|verstaerker|hi-?fi|vintage.?uhr/.test(categoryText);
+  const isSingleCard = isCard && /single|einzelkarte|graded|psa|bgs|cgc|karte\b/.test(categoryText) && !/display|booster box|sealed|versiegelt/.test(categoryText);
+  const isLego = /\blego\b|minifig|bricklink|klemmbaustein/.test(categoryText);
+  const isVinyl = /vinyl|schallplatte|lp\b|12.?inch|7.?inch|discogs/.test(categoryText);
+  const isMusicGear = /gitarre|bassgitarre|synthesizer|keyboard|mischpult|audio interface|effektpedal|gitarrenverstärker|gitarrenverstaerker/.test(categoryText);
+  const isVintageDecor = /vintage.?deko|mid.?century|antiquität|antiquitaet|designobjekt|keramik|porzellan/.test(categoryText);
+  const isNerdItem = isGame || isCard || isCollectible || isLego || /star wars|star trek|anime|manga|comic|retro/.test(categoryText);
+  const isVisualStory = isNerdItem || isFashion || isVintageDecor;
   const specialEdition = /collector|collectors|collector's|limited|special edition|steelbook|deluxe|first edition|erstauflage/.test(categoryText);
   const explicitCosmeticIssue = /kratzer|scratch|delle|dent|staub|dust|verschmutz|verfärb|verfaerb|abrieb/.test(conditionText);
   const explicitFunctionalIssue = /defekt|kaputt|broken|bruch|riss|funktioniert nicht|untested|ungetestet/.test(conditionText);
@@ -53,6 +62,21 @@ export function reconcileSalesDecision(item, priceCheck) {
   } else if (isEverydayBundle) {
     channel = "Facebook Marketplace";
     reasons.push("Lokale Pakete und gemischte Alltagsware lassen sich über Facebook Marketplace zielgruppennah als Abhol-Bundle anbieten.");
+  } else if (isSingleCard) {
+    channel = "Cardmarket";
+    reasons.push("Die Karte ist katalogisierbar und erreicht auf Cardmarket gezielt Käufer, die nach Set, Sprache und Zustand suchen.");
+  } else if (isLego && /set|minifig|figur|technic|creator|nummer|\b\d{4,6}\b/.test(categoryText)) {
+    channel = "BrickLink";
+    reasons.push("Identifizierte LEGO Sets, Minifiguren und Teile sind auf BrickLink präziser katalogisierbar als auf einem allgemeinen Marktplatz.");
+  } else if (isVinyl) {
+    channel = "Discogs";
+    reasons.push("Für Tonträger liefert Discogs das passendere Katalog- und Sammlerumfeld; Pressung und Medienzustand müssen belegt sein.");
+  } else if (isMusicGear) {
+    channel = "Reverb";
+    reasons.push("Musikinstrumente und Studioequipment erreichen auf Reverb Fachkäufer; Funktionstest und Seriennummer sind dafür entscheidend.");
+  } else if ((isVintageDecor || specialEdition) && fair >= 250) {
+    channel = "Catawiki";
+    reasons.push("Der erwartete Wert und die Besonderheit rechtfertigen eine kuratierte Auktion mit Expertenprüfung.");
   } else if (isSpecialist && fair >= 75) {
     channel = "Spezialforum";
     reasons.push("Der Artikel braucht Fachpublikum und erklärungsbedürftige Zustandsdetails; ein passendes Spezialforum kann qualifiziertere Käufer liefern.");
@@ -117,15 +141,29 @@ export function reconcileSalesDecision(item, priceCheck) {
     recommendedAction = "clean_and_sell";
   }
 
-  const alternativeChannels = {
-    eBay: ["RAMROD Shop", "Spezialforum"],
-    Whatnot: ["eBay", "RAMROD Shop"],
-    Kleinanzeigen: ["Facebook Marketplace"],
-    Vinted: ["Kleinanzeigen"],
-    "Facebook Marketplace": ["Kleinanzeigen"],
-    Spezialforum: ["eBay"],
-    Strongvision: ["eBay"]
-  }[channel] || [];
+  const channelPlan = buildChannelPlan({
+    channel,
+    fair,
+    low,
+    reasons,
+    isCard,
+    isLego,
+    isVinyl,
+    isMusicGear,
+    isLocalGeneral,
+    isEverydayBundle,
+    isFashion,
+    isNerdItem,
+    isVisualStory,
+    isVintageDecor,
+    specialEdition,
+    explicitFunctionalIssue
+  });
+  const alternativeChannels = uniqueStrings([
+    ...channelPlan.parallel.map((entry) => entry.name),
+    ...channelPlan.discovery.map((entry) => entry.name),
+    ...(channelPlan.fallback ? [channelPlan.fallback.name] : [])
+  ]);
   const salesFormat = channel === "Whatnot"
     ? "live_show"
     : ["Kleinanzeigen", "Facebook Marketplace"].includes(channel)
@@ -141,6 +179,7 @@ export function reconcileSalesDecision(item, priceCheck) {
     repairDecision,
     routeReason: reasons.join(" "),
     alternativeChannels,
+    channelPlan,
     salesFormat,
     targetPrice: fair,
     minimumAcceptablePrice: low,
@@ -167,6 +206,116 @@ export function reconcileSalesDecision(item, priceCheck) {
       marketConfidence,
       evidenceCount,
       liveMarket
+    }
+  };
+}
+
+function buildChannelPlan(context) {
+  const {
+    channel,
+    fair,
+    low,
+    reasons,
+    isCard,
+    isLego,
+    isVinyl,
+    isMusicGear,
+    isLocalGeneral,
+    isEverydayBundle,
+    isFashion,
+    isNerdItem,
+    isVisualStory,
+    isVintageDecor,
+    specialEdition,
+    explicitFunctionalIssue
+  } = context;
+
+  const primary = channelPlanEntry(channel, {
+    role: "primary",
+    roleLabel: channel === "Pruefen" ? "Vor Freigabe" : "Hauptverkauf",
+    score: channel === "Pruefen" ? 0 : 92,
+    targetPrice: fair,
+    activation: channel === "Pruefen" ? "blocked" : "after-approval",
+    reason: reasons.join(" ")
+  });
+  const parallel = [];
+  const discovery = [];
+
+  const addParallel = (name, roleLabel, score, reason, activation = "after-approval") => {
+    if (name === channel || parallel.some((entry) => entry.name === name)) return;
+    parallel.push(channelPlanEntry(name, { role: "parallel", roleLabel, score, targetPrice: fair, activation, reason }));
+  };
+  const addDiscovery = (name, roleLabel, score, reason) => {
+    if (name === channel || discovery.some((entry) => entry.name === name)) return;
+    discovery.push(channelPlanEntry(name, { role: "discovery", roleLabel, score, targetPrice: fair, activation: "content-after-approval", reason }));
+  };
+
+  if (channel !== "Pruefen") {
+    if (isCard) addParallel("Cardmarket", "Fachmarkt", 88, "Set, Sprache und Zustand lassen sich dort präzise vergleichen und anbieten.", "when-connector-ready");
+    if (isLego) addParallel("BrickLink", "Fachmarkt", 88, "Setnummer, Figuren und Teile treffen dort auf spezialisiertes Suchverhalten.", "when-connector-ready");
+    if (isVinyl) addParallel("Discogs", "Fachmarkt", 88, "Pressung und Medienzustand sind im Discogs-Katalog direkt vergleichbar.", "when-connector-ready");
+    if (isMusicGear) addParallel("Reverb", "Fachmarkt", 88, "Technische Käufer suchen dort gezielt nach Modell und Zustand.", "when-connector-ready");
+    if (isLocalGeneral || isEverydayBundle) {
+      addParallel(channel === "Kleinanzeigen" ? "Facebook Marketplace" : "Kleinanzeigen", "Lokale Reichweite", 82, "Ein zweiter lokaler Kanal erhöht die Abholreichweite ohne zusätzlichen Versand.", "manual-after-approval");
+    }
+    if (isFashion) {
+      addParallel("Kleinanzeigen", "Lokaler Zweitmarkt", 76, "Für Taschen, Schuhe und Mode kann ein lokales Angebot zusätzliche Nachfrage ohne Rückversandrisiko liefern.", "manual-after-approval");
+    }
+    if (isNerdItem) {
+      addParallel("RAMROD Shop", "Eigener Shop", 80, "Der eigene Katalog baut SEO, Kundendaten und Marge auf; Veröffentlichung startet erst mit aktivem Bestandssync.", "when-shop-sync-ready");
+    }
+    if ((isVintageDecor || specialEdition) && fair >= 120) {
+      addParallel("Catawiki", "Kuratierte Auktion", 78, "Für besondere höherwertige Stücke kann die Expertenauktion einen besseren Käuferkreis liefern.", "expert-review");
+    }
+    if (isVisualStory && fair >= 20) {
+      addDiscovery("Instagram", "Reichweite", 74, "Ein kurzer Fund-, Detail- oder Aufbereitungsbeitrag führt Interessenten zum Hauptangebot oder Shop.");
+    }
+  }
+
+  let fallback = null;
+  if (channel !== "Pruefen") {
+    if (explicitFunctionalIssue || fair < 8) {
+      fallback = channelPlanEntry("Liquidation Basket", {
+        role: "fallback",
+        roleLabel: "Schneller Abverkauf",
+        score: 55,
+        targetPrice: low,
+        activation: "after-30-days",
+        reason: "Wenn Einzelverkauf und Aufbereitung unwirtschaftlich bleiben, in ein transparentes Restposten-Bundle verschieben."
+      });
+    } else if (channel !== "eBay" && !isLocalGeneral && !isEverydayBundle) {
+      fallback = channelPlanEntry("eBay", {
+        role: "fallback",
+        roleLabel: "Breiter Zweitmarkt",
+        score: 68,
+        targetPrice: low,
+        activation: "after-14-days",
+        reason: "Wenn der Fach- oder Live-Kanal nicht verkauft, nach 14 Tagen als suchbares Festpreisangebot testen."
+      });
+    } else if (channel === "eBay" && isNerdItem && fair <= 25) {
+      fallback = channelPlanEntry("Whatnot", {
+        role: "fallback",
+        roleLabel: "Themen-Bundle",
+        score: 66,
+        targetPrice: low,
+        activation: "after-14-days",
+        reason: "Bleibt das Einzelangebot liegen, mit passenden Artikeln in eine thematische Live-Kampagne bündeln."
+      });
+    }
+  }
+
+  return {
+    version: 1,
+    primary,
+    parallel: parallel.sort((left, right) => right.score - left.score).slice(0, 3),
+    discovery: discovery.slice(0, 1),
+    fallback,
+    inventoryPolicy: {
+      sourceOfTruth: "RAMROD",
+      publishParallelOnlyWithSaleSync: true,
+      reserveOnSale: true,
+      delistOtherChannels: true,
+      note: "Ein Artikel bleibt ein Bestandseintrag. Parallele Transaktionsangebote werden erst mit zuverlässigem Verkaufssync aktiviert."
     }
   };
 }

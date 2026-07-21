@@ -246,7 +246,9 @@ Die Kanalmaschine benötigt mindestens:
 
 ## Empfohlene Build-Reihenfolge
 
-1. **Channel Registry und Channel Brain:** Kanäle, Regeln, Scores und nachvollziehbare Empfehlungen in RAMROD anzeigen.
+**Stand 21.07.2026:** Schritt 1 ist als erste produktive Version umgesetzt. Die zentrale Registry enthält 22 Transaktions-, Fach-, Reichweiten- und Rückfallkanäle. Der Preischeck erzeugt pro Artikel einen gespeicherten Plan aus Hauptverkauf, parallelen Kanälen, Content-Reichweite und Rückfallroute. Freigabe und Verkaufsübersicht zeigen Rolle, Connectorstatus, Zielpreis und Begründung. Die Scores sind zunächst regelbasiert; Gebühren, reale Verkaufswahrscheinlichkeit und Mandanten-Connectoren werden in der Lernschleife ergänzt.
+
+1. **Channel Registry und Channel Brain (Basis umgesetzt):** Kanäle, Regeln, Scores und nachvollziehbare Empfehlungen in RAMROD anzeigen.
 2. **Eigener Shop plus Google:** Shopify veröffentlichen, Merchant Feed erzeugen und Orders zurücksynchronisieren.
 3. **eBay Ende-zu-Ende:** Draft, Publish, Order, Reservierung, Delisting und Versand.
 4. **Whatnot über Shopify:** Artikel synchronisieren, Shows clustern, Skripte und Startpreise erzeugen.

@@ -83,7 +83,7 @@ function chooseSecondaryChannels(item, primary) {
   const secondary = new Set(["strongvision_web"]);
   const normalized = `${item.category} ${item.title} ${item.franchise}`.toLowerCase();
 
-  if (primary !== "creators_shop" && item.fair >= 20) secondary.add("creators_shop");
+  if (primary !== "ramrod_shop" && item.fair >= 20) secondary.add("ramrod_shop");
   if (primary !== "whatnot" && item.fair <= 15) secondary.add("whatnot");
   if (normalized.includes("console") || normalized.includes("bulk")) secondary.add("kleinanzeigen");
 
@@ -113,13 +113,15 @@ function approvalPolicy(item, primary) {
 }
 
 function buildListingAction(item, channel, role, approval) {
+  if (!channel) throw new Error(`Unknown channel while building plan for ${item.sku}.`);
+  const connectorReady = ["connected", "draft-ready"].includes(channel.status);
   return {
     channelId: channel.id,
     channelName: channel.name,
     role,
-    status: approval.needsHumanApproval || channel.requiresHumanApproval ? "needs_approval" : "ready_to_publish",
+    status: approval.needsHumanApproval || !connectorReady ? "needs_approval" : "ready_to_publish",
     automationLevel: channel.automationLevel,
-    connectorStatus: channel.connectorStatus,
+    connectorStatus: channel.status,
     payloadStatus: "draft_ready",
     delistSupported: channel.delistSupported,
     saleDetection: channel.saleDetection,

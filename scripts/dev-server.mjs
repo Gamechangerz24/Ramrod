@@ -13,6 +13,7 @@ import {
   itemRecognitionSchema,
   scoreItemRecognition
 } from "./lib/item-recognition.mjs";
+import { channelRegistryVersion, publicChannelRegistry } from "./lib/channel-registry.mjs";
 import { reconcileSalesDecision } from "./lib/sales-decision.mjs";
 
 loadDotEnv(".env.local");
@@ -90,6 +91,8 @@ const server = createServer(async (request, response) => {
         authRequired,
         supabaseUrl,
         supabaseAnonKey,
+        channelRegistryVersion,
+        channels: publicChannelRegistry(),
         providers: {
           openai: Boolean(process.env.OPENAI_API_KEY),
           localQwen: imageAnalysisMode === "worker",
