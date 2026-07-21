@@ -225,6 +225,7 @@ const state = {
   batchAnalyzing: false,
   batchProgress: null,
   batchSummary: null,
+  mobileReviewItem: "",
   mobileDetailsItem: "",
   priceChecking: "",
   ebayDrafting: "",
@@ -1461,13 +1462,45 @@ function reviewView(selected) {
     return `<div class="review-flow">${batchSummaryCard()}<section class="empty-state"><h2>Keine offenen Freigaben</h2><p>Alle analysierten Artikel sind bereits freigegeben oder warten in ihrer Verkaufsübersicht.</p><button class="primary-action inline-action" data-view="scan" type="button">${icon("ER")}Weitere Artikel scannen</button></section></div>`;
   }
 
-  return `<div class="review-flow">${batchSummaryCard()}<section class="inventory-layout review-workspace">
+  return `<div class="review-flow">${batchSummaryCard()}${mobileReviewAccordion(reviewItems)}<section class="inventory-layout review-workspace">
     <div class="inventory-list">
       <div class="panel-heading"><div><p>Freigaben</p><h2>Was braucht deine Entscheidung?</h2></div><span class="queue-count">${reviewItems.length} offen</span></div>
       ${reviewItems.map(itemRow).join("")}
     </div>
     ${active ? inspector(active) : ""}
   </section></div>`;
+}
+
+function mobileReviewAccordion(items) {
+  return `<section class="mobile-review-accordion" aria-label="Offene Freigaben">
+    <div class="mobile-review-heading"><div><p>Freigaben</p><h2>Alle offenen Artikel</h2></div><span>${items.length} offen</span></div>
+    <div class="mobile-review-list">
+      ${items.map((item) => {
+        const requirements = releaseRequirements(item);
+        const blockers = requirements.filter((entry) => !entry.ready);
+        const expanded = state.mobileReviewItem === item.id;
+        const strategy = normalizeSalesStrategy(item);
+        const blockerLabel = blockers.length
+          ? blockers.map((entry) => entry.label).join(" · ")
+          : "Bereit für deine Freigabe";
+        return `<article class="mobile-review-card ${expanded ? "expanded" : ""}">
+          <button class="mobile-review-toggle" data-toggle-review-item="${item.id}" type="button" aria-expanded="${expanded}">
+            <img src="${item.image}" alt="" />
+            <span class="mobile-review-title"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.sku)} · ${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice || item.fair)}</small><em>${escapeHtml(blockerLabel)}</em></span>
+            <span class="mobile-review-count"><strong>${blockers.length}</strong><small>${blockers.length === 1 ? "offen" : "offen"}</small><i aria-hidden="true">${expanded ? "−" : "+"}</i></span>
+          </button>
+          ${expanded ? `<div class="mobile-review-panel">
+            <div class="mobile-review-facts">
+              ${suggestion("Kategorie", escapeHtml(item.category || "Bitte prüfen"))}
+              ${suggestion("Zustand", escapeHtml(item.condition || "Bitte prüfen"))}
+              ${suggestion("Lieferumfang", escapeHtml(item.completeness || "Bitte prüfen"))}
+            </div>
+            ${salesStrategyCard(item)}
+          </div>` : ""}
+        </article>`;
+      }).join("")}
+    </div>
+  </section>`;
 }
 
 function batchSummaryCard() {
@@ -2386,6 +2419,12 @@ function bindEvents() {
   document.querySelectorAll("[data-select]").forEach((button) => button.addEventListener("click", () => {
     state.selected = button.dataset.select;
     if (button.dataset.viewAfter) state.view = button.dataset.viewAfter;
+    render();
+  }));
+  document.querySelectorAll("[data-toggle-review-item]").forEach((button) => button.addEventListener("click", () => {
+    const itemId = button.dataset.toggleReviewItem;
+    state.mobileReviewItem = state.mobileReviewItem === itemId ? "" : itemId;
+    state.selected = itemId;
     render();
   }));
   document.querySelector("[data-dismiss-batch-summary]")?.addEventListener("click", () => {
