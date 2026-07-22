@@ -184,6 +184,7 @@ const devMode = new URLSearchParams(window.location.search).get("dev") === "1";
 const authStorageKey = "ramrod-auth-session";
 const organizationStorageKey = "ramrod-active-organization";
 const initialOrganizationId = localStorage.getItem(organizationStorageKey) || "";
+const invitationToken = new URLSearchParams(window.location.search).get("invite") || "";
 
 window.addEventListener("error", (event) => {
   const message = event.error?.message || event.message || "Unbekannter Frontend-Fehler";
@@ -199,6 +200,20 @@ const state = {
   activeOrganizationId: initialOrganizationId,
   activeOrganization: null,
   platformAdmin: false,
+  membership: null,
+  permissions: [],
+  needsOnboarding: false,
+  pendingInvitations: [],
+  invitationToken,
+  invitationPreview: null,
+  invitationLoading: false,
+  onboardingMode: invitationToken ? "join" : "choice",
+  onboardingOverlay: false,
+  onboardingChannels: ["ebay", "whatnot", "kleinanzeigen"],
+  onboardingLoading: false,
+  team: null,
+  teamLoading: false,
+  inviteResultUrl: "",
   adminOverview: [],
   agentControl: { available: false, playbooks: [], runs: [], approvals: [], channelAccounts: [] },
   startingAgent: "",
@@ -215,6 +230,7 @@ const state = {
   recoverySession: loadRecoverySession(),
   authError: "",
   authNotice: "",
+  authMode: invitationToken ? "signup" : "login",
   authLoading: false,
   authResetLoading: false,
   showAllChannels: false,
@@ -259,6 +275,18 @@ function createEmptyDraft(boxId = "SV-001") {
 }
 
 function loadAuthSession() {
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  if (hash.get("access_token") && hash.get("type") !== "recovery") {
+    const callbackSession = {
+      access_token: hash.get("access_token"),
+      refresh_token: hash.get("refresh_token") || "",
+      expires_in: Number(hash.get("expires_in") || 0),
+      token_type: hash.get("token_type") || "bearer"
+    };
+    localStorage.setItem(authStorageKey, JSON.stringify(callbackSession));
+    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+    return callbackSession;
+  }
   try {
     return JSON.parse(localStorage.getItem(authStorageKey) || "null");
   } catch {
@@ -585,6 +613,13 @@ async function hydrateAppState() {
     runtimeChannelCatalog = Array.isArray(state.runtimeConfig.channels) && state.runtimeConfig.channels.length
       ? state.runtimeConfig.channels
       : fallbackChannelCatalog;
+    if (state.invitationToken && !state.invitationPreview) {
+      try {
+        state.invitationPreview = (await fetchPublicJson(`/api/invitations/${encodeURIComponent(state.invitationToken)}`)).invitation;
+      } catch (error) {
+        state.authNotice = error.message;
+      }
+    }
     state.booting = false;
     if (state.runtimeConfig.authRequired && !state.authSession?.access_token) {
       state.importStatus = "";
@@ -598,9 +633,21 @@ async function hydrateAppState() {
     state.activeOrganization = payload.activeOrganization || state.organizations[0] || null;
     state.activeOrganizationId = state.activeOrganization?.id || "";
     state.platformAdmin = Boolean(payload.platformAdmin);
+    state.membership = payload.membership || null;
+    state.permissions = payload.permissions || [];
+    state.needsOnboarding = Boolean(payload.needsOnboarding);
+    state.pendingInvitations = payload.invitations || [];
     state.adminOverview = payload.adminOverview || [];
     state.agentControl = payload.agentControl || state.agentControl;
     if (state.activeOrganizationId) localStorage.setItem(organizationStorageKey, state.activeOrganizationId);
+
+    if (state.needsOnboarding) {
+      boxes = [];
+      state.items = [];
+      state.importStatus = "";
+      render();
+      return;
+    }
 
     boxes = payload.boxes || [];
     if (!boxes.some((box) => box.id === state.draft.boxId)) {
@@ -846,7 +893,8 @@ function organizationRail() {
       ${state.organizations.map((entry) => `<button class="organization-button ${entry.id === organization.id ? "active" : ""}" data-organization="${entry.id}" type="button" title="${escapeHtml(entry.name)}" style="--organization-color:${escapeHtml(entry.brandColor || "#ff6a00")}">${entry.iconUrl ? `<img src="${escapeHtml(entry.iconUrl)}" alt="" />` : `<span>${escapeHtml(entry.shortCode || "OR")}</span>`}</button>`).join("")}
     </div>
     <div class="organization-rail-footer">
-      ${state.platformAdmin ? `<button class="organization-action" data-new-organization type="button" title="Kundenbereich anlegen">+</button><button class="organization-action ${state.view === "admin" ? "active" : ""}" data-view="admin" type="button" title="Plattform-Admin">AD</button>` : ""}
+      ${state.runtimeConfig.selfServiceSignup ? `<button class="organization-action" data-add-workspace type="button" title="Neuen Bereich anlegen">+</button>` : ""}
+      ${state.platformAdmin ? `<button class="organization-action ${state.view === "admin" ? "active" : ""}" data-view="admin" type="button" title="Plattform-Admin">AD</button>` : ""}
     </div>
   </aside>`;
 }
@@ -859,6 +907,10 @@ function roleLabel(role) {
     operator: "Operator",
     viewer: "Lesen"
   }[role] || "Operator";
+}
+
+function can(permission) {
+  return state.platformAdmin || state.permissions.includes(permission);
 }
 
 function channelCatalog() {
@@ -929,6 +981,12 @@ function render() {
     return;
   }
 
+  if (state.needsOnboarding) {
+    renderOnboarding();
+    bindOnboardingEvents();
+    return;
+  }
+
   const items = visibleItems();
   const selected = items.find((item) => item.id === state.selected) || items[0] || state.items.find((item) => item.id === state.selected) || state.items[0];
   const queues = getWorkQueues();
@@ -941,7 +999,7 @@ function render() {
     campaigns: queues.campaigns.length
   };
   const organization = activeOrganization();
-  const systemView = ["admin", "agents"].includes(state.view);
+  const systemView = ["admin", "agents", "settings"].includes(state.view);
 
   app.innerHTML = `
     ${organizationRail()}
@@ -956,6 +1014,7 @@ function render() {
         ${navButton("inventory", "DB", "Bestand")}
         ${navButton("archive", "AR", "Archiv")}
         ${navButton("agents", "AG", "Agenten")}
+        ${can("team:manage") ? navButton("settings", "TM", "Team & Kanäle") : ""}
       </nav>
       <nav class="mobile-nav-list" aria-label="Mobiler Arbeitsablauf">
         ${mobileNavButton("scan", "KA", "Scannen")}
@@ -987,20 +1046,134 @@ function render() {
 }
 
 function renderLogin() {
+  const signup = state.authMode === "signup" && state.runtimeConfig.selfServiceSignup;
+  const invite = state.invitationPreview;
   app.innerHTML = `<section class="auth-shell">
-    <div class="auth-card">
-      <img src="/app/assets/ramrod-icon-192.png" alt="" />
-      <div><p>RAMROD</p><h1>Anmelden</h1><span>Verkaufsmaschine</span></div>
+    <div class="auth-card ${invite ? "with-invite" : ""}">
+      <div class="auth-brand"><img src="/app/assets/ramrod-icon-192.png" alt="" /><div><p>RAMROD</p><h1>${signup ? "Konto anlegen" : "Anmelden"}</h1><span>${invite ? `${escapeHtml(invite.organization?.name || "Kundenbereich")} beitreten` : "Deine Verkaufsmaschine"}</span></div></div>
+      ${invite ? `<div class="invite-context"><span class="tenant-avatar" style="--organization-color:${escapeHtml(invite.organization?.brandColor || "#ff6a00")}">${escapeHtml(invite.organization?.shortCode || "OR")}</span><div><small>Du wurdest eingeladen</small><strong>${escapeHtml(invite.organization?.name || "Kundenbereich")}</strong><span>Als ${escapeHtml(roleLabel(invite.role))} · für ${escapeHtml(invite.emailHint)}</span></div></div>` : ""}
       <form id="auth-form">
+        ${signup ? `<label class="field"><span>Name</span><input name="name" type="text" autocomplete="name" required /></label>` : ""}
         <label class="field"><span>E-Mail</span><input id="auth-email" name="email" type="email" autocomplete="username" required /></label>
-        <label class="field"><span>Passwort</span><input id="auth-password" name="password" type="password" autocomplete="current-password" required /></label>
+        <label class="field"><span>Passwort</span><input id="auth-password" name="password" type="password" autocomplete="${signup ? "new-password" : "current-password"}" required minlength="8" /></label>
+        ${signup ? `<label class="field"><span>Passwort wiederholen</span><input name="confirmation" type="password" autocomplete="new-password" required minlength="8" /></label>` : ""}
         ${state.authNotice ? `<div class="auth-notice">${escapeHtml(state.authNotice)}</div>` : ""}
         ${state.authError ? `<div class="auth-error">${escapeHtml(state.authError)}</div>` : ""}
-        <button class="primary-action" type="submit" ${state.authLoading ? "disabled" : ""}>${icon("AU")}${state.authLoading ? "Anmeldung läuft..." : "Anmelden"}</button>
-        <button class="auth-link" id="forgot-password" type="button" ${state.authResetLoading ? "disabled" : ""}>${state.authResetLoading ? "Reset-Mail wird gesendet..." : "Passwort vergessen?"}</button>
+        <button class="primary-action" type="submit" ${state.authLoading ? "disabled" : ""}>${icon(signup ? "PL" : "AU")}${state.authLoading ? "Einen Moment..." : signup ? "Konto anlegen" : "Anmelden"}</button>
+        ${signup ? `<button class="auth-link" data-auth-mode="login" type="button">Ich habe bereits ein Konto</button>` : `${state.runtimeConfig.selfServiceSignup ? `<button class="auth-link" data-auth-mode="signup" type="button">Neues Konto anlegen</button>` : ""}<button class="auth-link" id="forgot-password" type="button" ${state.authResetLoading ? "disabled" : ""}>${state.authResetLoading ? "Reset-Mail wird gesendet..." : "Passwort vergessen?"}</button>`}
       </form>
     </div>
   </section>`;
+}
+
+function renderOnboarding() {
+  const join = state.onboardingMode === "join" && state.invitationPreview;
+  const create = state.onboardingMode === "create";
+  const channels = channelCatalog().filter((entry) => entry.selectable || ["instagram", "ramrod_shop"].includes(entry.id)).slice(0, 10);
+  app.innerHTML = `<section class="onboarding-shell">
+    <header class="onboarding-top"><div class="auth-brand"><img src="/app/assets/ramrod-icon-192.png" alt="" /><div><p>RAMROD</p><strong>Arbeitsbereich einrichten</strong></div></div><div>${state.onboardingOverlay ? `<button class="secondary-action" data-onboarding-cancel type="button">Abbrechen</button>` : ""}<button class="secondary-action" data-onboarding-signout type="button">Abmelden</button></div></header>
+    <main class="onboarding-card">
+      ${join ? onboardingJoinMarkup() : create ? `<form id="workspace-onboarding-form" class="onboarding-form">
+        <div class="onboarding-heading"><span>Neue Instanz</span><h1>Deine Verkaufsmaschine</h1><p>Bestand, Team, Kanäle und Zugangsdaten bleiben vollständig von anderen Kundenbereichen getrennt.</p></div>
+        <div class="onboarding-fields">
+          <label class="field"><span>Name des Bereichs</span><input name="name" type="text" placeholder="Zum Beispiel Retro Store Stuttgart" required minlength="2" /></label>
+          <label class="field"><span>Verkaufsart</span><select name="type"><option value="customer">Unternehmen oder Händler</option><option value="personal">Privater Verkauf</option></select></label>
+          <label class="field"><span>Kürzel</span><input name="shortCode" type="text" maxlength="3" placeholder="RS" /></label>
+        </div>
+        <fieldset class="channel-setup"><legend>Erste Verkaufskanäle</legend><p>Wähle, wo RAMROD deine Artikel vorbereiten soll. Konten werden erst im nächsten Schritt sicher verbunden.</p><div class="channel-choice-grid">${channels.map((channel) => `<label class="channel-choice"><input type="checkbox" name="channels" value="${escapeHtml(channel.id)}" ${state.onboardingChannels.includes(channel.id) ? "checked" : ""} /><span><strong>${escapeHtml(channel.name)}</strong><small>${escapeHtml(channel.statusLabel || "Einrichtung folgt")}</small></span></label>`).join("")}</div></fieldset>
+        ${state.authError ? `<div class="auth-error">${escapeHtml(state.authError)}</div>` : ""}
+        <div class="onboarding-actions"><button class="secondary-action" data-onboarding-choice type="button">Zurück</button><button class="primary-action" type="submit" ${state.onboardingLoading ? "disabled" : ""}>${icon("GO")}${state.onboardingLoading ? "Wird eingerichtet..." : "Bereich anlegen"}</button></div>
+      </form>` : onboardingChoiceMarkup()}
+    </main>
+  </section>`;
+}
+
+function onboardingChoiceMarkup() {
+  return `<div class="onboarding-heading"><span>Willkommen</span><h1>Wie möchtest du starten?</h1><p>Ein Konto kann zu mehreren Kundenbereichen gehören. Jeder Bereich hat getrennte Artikel, Teams und Verkaufskonten.</p></div>
+    <div class="onboarding-paths">
+      <button data-onboarding-create type="button"><span>${icon("PL")}</span><strong>Neuen Bereich anlegen</strong><small>Für dein Unternehmen, einen neuen Kunden oder private Verkäufe.</small></button>
+      <div class="onboarding-path muted"><span>${icon("TM")}</span><strong>Bestehendem Bereich beitreten</strong><small>Öffne dafür den persönlichen Einladungslink deines Admins.</small>${state.pendingInvitations.length ? `<em>${state.pendingInvitations.length} Einladung${state.pendingInvitations.length === 1 ? "" : "en"} für deine E-Mail vorhanden</em>` : ""}</div>
+    </div>`;
+}
+
+function onboardingJoinMarkup() {
+  const invite = state.invitationPreview;
+  return `<div class="onboarding-heading"><span>Einladung</span><h1>${escapeHtml(invite.organization?.name || "Kundenbereich")} beitreten</h1><p>Du erhältst die Rolle <strong>${escapeHtml(roleLabel(invite.role))}</strong>. Daten anderer Bereiche bleiben für dich unsichtbar.</p></div>
+    <div class="join-summary"><span class="organization-card-avatar" style="--organization-color:${escapeHtml(invite.organization?.brandColor || "#ff6a00")}">${escapeHtml(invite.organization?.shortCode || "OR")}</span><div><strong>${escapeHtml(invite.organization?.name || "Kundenbereich")}</strong><small>${escapeHtml(invite.emailHint)} · gültig bis ${escapeHtml(formatDate(invite.expiresAt))}</small></div></div>
+    ${state.authError ? `<div class="auth-error">${escapeHtml(state.authError)}</div>` : ""}
+    <div class="onboarding-actions"><button class="secondary-action" data-onboarding-create type="button">Eigenen Bereich anlegen</button><button class="primary-action" data-accept-invitation type="button" ${state.invitationLoading ? "disabled" : ""}>${icon("OK")}${state.invitationLoading ? "Wird verbunden..." : "Einladung annehmen"}</button></div>`;
+}
+
+function bindOnboardingEvents() {
+  document.querySelector("[data-onboarding-create]")?.addEventListener("click", () => {
+    state.onboardingMode = "create";
+    state.authError = "";
+    render();
+  });
+  document.querySelector("[data-onboarding-choice]")?.addEventListener("click", () => {
+    state.onboardingMode = state.invitationPreview ? "join" : "choice";
+    state.authError = "";
+    render();
+  });
+  document.querySelector("[data-onboarding-cancel]")?.addEventListener("click", () => {
+    state.needsOnboarding = false;
+    state.onboardingOverlay = false;
+    state.onboardingMode = "choice";
+    render();
+  });
+  document.querySelector("[data-onboarding-signout]")?.addEventListener("click", () => {
+    saveAuthSession(null);
+    state.needsOnboarding = false;
+    state.onboardingOverlay = false;
+    render();
+  });
+  document.querySelector("#workspace-onboarding-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.onboardingLoading) return;
+    const formData = new FormData(event.currentTarget);
+    state.onboardingLoading = true;
+    state.authError = "";
+    render();
+    try {
+      const result = await postJson("/api/onboarding/organizations", {
+        name: formData.get("name"),
+        type: formData.get("type"),
+        shortCode: formData.get("shortCode"),
+        channels: formData.getAll("channels")
+      });
+      state.activeOrganizationId = result.organization.id;
+      localStorage.setItem(organizationStorageKey, result.organization.id);
+      state.needsOnboarding = false;
+      state.onboardingOverlay = false;
+      state.view = "scan";
+      await hydrateAppState();
+    } catch (error) {
+      state.onboardingLoading = false;
+      state.authError = error.message;
+      render();
+    }
+  });
+  document.querySelector("[data-accept-invitation]")?.addEventListener("click", async () => {
+    if (state.invitationLoading || !state.invitationToken) return;
+    state.invitationLoading = true;
+    state.authError = "";
+    render();
+    try {
+      const result = await postJson(`/api/invitations/${encodeURIComponent(state.invitationToken)}/accept`, {});
+      state.activeOrganizationId = result.organization.id;
+      localStorage.setItem(organizationStorageKey, result.organization.id);
+      state.needsOnboarding = false;
+      state.invitationToken = "";
+      state.invitationPreview = null;
+      window.history.replaceState({}, document.title, window.location.pathname);
+      state.view = "today";
+      await hydrateAppState();
+    } catch (error) {
+      state.invitationLoading = false;
+      state.authError = error.message;
+      render();
+    }
+  });
 }
 
 function renderPasswordReset() {
@@ -1058,6 +1231,13 @@ function bindAuthEvents() {
   const form = document.querySelector("#auth-form");
   if (!form) return;
 
+  document.querySelectorAll("[data-auth-mode]").forEach((button) => button.addEventListener("click", () => {
+    state.authMode = button.dataset.authMode;
+    state.authError = "";
+    state.authNotice = "";
+    render();
+  }));
+
   document.querySelector("#forgot-password")?.addEventListener("click", async () => {
     if (state.authResetLoading) return;
     const email = String(form.elements.email.value || "").trim().toLowerCase();
@@ -1088,11 +1268,26 @@ function bindAuthEvents() {
     if (state.authLoading) return;
     const email = String(event.target.elements.email.value || "").trim();
     const password = String(event.target.elements.password.value || "");
+    const signup = state.authMode === "signup" && state.runtimeConfig.selfServiceSignup;
+    if (signup && password !== String(event.target.elements.confirmation.value || "")) {
+      state.authError = "Die beiden Passwörter stimmen nicht überein.";
+      render();
+      return;
+    }
     state.authLoading = true;
     state.authError = "";
     render();
     try {
-      const session = await signInWithPassword(email, password);
+      const session = signup
+        ? await signUpWithPassword(email, password, String(event.target.elements.name.value || "").trim())
+        : await signInWithPassword(email, password);
+      if (!session?.access_token) {
+        state.authLoading = false;
+        state.authMode = "login";
+        state.authNotice = "Konto angelegt. Bitte bestätige jetzt den Link in deiner E-Mail und melde dich danach an.";
+        render();
+        return;
+      }
       saveAuthSession(session);
       state.authLoading = false;
       await hydrateAppState();
@@ -1114,6 +1309,7 @@ function pageTitle() {
     inventory: "Bestand",
     archive: "Archiv",
     agents: "Agenten",
+    settings: "Team & Kanäle",
     admin: "Plattform-Admin"
   }[state.view] || "RAMROD";
 }
@@ -1156,6 +1352,7 @@ function viewMarkup(selected) {
   if (state.view === "archive") return archiveView();
   if (state.view === "agents") return agentsView();
   if (state.view === "admin") return adminView();
+  if (state.view === "settings") return settingsView();
   return inventoryView(selected);
 }
 
@@ -1543,7 +1740,7 @@ function batchSummaryCard() {
       ${suggestion("Freigegeben", approved.length)}
     </div>
     <div class="batch-summary-actions">
-      <button class="primary-action" data-bulk-approve type="button" ${ready.length ? "" : "disabled"}>${icon("OK")}${ready.length ? `${ready.length} sichere Artikel freigeben` : waiting.length ? "Marktchecks laufen" : "Keine Sammelfreigabe möglich"}</button>
+      <button class="primary-action" data-bulk-approve type="button" ${ready.length && can("sales:approve") ? "" : "disabled"}>${icon("OK")}${!can("sales:approve") ? "Admin-Freigabe erforderlich" : ready.length ? `${ready.length} sichere Artikel freigeben` : waiting.length ? "Marktchecks laufen" : "Keine Sammelfreigabe möglich"}</button>
       <button class="secondary-action" data-view="scan" type="button">${icon("KA")}Weitere scannen</button>
     </div>
   </section>`;
@@ -1640,9 +1837,11 @@ function salesStrategyCard(item) {
   const requirements = releaseRequirements(item);
   const blockers = requirements.filter((entry) => !entry.ready);
   const pricePending = ["queued", "running"].includes(item.automationJob?.status) && !item.priceCheck;
-  const disabled = !approved && (blockers.length > 0 || Boolean(state.approving));
+  const disabled = !approved && (blockers.length > 0 || Boolean(state.approving) || !can("sales:approve"));
   const approvalLabel = approved
     ? "Verkauf freigegeben"
+    : !can("sales:approve")
+      ? "Wartet auf Admin-Freigabe"
     : pricePending
       ? "Marktcheck läuft"
       : blockers[0]?.id === "sources"
@@ -2388,7 +2587,7 @@ function agentApprovalCard(approval) {
   const payload = approval.payload || {};
   return `<article class="approval-card">
     <div class="approval-copy"><span class="risk-badge ${escapeHtml(payload.riskLevel || "high")}">${escapeHtml(agentRiskLabel(payload.riskLevel))}</span><div><strong>${escapeHtml(approval.summary)}</strong><small>${escapeHtml(payload.channelId ? channelLabel(payload.channelId) : "Externe Aktion")} · gültig bis ${escapeHtml(formatAgentDate(approval.expires_at))}</small></div></div>
-    <div class="approval-actions"><button class="secondary-action reject" data-agent-decision="reject" data-approval-id="${approval.id}" type="button" ${state.decidingApproval ? "disabled" : ""}>Ablehnen</button><button class="primary-action" data-agent-decision="approve" data-approval-id="${approval.id}" type="button" ${state.decidingApproval ? "disabled" : ""}>${state.decidingApproval === approval.id ? "Wird gespeichert..." : "Freigeben"}</button></div>
+    ${can("sales:approve") ? `<div class="approval-actions"><button class="secondary-action reject" data-agent-decision="reject" data-approval-id="${approval.id}" type="button" ${state.decidingApproval ? "disabled" : ""}>Ablehnen</button><button class="primary-action" data-agent-decision="approve" data-approval-id="${approval.id}" type="button" ${state.decidingApproval ? "disabled" : ""}>${state.decidingApproval === approval.id ? "Wird gespeichert..." : "Freigeben"}</button></div>` : `<span class="status-pill waiting">Wartet auf Admin</span>`}
   </article>`;
 }
 
@@ -2508,6 +2707,64 @@ function adminView() {
   </section>`;
 }
 
+function settingsView() {
+  if (!can("team:manage")) return `<section class="empty-state"><h2>Keine Berechtigung</h2><p>Team und Verkaufskonten können nur Inhaber oder Admins verwalten.</p></section>`;
+  if (!state.team) return `<section class="settings-layout"><div class="settings-loading"><h2>Team wird geladen...</h2><p>Mitglieder, Einladungen und Verkaufskanäle werden sicher aus diesem Kundenbereich geladen.</p></div></section>`;
+  const organization = activeOrganization();
+  const members = state.team.members || [];
+  const invitations = state.team.invitations || [];
+  const connectedIds = new Set((state.team.channels || []).map((entry) => entry.channel_id));
+  const availableChannels = channelCatalog().filter((entry) => !connectedIds.has(entry.id) && (entry.selectable || ["instagram", "ramrod_shop"].includes(entry.id))).slice(0, 10);
+  return `<section class="settings-layout">
+    <header class="settings-intro"><div><p>${escapeHtml(organization.name)}</p><h2>Menschen und Verkaufskanäle</h2><span>Ein Login pro Person. Rechte gelten nur in diesem Kundenbereich.</span></div><div class="role-legend"><span><b>Inhaber</b> alles</span><span><b>Admin</b> Team + Freigaben</span><span><b>Operator</b> Artikel + KI</span><span><b>Leser</b> nur ansehen</span></div></header>
+    <div class="settings-columns">
+      <section class="team-section"><div class="panel-heading"><div><p>Zugänge</p><h2>${members.length} Teammitglieder</h2></div></div>
+        <div class="team-list">${members.map(teamMemberRow).join("") || `<p class="muted-copy">Noch keine Mitglieder.</p>`}</div>
+        <form id="invite-member-form" class="invite-form"><label class="field"><span>E-Mail einladen</span><input name="email" type="email" placeholder="name@firma.de" required /></label><label class="field"><span>Rolle</span><select name="role">${activeOrganization().role === "owner" || state.platformAdmin ? `<option value="admin">Admin</option>` : ""}<option value="operator" selected>Operator</option><option value="viewer">Leser</option></select></label><button class="primary-action" type="submit" ${state.teamLoading ? "disabled" : ""}>${icon("PL")}Link erzeugen</button></form>
+        ${state.inviteResultUrl ? `<div class="invite-link-result"><div><small>Persönlicher Einladungslink</small><strong>Einmal teilen, sieben Tage gültig</strong></div><input value="${escapeHtml(state.inviteResultUrl)}" readonly /><button class="secondary-action" data-copy-invite type="button">${icon("CP")}Kopieren</button></div>` : ""}
+        ${invitations.length ? `<details class="pending-invitations"><summary>${invitations.filter((entry) => entry.status === "pending").length} offene Einladungen</summary><div>${invitations.map(invitationRow).join("")}</div></details>` : ""}
+      </section>
+      <section class="channel-section"><div class="panel-heading"><div><p>Verkauf</p><h2>Kanäle dieses Bereichs</h2></div></div>
+        <div class="configured-channels">${(state.team.channels || []).map((account) => `<div class="configured-channel"><span>${icon(channelAbbreviation(account.channel_id))}</span><div><strong>${escapeHtml(channelLabel(account.channel_id))}</strong><small>${escapeHtml(agentAccountStatusLabel(account.status))}</small></div><em class="status-pill ${agentStatusTone(account.status)}">${escapeHtml(agentAccountStatusLabel(account.status))}</em></div>`).join("") || `<p class="muted-copy">Noch keine Kanäle ausgewählt.</p>`}</div>
+        ${availableChannels.length ? `<form id="channel-settings-form" class="channel-settings-form"><fieldset><legend>Weitere Kanäle vormerken</legend>${availableChannels.map((channel) => `<label><input type="checkbox" name="channels" value="${escapeHtml(channel.id)}" /><span><strong>${escapeHtml(channel.name)}</strong><small>${escapeHtml(channel.statusLabel || "Geplant")}</small></span></label>`).join("")}</fieldset><button class="secondary-action" type="submit">${icon("PL")}Auswahl hinzufügen</button></form>` : `<p class="settings-note">Alle verfügbaren Kanäle sind bereits ausgewählt.</p>`}
+      </section>
+    </div>
+  </section>`;
+}
+
+function teamMemberRow(member) {
+  const locked = member.role === "owner";
+  const actorCanAssignAdmin = activeOrganization().role === "owner" || state.platformAdmin;
+  return `<form class="team-member-row" data-membership-form="${escapeHtml(member.id)}"><span class="member-avatar">${escapeHtml(String(member.name || member.email || "M").slice(0, 2).toUpperCase())}</span><div><strong>${escapeHtml(member.name || member.email || "Mitglied")}</strong><small>${escapeHtml(member.email || "")}${member.user_id === state.authSession?.user?.id ? " · Du" : ""}</small></div><select name="role" ${locked ? "disabled" : ""}>${locked ? `<option value="owner">Inhaber</option>` : `${actorCanAssignAdmin ? `<option value="admin" ${member.role === "admin" ? "selected" : ""}>Admin</option>` : ""}<option value="operator" ${member.role === "operator" ? "selected" : ""}>Operator</option><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>Leser</option>`}</select><select name="status" ${locked ? "disabled" : ""}><option value="active" ${member.status === "active" ? "selected" : ""}>Aktiv</option><option value="suspended" ${member.status === "suspended" ? "selected" : ""}>Gesperrt</option></select>${locked ? `<span class="member-owner-label">Geschützt</span>` : `<button class="icon-button" type="submit" title="Änderung speichern">${icon("OK")}</button>`}</form>`;
+}
+
+function invitationRow(invitation) {
+  return `<div class="invitation-row"><div><strong>${escapeHtml(invitation.email)}</strong><small>${escapeHtml(roleLabel(invitation.role))} · ${escapeHtml(invitation.status === "pending" ? `bis ${formatDate(invitation.expires_at)}` : invitation.status)}</small></div>${invitation.status === "pending" ? `<button class="auth-link" data-invitation-action="renew" data-invitation-id="${escapeHtml(invitation.id)}" type="button">Neuer Link</button><button class="auth-link danger" data-invitation-action="revoke" data-invitation-id="${escapeHtml(invitation.id)}" type="button">Widerrufen</button>` : ""}</div>`;
+}
+
+function channelAbbreviation(channelId) {
+  return { ebay: "EB", whatnot: "WN", kleinanzeigen: "KA", instagram: "IG", ramrod_shop: "RS", vinted: "VI", facebook_marketplace: "FB" }[channelId] || String(channelId || "CH").slice(0, 2).toUpperCase();
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "offen";
+  return new Intl.DateTimeFormat("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+}
+
+async function loadTeamSettings() {
+  if (!can("team:manage") || state.teamLoading) return;
+  state.teamLoading = true;
+  try {
+    state.team = await fetchJson("/api/organization-team");
+  } catch (error) {
+    state.importStatus = `Team konnte nicht geladen werden: ${error.message}`;
+  } finally {
+    state.teamLoading = false;
+    render();
+  }
+}
+
 function organizationTypeLabel(type) {
   return {
     internal: "CREATORS intern",
@@ -2553,6 +2810,8 @@ function bindEvents() {
     state.batchSummary = null;
     state.batchProgress = null;
     state.draft = createEmptyDraft();
+    state.team = null;
+    state.inviteResultUrl = "";
     state.authError = "";
     state.importStatus = "";
     render();
@@ -2582,6 +2841,14 @@ function bindEvents() {
     state.view = "admin";
     render();
     requestAnimationFrame(() => document.querySelector("#organization-form input[name='name']")?.focus());
+  });
+
+  document.querySelector("[data-add-workspace]")?.addEventListener("click", () => {
+    state.onboardingOverlay = true;
+    state.needsOnboarding = true;
+    state.onboardingMode = "create";
+    state.authError = "";
+    render();
   });
 
   const organizationForm = document.querySelector("#organization-form");
@@ -2615,7 +2882,73 @@ function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => {
     state.view = button.dataset.view;
     render();
+    if (state.view === "settings" && !state.team) loadTeamSettings();
   }));
+
+  document.querySelector("#invite-member-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.teamLoading) return;
+    const formData = new FormData(event.currentTarget);
+    state.teamLoading = true;
+    state.importStatus = "Sicherer Einladungslink wird erzeugt...";
+    render();
+    try {
+      const result = await postJson("/api/organization-invitations", { email: formData.get("email"), role: formData.get("role") });
+      state.inviteResultUrl = result.inviteUrl;
+      state.team = null;
+      state.teamLoading = false;
+      await loadTeamSettings();
+      state.importStatus = "Einladung erstellt. Teile jetzt den persönlichen Link.";
+    } catch (error) {
+      state.teamLoading = false;
+      state.importStatus = `Einladung fehlgeschlagen: ${error.message}`;
+      render();
+    }
+  });
+  document.querySelector("[data-copy-invite]")?.addEventListener("click", async () => {
+    if (!state.inviteResultUrl) return;
+    await navigator.clipboard.writeText(state.inviteResultUrl);
+    state.importStatus = "Einladungslink kopiert.";
+    render();
+  });
+  document.querySelectorAll("[data-membership-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      await patchJson(`/api/organization-memberships/${event.currentTarget.dataset.membershipForm}`, { role: formData.get("role"), status: formData.get("status") });
+      state.team = null;
+      state.importStatus = "Berechtigung gespeichert.";
+      await loadTeamSettings();
+    } catch (error) {
+      state.importStatus = `Berechtigung konnte nicht gespeichert werden: ${error.message}`;
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-invitation-action]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const result = await postJson(`/api/organization-invitations/${button.dataset.invitationId}/${button.dataset.invitationAction}`, {});
+      if (result.inviteUrl) state.inviteResultUrl = result.inviteUrl;
+      state.team = null;
+      state.importStatus = button.dataset.invitationAction === "revoke" ? "Einladung widerrufen." : "Neuer Einladungslink erzeugt.";
+      await loadTeamSettings();
+    } catch (error) {
+      state.importStatus = `Einladung konnte nicht geändert werden: ${error.message}`;
+      render();
+    }
+  }));
+  document.querySelector("#channel-settings-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      await postJson("/api/organization-channels", { channels: formData.getAll("channels") });
+      state.team = null;
+      state.importStatus = "Verkaufskanäle vorgemerkt.";
+      await loadTeamSettings();
+    } catch (error) {
+      state.importStatus = `Kanäle konnten nicht gespeichert werden: ${error.message}`;
+      render();
+    }
+  });
   document.querySelectorAll("[data-start-agent]").forEach((button) => button.addEventListener("click", async () => {
     if (state.startingAgent) return;
     const agentType = button.dataset.startAgent;
@@ -3071,6 +3404,17 @@ async function postJson(url, payload) {
   return result;
 }
 
+async function patchJson(url, payload) {
+  const response = await apiFetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const result = await response.json();
+  if (!response.ok) throw apiError(response, result);
+  return result;
+}
+
 async function fetchPublicJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   const result = await response.json();
@@ -3105,6 +3449,22 @@ async function signInWithPassword(email, password) {
   });
   const result = await response.json();
   if (!response.ok || !result.access_token) throw new Error(result.msg || result.error_description || result.message || "Anmeldung fehlgeschlagen.");
+  return result;
+}
+
+async function signUpWithPassword(email, password, name) {
+  const config = state.runtimeConfig;
+  if (!config.supabaseUrl || !config.supabaseAnonKey) throw new Error("Supabase Auth ist nicht konfiguriert.");
+  const response = await fetch(`${config.supabaseUrl}/auth/v1/signup?redirect_to=${encodeURIComponent(`${window.location.origin}/${state.invitationToken ? `?invite=${state.invitationToken}` : ""}`)}`, {
+    method: "POST",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ email, password, data: { name } })
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.msg || result.error_description || result.message || "Konto konnte nicht angelegt werden.");
   return result;
 }
 

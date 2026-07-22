@@ -5035,6 +5035,602 @@ img {
   }
 }
 
+.auth-brand {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+}
+
+.auth-brand > img {
+  border-radius: 8px;
+  flex: 0 0 58px;
+  height: 58px;
+  width: 58px;
+}
+
+.auth-brand p,
+.auth-brand strong,
+.auth-brand span {
+  display: block;
+  margin: 0;
+}
+
+.auth-brand p {
+  color: var(--orange);
+  font-size: 11px;
+  font-weight: 1000;
+}
+
+.auth-brand strong {
+  font-size: 18px;
+}
+
+.auth-brand h1 {
+  margin: 3px 0 4px;
+}
+
+.auth-brand span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.invite-context,
+.join-summary {
+  align-items: center;
+  background: #f6f8fa;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--orange);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 48px minmax(0, 1fr);
+  padding: 12px;
+}
+
+.invite-context small,
+.invite-context strong,
+.invite-context span,
+.join-summary strong,
+.join-summary small {
+  display: block;
+}
+
+.invite-context small,
+.join-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.invite-context strong {
+  margin: 2px 0;
+}
+
+.onboarding-shell {
+  background: #f2f4f7;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+  width: 100%;
+}
+
+.onboarding-top {
+  align-items: center;
+  background: #0d0d0d;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  padding: 12px clamp(16px, 4vw, 54px);
+}
+
+.onboarding-top > div:last-child {
+  display: flex;
+  gap: 8px;
+}
+
+.onboarding-top .secondary-action {
+  background: #171717;
+  border-color: #343434;
+  color: #fff;
+}
+
+.onboarding-card {
+  align-self: start;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  justify-self: center;
+  margin: clamp(22px, 5vw, 60px) 16px;
+  max-width: 880px;
+  padding: clamp(20px, 4vw, 38px);
+  width: calc(100% - 32px);
+}
+
+.onboarding-heading {
+  max-width: 690px;
+}
+
+.onboarding-heading > span,
+.settings-intro p {
+  color: var(--orange);
+  display: block;
+  font-size: 12px;
+  font-weight: 1000;
+  margin: 0 0 7px;
+  text-transform: uppercase;
+}
+
+.onboarding-heading h1 {
+  font-size: clamp(30px, 5vw, 48px);
+  line-height: 1.02;
+  margin: 0;
+}
+
+.onboarding-heading p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 12px 0 0;
+}
+
+.onboarding-paths {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 28px;
+}
+
+.onboarding-paths > button,
+.onboarding-path {
+  background: #f8fafb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  display: grid;
+  gap: 8px;
+  min-height: 176px;
+  padding: 20px;
+  text-align: left;
+}
+
+.onboarding-paths > button:hover {
+  border-color: var(--orange);
+}
+
+.onboarding-paths strong {
+  font-size: 20px;
+}
+
+.onboarding-paths small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.onboarding-path em {
+  color: var(--orange);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.onboarding-form {
+  display: grid;
+  gap: 24px;
+}
+
+.onboarding-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.6fr) minmax(190px, 1fr) 100px;
+}
+
+.channel-setup,
+.channel-settings-form fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.channel-setup legend,
+.channel-settings-form legend {
+  font-size: 17px;
+  font-weight: 950;
+  padding: 0;
+}
+
+.channel-setup > p {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 5px 0 12px;
+}
+
+.channel-choice-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.channel-choice,
+.channel-settings-form label {
+  align-items: center;
+  background: #f8fafb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px;
+}
+
+.channel-choice input,
+.channel-settings-form input {
+  accent-color: var(--orange);
+  flex: 0 0 18px;
+  height: 18px;
+  width: 18px;
+}
+
+.channel-choice strong,
+.channel-choice small,
+.channel-settings-form label strong,
+.channel-settings-form label small {
+  display: block;
+}
+
+.channel-choice small,
+.channel-settings-form label small {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 26px;
+}
+
+.join-summary {
+  margin-top: 24px;
+}
+
+.settings-layout {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-intro,
+.team-section,
+.channel-section,
+.settings-loading {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  padding: 18px;
+}
+
+.settings-intro {
+  align-items: center;
+  display: flex;
+  gap: 22px;
+  justify-content: space-between;
+}
+
+.settings-intro h2 {
+  font-size: 28px;
+  margin: 0;
+}
+
+.settings-intro span {
+  color: var(--muted);
+  display: block;
+  margin-top: 5px;
+}
+
+.role-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.role-legend span {
+  background: #f3f5f7;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+  padding: 6px 8px;
+}
+
+.role-legend b {
+  color: var(--ink);
+}
+
+.settings-columns {
+  align-items: start;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.8fr);
+}
+
+.team-list,
+.configured-channels {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.team-member-row {
+  align-items: center;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 38px minmax(150px, 1fr) 120px 110px 42px;
+  padding: 8px;
+}
+
+.member-avatar {
+  align-items: center;
+  background: #111;
+  border-radius: 7px;
+  color: #fff;
+  display: flex;
+  font-size: 11px;
+  font-weight: 900;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.team-member-row strong,
+.team-member-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.team-member-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.team-member-row select {
+  min-width: 0;
+}
+
+.member-owner-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.invite-form {
+  align-items: end;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 9px;
+  grid-template-columns: minmax(180px, 1fr) 130px auto;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.invite-link-result {
+  align-items: center;
+  background: #fff4eb;
+  border: 1px solid #ffd0ad;
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: minmax(150px, auto) minmax(180px, 1fr) auto;
+  margin-top: 12px;
+  padding: 10px;
+}
+
+.invite-link-result small,
+.invite-link-result strong {
+  display: block;
+}
+
+.invite-link-result input {
+  min-width: 0;
+}
+
+.pending-invitations {
+  margin-top: 14px;
+}
+
+.pending-invitations summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.pending-invitations > div {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.invitation-row {
+  align-items: center;
+  background: #f8fafb;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding: 8px 10px;
+}
+
+.invitation-row strong,
+.invitation-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.invitation-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.auth-link.danger {
+  color: var(--red);
+}
+
+.configured-channel {
+  align-items: center;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  padding: 9px;
+}
+
+.configured-channel > span {
+  align-items: center;
+  background: #111;
+  border-radius: 7px;
+  color: var(--orange);
+  display: flex;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.configured-channel strong,
+.configured-channel small {
+  display: block;
+}
+
+.configured-channel small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.channel-settings-form {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.channel-settings-form fieldset {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .onboarding-fields,
+  .settings-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .team-member-row {
+    grid-template-columns: 38px minmax(0, 1fr) 42px;
+  }
+
+  .team-member-row select {
+    grid-column: 2;
+  }
+
+  .team-member-row .icon-button,
+  .member-owner-label {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .invite-form,
+  .invite-link-result {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .auth-shell {
+    padding: 12px;
+  }
+
+  .auth-card {
+    padding: 18px;
+  }
+
+  .onboarding-top {
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 12px;
+  }
+
+  .onboarding-top .auth-brand span,
+  .onboarding-top .auth-brand p {
+    display: none;
+  }
+
+  .onboarding-top .auth-brand > img {
+    height: 42px;
+    flex-basis: 42px;
+    width: 42px;
+  }
+
+  .onboarding-top .secondary-action {
+    min-height: 40px;
+    padding: 8px 10px;
+  }
+
+  .onboarding-card {
+    margin: 12px;
+    padding: 18px;
+    width: calc(100% - 24px);
+  }
+
+  .onboarding-paths,
+  .channel-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-paths > button,
+  .onboarding-path {
+    min-height: 130px;
+  }
+
+  .onboarding-actions,
+  .settings-intro {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .onboarding-actions button {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .role-legend {
+    justify-content: flex-start;
+  }
+
+  .team-section,
+  .channel-section,
+  .settings-intro {
+    padding: 12px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

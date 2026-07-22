@@ -26,6 +26,7 @@
     "agent:once": "node scripts/ramrod-agent-runner.mjs --once",
     "test:agent-control": "node scripts/test-agent-control.mjs",
     "test:agent-executor": "node scripts/test-agent-executor.mjs",
+    "test:workspace-access": "node scripts/test-workspace-access.mjs",
     "test:mcp": "node scripts/test-mcp-adapter.mjs"
   },
   "dependencies": {

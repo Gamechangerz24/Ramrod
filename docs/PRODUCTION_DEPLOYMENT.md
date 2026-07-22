@@ -29,11 +29,12 @@ RAMROD is deployed as an installable PWA. The VPS is the public control plane; S
 
 - `AUTH_REQUIRED=true` is mandatory on the public VPS.
 - Keep `SHOP_HOST_ROUTING=true` once `admin.ramrod.live` resolves and has a valid certificate. Then `ramrod.live` serves the shop and `admin.ramrod.live` serves the operator console; `/admin` remains the emergency path.
-- Production access is granted through `app_metadata.ramrod_role` (`operator` or `admin`); the email allowlist remains a fallback for initial setup.
+- `RAMROD_SELF_SERVICE_SIGNUP=true` enables account registration and creation of new, isolated customer areas. Existing areas still require a personal invitation.
+- Production access is granted through organization memberships. `app_metadata.ramrod_role` and the email allowlist remain bootstrap fallbacks for platform administrators only.
 - The Supabase service-role key exists only in the VPS environment and optional trusted workers.
 - Never commit `deploy/.env.production`.
 - Host nginx exposes ports 80 and 443. The container port is bound only to `127.0.0.1:3001`.
-- Use the initial email allowlist until organization and role management is implemented.
+- Keep `AUTH_ALLOWED_EMAILS` limited to emergency platform access. Normal users receive organization memberships through onboarding or invitation.
 - `RAMROD_WORKER_TOKEN` is a separate random secret shared only by the VPS and
   trusted workers. It authorizes the three worker-only control-plane actions and
   is not a user login token.

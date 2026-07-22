@@ -25,6 +25,16 @@ import {
   redactAgentPayload,
   telegramApprovalKeyboard
 } from "./lib/agent-control.mjs";
+import {
+  canAssignOrganizationRole,
+  createInvitationToken,
+  hashInvitationToken,
+  hasOrganizationPermission,
+  invitationExpiresAt,
+  normalizeInvitationEmail,
+  normalizeOrganizationRole,
+  permissionsForRole
+} from "./lib/workspace-access.mjs";
 
 loadDotEnv(".env.local");
 
@@ -58,6 +68,7 @@ const telegramAllowedChatIds = new Set(
     .filter(Boolean)
 );
 const authRequired = String(process.env.AUTH_REQUIRED || "false").toLowerCase() === "true";
+const selfServiceSignup = String(process.env.RAMROD_SELF_SERVICE_SIGNUP || "true").toLowerCase() !== "false";
 const shopPreviewMode = String(process.env.SHOP_PREVIEW_MODE || "false").toLowerCase() === "true";
 const shopHostRouting = String(process.env.SHOP_HOST_ROUTING || "false").toLowerCase() === "true";
 const shopOrganizationSlug = String(process.env.SHOP_ORGANIZATION_SLUG || "creators").trim().toLowerCase();
@@ -110,6 +121,7 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && pathname === "/api/config") {
       sendJson(response, 200, {
         authRequired,
+        selfServiceSignup,
         supabaseUrl,
         supabaseAnonKey,
         channelRegistryVersion,
@@ -141,6 +153,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    const invitationPreviewMatch = /^\/api\/invitations\/([A-Za-z0-9_-]{40,100})$/i.exec(pathname);
+    if (request.method === "GET" && invitationPreviewMatch) {
+      await handleInvitationPreview(response, invitationPreviewMatch[1]);
+      return;
+    }
+
     if (pathname.startsWith("/api/") && authRequired) {
       const auth = await authenticateRequest(request, pathname);
       if (!auth.ok) {
@@ -152,6 +170,44 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "GET" && pathname === "/api/app-state") {
       await handleAppState(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/onboarding/organizations") {
+      await handleSelfServiceOrganization(request, response);
+      return;
+    }
+
+    const invitationAcceptMatch = /^\/api\/invitations\/([A-Za-z0-9_-]{40,100})\/accept$/i.exec(pathname);
+    if (request.method === "POST" && invitationAcceptMatch) {
+      await handleAcceptInvitation(request, response, invitationAcceptMatch[1]);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/organization-team") {
+      await handleOrganizationTeam(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/organization-invitations") {
+      await handleCreateOrganizationInvitation(request, response);
+      return;
+    }
+
+    const invitationActionMatch = /^\/api\/organization-invitations\/([0-9a-f-]{36})\/(revoke|renew)$/i.exec(pathname);
+    if (request.method === "POST" && invitationActionMatch) {
+      await handleOrganizationInvitationAction(request, response, invitationActionMatch[1], invitationActionMatch[2]);
+      return;
+    }
+
+    const membershipUpdateMatch = /^\/api\/organization-memberships\/([0-9a-f-]{36})$/i.exec(pathname);
+    if (request.method === "PATCH" && membershipUpdateMatch) {
+      await handleUpdateOrganizationMembership(request, response, membershipUpdateMatch[1]);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/organization-channels") {
+      await handleSaveOrganizationChannels(request, response);
       return;
     }
 
@@ -309,7 +365,7 @@ async function authenticateRequest(request, pathname) {
     const email = String(user.email || "").toLowerCase();
     const ramrodRole = String(user.app_metadata?.ramrod_role || "").toLowerCase();
     const roleAllowed = ["admin", "operator"].includes(ramrodRole);
-    if (authAllowedEmails.size && !authAllowedEmails.has(email) && !roleAllowed) {
+    if (!selfServiceSignup && authAllowedEmails.size && !authAllowedEmails.has(email) && !roleAllowed) {
       return { ok: false, status: 403, error: "account_not_allowed", message: "Dieses Konto ist für RAMROD nicht freigeschaltet." };
     }
 
@@ -353,13 +409,17 @@ async function handleAppState(request, response) {
   try {
     const tenant = await resolveTenantContext(request);
     if (!tenant.activeOrganization) {
-      sendJson(response, 403, {
-        error: "organization_access_required",
-        message: "Dieses Konto ist noch keinem Kundenbereich zugeordnet.",
+      const invitations = await pendingInvitationsForEmail(request.ramrodUser?.email).catch(() => []);
+      sendJson(response, 200, {
+        needsOnboarding: true,
+        message: "Lege einen neuen Kundenbereich an oder nimm eine Einladung an.",
         persistence,
         organizations: tenant.organizations,
         activeOrganization: null,
         platformAdmin: tenant.platformAdmin,
+        membership: null,
+        permissions: tenant.platformAdmin ? permissionsForRole("owner", true) : [],
+        invitations,
         boxes: [],
         items: [],
         agentControl: unavailableAgentControl("Kein Kundenbereich ausgewählt.")
@@ -390,6 +450,9 @@ async function handleAppState(request, response) {
       organizations: tenant.organizations,
       activeOrganization: tenant.activeOrganization,
       platformAdmin: tenant.platformAdmin,
+      membership: tenant.activeMembership,
+      permissions: tenant.permissions,
+      needsOnboarding: false,
       adminOverview,
       tenantMode: tenant.tenantMode,
       boxes: boxes.map(mapDbBoxToUi),
@@ -686,11 +749,8 @@ async function handleCreateAgentRun(request, response) {
     sendJson(response, 503, { error: "agent_control_not_writable", message: "Die Agentensteuerung benötigt den Supabase Service Role Key." });
     return;
   }
-  const tenant = await resolveTenantContext(request);
-  if (!tenant.activeOrganization) {
-    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
-    return;
-  }
+  const tenant = await requireTenantPermission(request, response, "agents:run");
+  if (!tenant) return;
 
   let body;
   let plan;
@@ -769,11 +829,8 @@ async function handleCreateAgentRun(request, response) {
 }
 
 async function handleCreateApprovalRequest(request, response) {
-  const tenant = await resolveTenantContext(request);
-  if (!tenant.activeOrganization) {
-    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
-    return;
-  }
+  const tenant = await requireTenantPermission(request, response, "agents:run");
+  if (!tenant) return;
   const body = JSON.parse(await readRequestBody(request, 64 * 1024));
   if (!isUuid(body.runId) || !isUuid(body.stepId)) {
     sendJson(response, 400, { error: "invalid_approval_request", message: "runId und stepId müssen gültige UUIDs sein." });
@@ -842,11 +899,8 @@ async function handleApprovalDecision(request, response, approvalId, action) {
     sendJson(response, 400, { error: "invalid_approval", message: "Ungültige Freigabe-ID." });
     return;
   }
-  const tenant = await resolveTenantContext(request);
-  if (!tenant.activeOrganization) {
-    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
-    return;
-  }
+  const tenant = await requireTenantPermission(request, response, "sales:approve");
+  if (!tenant) return;
   const bodyText = await readRequestBody(request, 16 * 1024);
   const body = bodyText ? JSON.parse(bodyText) : {};
   try {
@@ -1018,10 +1072,21 @@ async function resolveTenantContext(request) {
     || accessibleOrganizations.find((entry) => entry.slug === "strongvision")
     || accessibleOrganizations[0]
     || null;
+  const activeMembership = activeOrganization
+    ? memberships.find((entry) => entry.organization_id === activeOrganization.id) || null
+    : null;
+  const activeRole = activeOrganization?.role || activeMembership?.role || (platformAdmin ? "platform_admin" : "viewer");
 
   return {
     organizations: accessibleOrganizations,
     activeOrganization,
+    activeMembership: activeOrganization ? {
+      organizationId: activeOrganization.id,
+      role: activeRole,
+      status: activeMembership?.status || "active",
+      supportAccess: Boolean(activeMembership?.support_access)
+    } : null,
+    permissions: permissionsForRole(activeRole, platformAdmin),
     platformAdmin,
     tenantMode
   };
@@ -1089,53 +1154,350 @@ async function handleCreateOrganization(request, response) {
     return;
   }
 
-  const body = JSON.parse(await readRequestBody(request, 64 * 1024));
-  const name = String(body.name || "").trim();
-  const organizationType = ["internal", "customer", "personal", "demo"].includes(body.type) ? body.type : "customer";
-  const slug = slugify(String(body.slug || name));
-  if (name.length < 2 || !slug) {
-    sendJson(response, 400, { error: "invalid_organization", message: "Bitte einen gültigen Namen angeben." });
-    return;
-  }
-
   try {
-    const shortCode = String(body.shortCode || name.replace(/[^A-Za-z0-9]/g, "").slice(0, 2) || "OR").toUpperCase();
-    const rows = await supabaseInsert("/customers", {
-      name,
-      slug,
-      organization_type: organizationType,
-      short_code: shortCode,
-      brand_color: String(body.brandColor || "#ff6a00"),
-      seller_mode: organizationType === "personal" ? "private" : "business",
-      notes: String(body.notes || "Über RAMROD angelegter Kundenbereich")
-    });
-    const organization = rows[0];
-    if (!organization) throw new Error("Organisation wurde nicht zurückgegeben.");
-
-    const defaultBoxCode = `${shortCode}-001`;
-    const sideEffects = [
-      supabaseInsert("/boxes", {
-        customer_id: organization.id,
-        code: defaultBoxCode,
-        label: "Erste Erfassung",
-        location: "Noch nicht zugeordnet",
-        status: "intake"
-      })
-    ];
-    if (request.ramrodUser?.id && !request.ramrodUser?.service) {
-      sideEffects.push(supabaseUpsert("/organization_memberships?on_conflict=organization_id,user_id", {
-        organization_id: organization.id,
-        user_id: request.ramrodUser.id,
-        role: "owner",
-        status: "active"
-      }));
-    }
-    await Promise.allSettled(sideEffects);
-
+    const body = JSON.parse(await readRequestBody(request, 64 * 1024));
+    const organization = await createOrganizationWorkspace({ body, user: request.ramrodUser, allowPrivilegedTypes: true });
     sendJson(response, 201, { organization: mapOrganizationRow(organization) });
   } catch (error) {
-    sendJson(response, 500, { error: "organization_create_failed", message: redactSecret(error.message) });
+    sendJson(response, error.status || 500, { error: "organization_create_failed", message: redactSecret(error.message) });
   }
+}
+
+async function handleSelfServiceOrganization(request, response) {
+  if (!selfServiceSignup) {
+    sendJson(response, 403, { error: "self_service_disabled", message: "Neue Kundenbereiche werden derzeit nur auf Einladung angelegt." });
+    return;
+  }
+  if (!isUuid(request.ramrodUser?.id)) {
+    sendJson(response, 401, { error: "authentication_required", message: "Bitte zuerst ein Konto anlegen oder anmelden." });
+    return;
+  }
+  try {
+    const body = JSON.parse(await readRequestBody(request, 128 * 1024));
+    const organization = await createOrganizationWorkspace({ body, user: request.ramrodUser, allowPrivilegedTypes: false });
+    sendJson(response, 201, { organization: mapOrganizationRow(organization) });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "workspace_onboarding_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function createOrganizationWorkspace({ body, user, allowPrivilegedTypes = false }) {
+  const name = String(body.name || "").trim();
+  const allowedTypes = allowPrivilegedTypes ? ["internal", "customer", "personal", "demo"] : ["customer", "personal"];
+  const organizationType = allowedTypes.includes(body.type) ? body.type : "customer";
+  const slugBase = slugify(String(body.slug || name));
+  if (name.length < 2 || !slugBase) throw httpError(400, "Bitte einen gültigen Namen angeben.");
+  if (!allowPrivilegedTypes && isUuid(user?.id)) {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const recent = await supabaseSelect(`/customers?select=id&created_by=eq.${encodeURIComponent(user.id)}&created_at=gte.${encodeURIComponent(since)}&limit=4`);
+    if (recent.length >= 3) throw httpError(429, "Du hast heute bereits mehrere Bereiche angelegt. Bitte wende dich an den RAMROD-Support.");
+  }
+
+  const duplicate = await supabaseSelect(`/customers?select=id&slug=eq.${encodeURIComponent(slugBase)}&limit=1`);
+  const slug = duplicate.length ? `${slugBase}-${randomUUID().slice(0, 6)}` : slugBase;
+  const shortCode = String(body.shortCode || name.replace(/[^A-Za-z0-9]/g, "").slice(0, 2) || "OR").toUpperCase().slice(0, 3);
+  const rows = await supabaseInsert("/customers", {
+    name,
+    slug,
+    organization_type: organizationType,
+    short_code: shortCode,
+    brand_color: String(body.brandColor || "#ff6a00"),
+    seller_mode: organizationType === "personal" ? "private" : "business",
+    onboarding_status: "ready",
+    onboarding_completed_at: new Date().toISOString(),
+    created_by: isUuid(user?.id) ? user.id : null,
+    notes: String(body.notes || "Über RAMROD angelegter Kundenbereich")
+  });
+  const organization = rows[0];
+  if (!organization) throw new Error("Organisation wurde nicht zurückgegeben.");
+
+  const sideEffects = [supabaseInsert("/boxes", {
+    customer_id: organization.id,
+    code: `${shortCode}-001`,
+    label: "Erste Erfassung",
+    location: "Noch nicht zugeordnet",
+    status: "intake"
+  })];
+  if (isUuid(user?.id)) {
+    sideEffects.push(supabaseUpsert("/organization_memberships?on_conflict=organization_id,user_id", {
+      organization_id: organization.id,
+      user_id: user.id,
+      role: "owner",
+      status: "active"
+    }));
+  }
+  const channelIds = cleanOnboardingChannelIds(body.channels);
+  if (channelIds.length) {
+    sideEffects.push(supabaseInsert("/organization_channel_accounts", channelIds.map((channelId) => {
+      const channel = publicChannelRegistry().find((entry) => entry.id === channelId);
+      return {
+        organization_id: organization.id,
+        channel_id: channelId,
+        display_name: channel?.name || channelId,
+        auth_mode: channelId === "ebay" ? "oauth" : "manual",
+        status: "planned",
+        metadata: { selectedDuringOnboarding: true }
+      };
+    })));
+  }
+  const results = await Promise.allSettled(sideEffects);
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) throw new Error(`Kundenbereich angelegt, Einrichtung aber unvollständig: ${failed.reason?.message || "Unbekannter Fehler"}`);
+  return organization;
+}
+
+async function handleInvitationPreview(response, token) {
+  try {
+    const invitation = await invitationByToken(token);
+    if (!invitation || invitation.status !== "pending") {
+      sendJson(response, 404, { error: "invitation_not_found", message: "Diese Einladung ist nicht mehr gültig." });
+      return;
+    }
+    if (new Date(invitation.expires_at).getTime() <= Date.now()) {
+      await supabaseUpdate(`/organization_invitations?id=eq.${encodeURIComponent(invitation.id)}`, { status: "expired" }).catch(() => null);
+      sendJson(response, 410, { error: "invitation_expired", message: "Diese Einladung ist abgelaufen. Bitte den Admin um einen neuen Link." });
+      return;
+    }
+    const organizations = await supabaseSelect(`/customers?select=id,name,slug,short_code,brand_color,organization_type&id=eq.${encodeURIComponent(invitation.organization_id)}&limit=1`);
+    sendJson(response, 200, {
+      invitation: {
+        organization: organizations[0] ? mapOrganizationRow(organizations[0]) : null,
+        role: invitation.role,
+        emailHint: maskEmail(invitation.email),
+        expiresAt: invitation.expires_at
+      }
+    });
+  } catch (error) {
+    sendJson(response, 503, { error: "invitation_unavailable", message: redactSecret(error.message) });
+  }
+}
+
+async function handleAcceptInvitation(request, response, token) {
+  try {
+    const invitation = await invitationByToken(token);
+    const email = normalizeInvitationEmail(request.ramrodUser?.email);
+    if (!invitation || invitation.status !== "pending") throw httpError(404, "Diese Einladung ist nicht mehr gültig.");
+    if (new Date(invitation.expires_at).getTime() <= Date.now()) {
+      await supabaseUpdate(`/organization_invitations?id=eq.${encodeURIComponent(invitation.id)}`, { status: "expired" });
+      throw httpError(410, "Diese Einladung ist abgelaufen.");
+    }
+    if (!email || email !== invitation.email) throw httpError(403, `Diese Einladung wurde für ${maskEmail(invitation.email)} erstellt.`);
+    const membershipRows = await supabaseUpsert("/organization_memberships?on_conflict=organization_id,user_id", {
+      organization_id: invitation.organization_id,
+      user_id: request.ramrodUser.id,
+      role: invitation.role,
+      status: "active"
+    });
+    await supabaseUpdate(`/organization_invitations?id=eq.${encodeURIComponent(invitation.id)}&status=eq.pending`, {
+      status: "accepted",
+      accepted_by: request.ramrodUser.id,
+      accepted_at: new Date().toISOString()
+    });
+    const organizations = await supabaseSelect(`/customers?select=*&id=eq.${encodeURIComponent(invitation.organization_id)}&limit=1`);
+    sendJson(response, 200, { organization: mapOrganizationRow(organizations[0]), membership: membershipRows[0] });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "invitation_accept_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleOrganizationTeam(request, response) {
+  const tenant = await requireTenantPermission(request, response, "team:manage");
+  if (!tenant) return;
+  try {
+    const organizationId = tenant.activeOrganization.id;
+    const [memberships, invitations, authUsers] = await Promise.all([
+      supabaseSelect(`/organization_memberships?select=id,organization_id,user_id,role,status,support_access,created_at,updated_at&organization_id=eq.${encodeURIComponent(organizationId)}&order=created_at.asc`),
+      supabaseSelect(`/organization_invitations?select=id,email,role,status,expires_at,created_at,updated_at&organization_id=eq.${encodeURIComponent(organizationId)}&order=created_at.desc&limit=100`),
+      supabaseAdminUsers().catch(() => [])
+    ]);
+    const userById = new Map(authUsers.map((user) => [user.id, user]));
+    sendJson(response, 200, {
+      members: memberships.map((entry) => ({
+        ...entry,
+        email: userById.get(entry.user_id)?.email || (entry.user_id === request.ramrodUser?.id ? request.ramrodUser.email : "Mitglied"),
+        name: userById.get(entry.user_id)?.user_metadata?.name || userById.get(entry.user_id)?.user_metadata?.full_name || ""
+      })),
+      invitations,
+      channels: await organizationChannelAccounts(organizationId),
+      permissions: tenant.permissions
+    });
+  } catch (error) {
+    sendJson(response, 500, { error: "team_load_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleCreateOrganizationInvitation(request, response) {
+  const tenant = await requireTenantPermission(request, response, "team:manage");
+  if (!tenant) return;
+  try {
+    const body = JSON.parse(await readRequestBody(request, 64 * 1024));
+    const email = normalizeInvitationEmail(body.email);
+    const role = normalizeOrganizationRole(body.role, "operator");
+    if (!/^\S+@\S+\.\S+$/.test(email)) throw httpError(400, "Bitte eine gültige E-Mail-Adresse angeben.");
+    if (!canAssignOrganizationRole(tenant.activeOrganization.role, role, tenant.platformAdmin)) {
+      throw httpError(403, "Diese Rolle darfst du nicht vergeben.");
+    }
+    const token = createInvitationToken();
+    const tokenHash = hashInvitationToken(token);
+    const organizationId = tenant.activeOrganization.id;
+    const existing = await supabaseSelect(`/organization_invitations?select=id&organization_id=eq.${encodeURIComponent(organizationId)}&email=eq.${encodeURIComponent(email)}&status=eq.pending&limit=1`);
+    const payload = {
+      organization_id: organizationId,
+      email,
+      role,
+      token_hash: tokenHash,
+      status: "pending",
+      invited_by: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
+      expires_at: invitationExpiresAt(body.expiresInDays || 7),
+      accepted_by: null,
+      accepted_at: null
+    };
+    const rows = existing[0]
+      ? await supabaseUpdate(`/organization_invitations?id=eq.${encodeURIComponent(existing[0].id)}`, payload)
+      : await supabaseInsert("/organization_invitations", payload);
+    sendJson(response, 201, {
+      invitation: { ...rows[0], token_hash: undefined },
+      inviteUrl: `${requestBaseUrl(request)}/?invite=${encodeURIComponent(token)}`
+    });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "invitation_create_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleOrganizationInvitationAction(request, response, invitationId, action) {
+  const tenant = await requireTenantPermission(request, response, "team:manage");
+  if (!tenant) return;
+  try {
+    const organizationId = tenant.activeOrganization.id;
+    const rows = await supabaseSelect(`/organization_invitations?select=*&id=eq.${encodeURIComponent(invitationId)}&organization_id=eq.${encodeURIComponent(organizationId)}&limit=1`);
+    if (!rows[0]) throw httpError(404, "Einladung nicht gefunden.");
+    if (action === "revoke") {
+      const updated = await supabaseUpdate(`/organization_invitations?id=eq.${encodeURIComponent(invitationId)}`, { status: "revoked" });
+      sendJson(response, 200, { invitation: publicInvitation(updated[0]) });
+      return;
+    }
+    const token = createInvitationToken();
+    const updated = await supabaseUpdate(`/organization_invitations?id=eq.${encodeURIComponent(invitationId)}`, {
+      token_hash: hashInvitationToken(token),
+      status: "pending",
+      expires_at: invitationExpiresAt(7),
+      accepted_by: null,
+      accepted_at: null
+    });
+    sendJson(response, 200, { invitation: publicInvitation(updated[0]), inviteUrl: `${requestBaseUrl(request)}/?invite=${encodeURIComponent(token)}` });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "invitation_update_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleUpdateOrganizationMembership(request, response, membershipId) {
+  const tenant = await requireTenantPermission(request, response, "team:manage");
+  if (!tenant) return;
+  try {
+    const body = JSON.parse(await readRequestBody(request, 32 * 1024));
+    const organizationId = tenant.activeOrganization.id;
+    const rows = await supabaseSelect(`/organization_memberships?select=*&id=eq.${encodeURIComponent(membershipId)}&organization_id=eq.${encodeURIComponent(organizationId)}&limit=1`);
+    const target = rows[0];
+    if (!target) throw httpError(404, "Mitglied nicht gefunden.");
+    if (target.role === "owner") throw httpError(403, "Die Inhaberrolle kann hier nicht geändert oder gesperrt werden.");
+    const role = body.role ? normalizeOrganizationRole(body.role, "") : target.role;
+    const status = ["active", "suspended"].includes(body.status) ? body.status : target.status;
+    if (!canAssignOrganizationRole(tenant.activeOrganization.role, role, tenant.platformAdmin)) throw httpError(403, "Diese Rolle darfst du nicht vergeben.");
+    if (target.user_id === request.ramrodUser?.id && status === "suspended") throw httpError(400, "Du kannst deinen eigenen Zugang nicht sperren.");
+    const updated = await supabaseUpdate(`/organization_memberships?id=eq.${encodeURIComponent(membershipId)}`, { role, status });
+    sendJson(response, 200, { membership: updated[0] });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "membership_update_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleSaveOrganizationChannels(request, response) {
+  const tenant = await requireTenantPermission(request, response, "channels:manage");
+  if (!tenant) return;
+  try {
+    const body = JSON.parse(await readRequestBody(request, 64 * 1024));
+    const channelIds = cleanOnboardingChannelIds(body.channels);
+    const existing = await organizationChannelAccounts(tenant.activeOrganization.id);
+    const existingIds = new Set(existing.map((entry) => entry.channel_id));
+    const createIds = channelIds.filter((id) => !existingIds.has(id));
+    if (createIds.length) {
+      await supabaseInsert("/organization_channel_accounts", createIds.map((channelId) => {
+        const channel = publicChannelRegistry().find((entry) => entry.id === channelId);
+        return {
+          organization_id: tenant.activeOrganization.id,
+          channel_id: channelId,
+          display_name: channel?.name || channelId,
+          auth_mode: channelId === "ebay" ? "oauth" : "manual",
+          status: "planned",
+          metadata: { selectedInSettings: true }
+        };
+      }));
+    }
+    sendJson(response, 200, { channels: await organizationChannelAccounts(tenant.activeOrganization.id) });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "channel_save_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function requireTenantPermission(request, response, permission) {
+  const tenant = await resolveTenantContext(request);
+  if (!tenant.activeOrganization) {
+    sendJson(response, 403, { error: "organization_access_required", message: "Kein Kundenbereich ausgewählt." });
+    return null;
+  }
+  if (!hasOrganizationPermission(tenant.activeOrganization.role, permission, tenant.platformAdmin)) {
+    sendJson(response, 403, { error: "organization_permission_required", message: "Für diese Aktion fehlen dir die Rechte." });
+    return null;
+  }
+  return tenant;
+}
+
+async function pendingInvitationsForEmail(email) {
+  const normalized = normalizeInvitationEmail(email);
+  if (!normalized) return [];
+  const rows = await supabaseSelect(`/organization_invitations?select=id,organization_id,email,role,status,expires_at,created_at&email=eq.${encodeURIComponent(normalized)}&status=eq.pending&expires_at=gt.${encodeURIComponent(new Date().toISOString())}&order=created_at.desc`);
+  if (!rows.length) return [];
+  const organizations = await selectOrganizations();
+  const organizationById = new Map(organizations.map((entry) => [entry.id, entry]));
+  return rows.map((entry) => ({ ...entry, email: undefined, organization: organizationById.get(entry.organization_id) || null }));
+}
+
+async function invitationByToken(token) {
+  const rows = await supabaseSelect(`/organization_invitations?select=*&token_hash=eq.${encodeURIComponent(hashInvitationToken(token))}&limit=1`);
+  return rows[0] || null;
+}
+
+async function organizationChannelAccounts(organizationId) {
+  return supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${encodeURIComponent(organizationId)}&order=created_at.asc`);
+}
+
+function cleanOnboardingChannelIds(channels) {
+  const known = new Set(publicChannelRegistry().map((entry) => entry.id));
+  return [...new Set((Array.isArray(channels) ? channels : []).map((entry) => String(entry || "").trim()).filter((entry) => known.has(entry)))].slice(0, 12);
+}
+
+function requestBaseUrl(request) {
+  const protocol = String(request.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
+  const hostName = String(request.headers["x-forwarded-host"] || request.headers.host || `localhost:${port}`).split(",")[0].trim();
+  return `${protocol}://${hostName}`;
+}
+
+function maskEmail(email) {
+  const [local, domain] = normalizeInvitationEmail(email).split("@");
+  if (!domain) return "die eingeladene Adresse";
+  return `${local.slice(0, 2)}${"*".repeat(Math.max(2, Math.min(6, local.length - 2)))}@${domain}`;
+}
+
+function publicInvitation(invitation) {
+  if (!invitation) return null;
+  const { token_hash: _tokenHash, ...safeInvitation } = invitation;
+  return safeInvitation;
+}
+
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 async function handleShopCatalog(_request, response) {
@@ -1337,6 +1699,8 @@ async function handleCreateJob(request, response) {
     });
     return;
   }
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
 
   const body = JSON.parse(await readRequestBody(request, 12 * 1024 * 1024));
   const jobType = String(body.jobType || "").trim();
@@ -1363,7 +1727,7 @@ async function handleCreateJob(request, response) {
 
   try {
     const queued = await createWorkerJob({
-      customerId: body.customerId || null,
+      customerId: tenant.activeOrganization.id,
       itemId: body.itemId || payload.item?.dbId || null,
       jobType,
       payload,
@@ -1505,7 +1869,8 @@ async function handleSaveItem(request, response) {
   }
 
   try {
-    const tenant = await resolveTenantContext(request);
+    const tenant = await requireTenantPermission(request, response, "inventory:write");
+    if (!tenant) return;
     const customer = tenant.activeOrganization || await getOrCreateCustomer();
     if (!customer) {
       sendJson(response, 403, {
@@ -1513,6 +1878,19 @@ async function handleSaveItem(request, response) {
         message: "Vor dem Speichern muss ein Kundenbereich ausgewählt werden."
       });
       return;
+    }
+    if (!hasOrganizationPermission(tenant.activeOrganization.role, "sales:approve", tenant.platformAdmin)) {
+      const existingRows = await supabaseSelect(`/items?select=id,status,raw_analysis&customer_id=eq.${encodeURIComponent(customer.id)}&sku=eq.${encodeURIComponent(item.sku)}&limit=1`);
+      const existingApproval = existingRows[0]?.raw_analysis?.uiItem?.approval?.status;
+      const incomingApproval = item.approval?.status;
+      const incomingReady = ["Verkaufsbereit", "Gelistet", "Verkauft", "Versand"].includes(String(item.stage || ""));
+      if (existingApproval === "approved" || incomingApproval === "approved" || incomingReady) {
+        sendJson(response, 403, {
+          error: "sales_approval_required",
+          message: "Freigegebene Artikel und Verkaufsstatus dürfen nur Inhaber oder Admins ändern."
+        });
+        return;
+      }
     }
     const box = await getBoxByCode(customer.id, item.boxId || "SV-001");
     const conflictTarget = multiTenantSchemaAvailable === false ? "sku" : "customer_id,sku";
@@ -1551,6 +1929,8 @@ async function handleSaveItem(request, response) {
 }
 
 async function handleRecognizeImage(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
   const body = JSON.parse(await readRequestBody(request, 48 * 1024 * 1024));
   const images = normalizeImageDataUrls(body);
   if (!images.length) {
@@ -1712,6 +2092,8 @@ async function queueImageRecognition(response, body, images, metadata = {}) {
 }
 
 async function handleAnalyzeImage(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
   const body = JSON.parse(await readRequestBody(request, 48 * 1024 * 1024));
   const images = normalizeImageDataUrls(body);
   if (!images.length) {
@@ -1913,6 +2295,8 @@ function imageExtension(contentType) {
 }
 
 async function handlePriceCheck(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
   const body = JSON.parse(await readRequestBody(request, 8 * 1024 * 1024));
   const item = body.item;
 
@@ -1949,6 +2333,8 @@ async function handlePriceCheck(request, response) {
 }
 
 async function handleEbayDraft(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
   const body = JSON.parse(await readRequestBody(request, 8 * 1024 * 1024));
   const item = body.item;
 
@@ -2437,6 +2823,20 @@ async function supabaseRpc(name, payload = {}) {
     method: "POST",
     body: JSON.stringify(payload)
   }, supabaseServiceRoleKey);
+}
+
+async function supabaseAdminUsers() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) return [];
+  const response = await fetch(new URL("/auth/v1/admin/users?per_page=1000", supabaseUrl), {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      Accept: "application/json"
+    }
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body?.message || `Supabase Auth Admin HTTP ${response.status}`);
+  return body.users || [];
 }
 
 async function supabaseRequest(path, options = {}, key) {
