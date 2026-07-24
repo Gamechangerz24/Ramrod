@@ -2277,6 +2277,25 @@ img {
   opacity: 0.68;
 }
 
+.evidence-row.rejected {
+  background: #f7f8fa;
+  border-style: dashed;
+  opacity: 0.82;
+}
+
+.rejected-evidence {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.rejected-evidence summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+
 .evidence-main {
   display: grid;
   gap: 5px;

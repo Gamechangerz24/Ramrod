@@ -14,6 +14,10 @@ import {
   scoreItemRecognition
 } from "./lib/item-recognition.mjs";
 import { channelRegistryVersion, publicChannelRegistry } from "./lib/channel-registry.mjs";
+import {
+  estimatePriceFromEvidence,
+  evaluateComparableEvidence
+} from "./lib/price-evidence.mjs";
 import { reconcileSalesDecision } from "./lib/sales-decision.mjs";
 import {
   buildAgentPlan,
@@ -2439,22 +2443,20 @@ function buildLocalPriceCheck(item) {
 }
 
 function buildPriceCheckFromEvidence(item, evidence, method, notes) {
-  const markedEvidence = markPriceOutliers(evidence);
+  const comparison = evaluateComparableEvidence(item, uniqueEvidence(evidence));
+  const markedEvidence = markPriceOutliers(comparison.accepted);
   const usableEvidence = markedEvidence.filter((entry) => !entry.outlier);
-  const prices = usableEvidence.map((entry) => entry.price).sort((a, b) => a - b);
-  const median = percentile(prices, 0.5);
-  const average = Math.round(prices.reduce((sum, price) => sum + price, 0) / prices.length);
-  const fair = Math.round((median * 0.6) + (average * 0.4));
-  const variance = Math.max(...prices) - Math.min(...prices);
-  const baseConfidence = Math.round((Number(item.confidence) || 65) + Math.min(12, evidence.length * 3) - Math.min(22, variance / Math.max(1, fair) * 20));
-  const evidenceCap = method === "ebay-browse" || method === "web-research" || method === "multi-source"
-    ? (usableEvidence.length === 1 ? 62 : usableEvidence.length === 2 ? 72 : 94)
-    : 94;
-  const confidence = Math.max(35, Math.min(evidenceCap, baseConfidence));
+  const estimate = estimatePriceFromEvidence(item, usableEvidence);
   const finalNotes = [
     ...notes,
     ...(["ebay-browse", "web-research", "multi-source"].includes(method) && usableEvidence.length < 3
       ? ["Nur wenige Live-Treffer gefunden; Preis als Indikation, nicht als belastbarer Marktwert."]
+      : []),
+    ...(comparison.rejected.length
+      ? [`${comparison.rejected.length} unpassende Treffer wurden wegen Identitaet, Plattform, Variante, Menge oder Zustand ausgeschlossen.`]
+      : []),
+    ...(!estimate.calculation.soldCount && estimate.calculation.activeCount
+      ? ["Keine belastbaren Verkaufspreise gefunden. Aktive Angebotspreise wurden nur rabattiert als Marktindikator verwendet."]
       : []),
     ...(markedEvidence.some((entry) => entry.outlier)
       ? ["Ausreisser wurden in der Preisberechnung markiert und nicht gewichtet."]
@@ -2465,10 +2467,10 @@ function buildPriceCheckFromEvidence(item, evidence, method, notes) {
     checkedAt: new Date().toISOString(),
     method,
     query: buildSearchQuery(item),
-    low: Math.max(1, Math.round(percentile(prices, 0.1) * 0.9)),
-    fair,
-    aggressive: Math.max(fair, Math.round(percentile(prices, 0.8) * 1.08)),
-    confidence,
+    low: estimate.low,
+    fair: estimate.fair,
+    aggressive: estimate.aggressive,
+    confidence: estimate.confidence,
     previous: {
       low: numberOrNull(item.low),
       fair: numberOrNull(item.fair),
@@ -2476,16 +2478,13 @@ function buildPriceCheckFromEvidence(item, evidence, method, notes) {
       confidence: clampNumber(item.confidence, 0, 100, 0)
     },
     calculation: {
-      basis: priceCheckBasis(method),
-      formula: "Marktwert = 60% Median + 40% Durchschnitt; Preisspanne aus 10. bis 80. Perzentil",
-      usableCount: usableEvidence.length,
+      ...estimate.calculation,
+      sourceBasis: priceCheckBasis(method),
       outlierCount: markedEvidence.filter((entry) => entry.outlier).length,
-      median,
-      average,
-      minComparable: Math.min(...prices),
-      maxComparable: Math.max(...prices)
+      rejectedCount: comparison.rejected.length
     },
     evidence: representativeEvidence(markedEvidence, 6),
+    rejectedEvidence: representativeEvidence(comparison.rejected, 5),
     notes: finalNotes
   };
 }
@@ -2574,13 +2573,14 @@ async function fetchEbayBrowseEvidence(item) {
 
     results.push(...(body.itemSummaries || [])
       .filter((entry) => Number(entry.price?.value) > 0)
-      .map((entry, index) => ({
+      .map((entry) => ({
         source: "eBay Browse",
         title: entry.title || item.title,
         price: Math.round(Number(entry.price.value)),
+        shippingPrice: Math.round(Number(entry.shippingOptions?.[0]?.shippingCost?.value) || 0),
+        condition: entry.condition || entry.conditionId || "",
         status: "active_listing",
         age: entry.itemCreationDate ? new Date(entry.itemCreationDate).toLocaleDateString("de-DE") : "live",
-        matchScore: Math.max(48, Math.min(94, Math.round((Number(item.confidence) || 70) - index * 4))),
         url: entry.itemWebUrl || "",
         query
       })));
@@ -2627,7 +2627,7 @@ async function fetchSerpApiEbaySearch(item, query, showOnly) {
   }
 
   return (body.organic_results || [])
-    .map((entry, index) => {
+    .map((entry) => {
       const price = extractSerpApiPrice(entry.price);
       if (!price) return null;
       const sold = Boolean(entry.sold_date || showOnly === "Sold");
@@ -2635,9 +2635,10 @@ async function fetchSerpApiEbaySearch(item, query, showOnly) {
         source: sold ? "SerpApi eBay Sold" : "SerpApi eBay Web",
         title: entry.title || item.title,
         price: Math.round(price),
+        shippingPrice: Math.round(extractSerpApiPrice(entry.shipping) || 0),
+        condition: entry.condition || "",
         status: sold ? "sold_listing" : "active_web_listing",
         age: entry.sold_date || entry.condition || entry.quantity_sold || "web",
-        matchScore: Math.max(44, Math.min(88, Math.round((Number(item.confidence) || 70) - index * 3 + (sold ? 6 : 0)))),
         url: entry.link || "",
         webResearch: true,
         query
@@ -2647,13 +2648,50 @@ async function fetchSerpApiEbaySearch(item, query, showOnly) {
 }
 
 function uniqueEvidence(evidence) {
-  const seen = new Set();
-  return evidence.filter((entry) => {
-    const key = entry.url || `${entry.source}:${entry.title}:${entry.price}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const selected = new Map();
+  for (const entry of evidence) {
+    const itemId = extractEbayListingId(entry.url);
+    const cleanUrl = normalizeEvidenceUrl(entry.url);
+    const titlePrice = `${normalizeSearchText(entry.title)}:${Math.round(Number(entry.price) * 100)}`;
+    const key = itemId
+      ? `ebay:${itemId}`
+      : normalizeSearchText(entry.title)
+        ? `title:${titlePrice}`
+        : `url:${cleanUrl}`;
+    const existing = selected.get(key);
+    if (!existing || evidencePriority(entry) > evidencePriority(existing)) {
+      selected.set(key, entry);
+    }
+  }
+  return [...selected.values()];
+}
+
+function extractEbayListingId(value) {
+  const text = String(value || "");
+  return text.match(/\/itm\/(?:[^/?#]+\/)?(\d{9,15})(?:[/?#]|$)/i)?.[1]
+    || text.match(/[?&](?:item|itemid)=(\d{9,15})(?:&|$)/i)?.[1]
+    || "";
+}
+
+function normalizeEvidenceUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (!/^https?:$/.test(url.protocol)) return "";
+    url.hash = "";
+    url.search = "";
+    return `${url.hostname.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return "";
+  }
+}
+
+function evidencePriority(entry) {
+  const status = String(entry.status || "").toLowerCase();
+  const source = String(entry.source || "").toLowerCase();
+  if (status.includes("sold") || source.includes("sold")) return 4;
+  if (source.includes("pricecharting") || source.includes("bricklink")) return 3;
+  if (source === "ebay browse") return 2;
+  return 1;
 }
 
 function extractSerpApiPrice(price) {
@@ -3089,18 +3127,42 @@ function buildSearchQuery(item) {
 }
 
 function buildSearchQueries(item) {
-  const haystack = [item.title, item.franchise, item.category, item.completeness, item.notes]
+  const identity = item.recognition?.identity || {};
+  const canonicalTitle = identity.title || item.title;
+  const haystack = [
+    canonicalTitle,
+    identity.brand,
+    identity.franchise,
+    identity.platform,
+    identity.edition,
+    identity.region,
+    identity.modelNumber,
+    item.franchise,
+    item.category,
+    item.completeness,
+    item.notes
+  ]
     .filter(Boolean)
     .join(" ");
-  const platform = extractPlatform(haystack);
-  const title = extractComparableTitle(item.title || haystack, platform);
-  const cleanOriginal = normalizeSearchText(item.title || haystack);
+  const platform = normalizeSearchText(identity.platform || extractPlatform(haystack));
+  const title = extractComparableTitle(canonicalTitle || haystack, platform);
+  const cleanOriginal = normalizeSearchText(canonicalTitle || haystack);
   const category = normalizeSearchText(item.category || "");
+  const edition = normalizeSearchText(identity.edition || "");
+  const region = normalizeSearchText(identity.region || "");
+  const identifiers = uniqueStrings([
+    identity.modelNumber,
+    item.barcode,
+    ...(item.recognition?.identifiers || []).map((entry) => entry?.value)
+  ])
+    .map(normalizeSearchText)
+    .filter((value) => value.length >= 5);
 
   return uniqueStrings([
+    ...identifiers,
+    [title, platform, edition, region].filter(Boolean).join(" "),
     [title, platform].filter(Boolean).join(" "),
     [title, platform, "gebraucht"].filter(Boolean).join(" "),
-    [title, platform, "PAL"].filter(Boolean).join(" "),
     cleanOriginal,
     [title, category].filter(Boolean).join(" ")
   ])

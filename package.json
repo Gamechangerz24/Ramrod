@@ -13,6 +13,7 @@
     "supabase:set-admin": "node scripts/set-platform-admin.mjs",
     "supabase:smoke": "node scripts/supabase-smoke-test.mjs",
     "test:price-import": "node scripts/test-price-check-ai-import.mjs",
+    "test:price-evidence": "node scripts/test-price-evidence.mjs",
     "test:analysis-schema": "node scripts/test-item-analysis-schema.mjs",
     "test:recognition": "node scripts/test-item-recognition.mjs",
     "test:sales-decision": "node scripts/test-sales-decision.mjs",

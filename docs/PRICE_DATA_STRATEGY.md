@@ -1,6 +1,9 @@
 # Price Data Strategy
 
-Stand: 2026-04-29
+Stand: 2026-07-24
+
+Die aktuelle Matching- und Gewichtungslogik sowie der Plan fuer einen
+Price-Verification-Agent sind in `docs/PRICE_ACCURACY_PLAN.md` beschrieben.
 
 ## Goal
 

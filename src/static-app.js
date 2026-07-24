@@ -2137,6 +2137,7 @@ function priceCheckCard(item) {
     return `<section class="research compact attention-required"><div class="section-title"><h3>Preischeck</h3><span class="status-pill muted">Offen</span></div><p>Noch nicht geprüft. Klicke auf „Preise checken“, um Live-Vergleiche über eBay und Web-Quellen zu erzeugen.</p></section>`;
   }
   const evidence = Array.isArray(check.evidence) ? check.evidence : [];
+  const rejectedEvidence = Array.isArray(check.rejectedEvidence) ? check.rejectedEvidence : [];
   const ebayCount = evidence.filter((entry) => entry.source === "eBay Browse" && !entry.outlier).length;
   const webCount = evidence.filter((entry) => entry.webResearch && !entry.outlier).length;
   const soldCount = evidence.filter((entry) => entry.status === "sold_listing" && !entry.outlier).length;
@@ -2167,6 +2168,8 @@ function priceCheckCard(item) {
         ${suggestion("Nutzbare Treffer", Number(calculation.usableCount || 0))}
         ${suggestion("Median", euro(calculation.median))}
         ${suggestion("Durchschnitt", euro(calculation.average))}
+        ${calculation.soldMedian ? suggestion("Verkauft-Median", euro(calculation.soldMedian)) : ""}
+        ${calculation.activeMedian ? suggestion("Angebots-Median", euro(calculation.activeMedian)) : ""}
         ${suggestion("Vergleichsspanne", `${euro(calculation.minComparable)} - ${euro(calculation.maxComparable)}`)}
         ${suggestion("Ausreißer", Number(calculation.outlierCount ?? outlierCount))}
       </div>
@@ -2175,11 +2178,16 @@ function priceCheckCard(item) {
       <span>${icon("EB")} ${ebayCount} eBay-Live-Treffer</span>
       <span>${webCount} Web-Treffer · ${soldCount} verkauft</span>
       <span>${outlierCount} Ausreißer markiert</span>
+      <span>${Number(calculation.rejectedCount || rejectedEvidence.length)} unpassend</span>
       <span>Query: ${escapeHtml(check.query || "-")}</span>
     </div>
     <div class="evidence-list">
       ${evidence.length ? evidence.map(evidenceRow).join("") : `<p class="muted-copy">Keine verwertbaren Vergleichstreffer gefunden.</p>`}
     </div>
+    ${rejectedEvidence.length ? `<details class="rejected-evidence">
+      <summary>${rejectedEvidence.length} beispielhafte Fehl-Treffer anzeigen</summary>
+      <div class="evidence-list">${rejectedEvidence.map(rejectedEvidenceRow).join("")}</div>
+    </details>` : ""}
     ${notes.length ? `<ul class="price-notes">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>` : ""}
   </section>`;
 }
@@ -2232,7 +2240,22 @@ function evidenceRow(entry) {
     <div class="evidence-main">
       <span class="source-pill">${escapeHtml(entry.source || "Quelle")}</span>
       ${link}
-      <small>${escapeHtml(status)} · ${escapeHtml(entry.age || "live")} · ${Number(entry.matchScore || 0)}% Match${entry.query ? ` · Query: ${escapeHtml(entry.query)}` : ""}</small>
+      <small>${escapeHtml(status)} · ${escapeHtml(entry.age || "live")} · ${Number(entry.matchScore || 0)}% Match${entry.matchReasons?.length ? ` · ${escapeHtml(entry.matchReasons.slice(0, 2).join(", "))}` : ""}${entry.query ? ` · Query: ${escapeHtml(entry.query)}` : ""}</small>
+    </div>
+    <em>${euro(entry.price)}</em>
+  </article>`;
+}
+
+function rejectedEvidenceRow(entry) {
+  const title = escapeHtml(entry.title || "Unbenannter Treffer");
+  const link = entry.url
+    ? `<a href="${escapeHtml(entry.url)}" target="_blank" rel="noreferrer">${title}</a>`
+    : `<strong>${title}</strong>`;
+  return `<article class="evidence-row rejected">
+    <div class="evidence-main">
+      <span class="source-pill">Ausgeschlossen</span>
+      ${link}
+      <small>${escapeHtml(entry.rejectionReason || "Nicht ausreichend vergleichbar")} · ${Number(entry.matchScore || 0)}% Match</small>
     </div>
     <em>${euro(entry.price)}</em>
   </article>`;
