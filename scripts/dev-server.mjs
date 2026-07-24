@@ -2630,7 +2630,11 @@ async function fetchSerpApiEbaySearch(item, query, showOnly) {
     .map((entry) => {
       const price = extractSerpApiPrice(entry.price);
       if (!price) return null;
-      const sold = Boolean(entry.sold_date || showOnly === "Sold");
+      const sold = Boolean(
+        entry.sold_date
+        || entry.is_sold === true
+        || /\b(?:sold|verkauft)\b/i.test(`${entry.status || ""} ${entry.availability || ""}`)
+      );
       return {
         source: sold ? "SerpApi eBay Sold" : "SerpApi eBay Web",
         title: entry.title || item.title,
@@ -2641,6 +2645,7 @@ async function fetchSerpApiEbaySearch(item, query, showOnly) {
         age: entry.sold_date || entry.condition || entry.quantity_sold || "web",
         url: entry.link || "",
         webResearch: true,
+        requestedSoldFilter: showOnly === "Sold",
         query
       };
     })
