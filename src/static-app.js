@@ -185,6 +185,8 @@ const authStorageKey = "ramrod-auth-session";
 const organizationStorageKey = "ramrod-active-organization";
 const initialOrganizationId = localStorage.getItem(organizationStorageKey) || "";
 const invitationToken = new URLSearchParams(window.location.search).get("invite") || "";
+const initialView = new URLSearchParams(window.location.search).get("view") || "";
+const ebayCallbackState = new URLSearchParams(window.location.search).get("ebay") || "";
 
 window.addEventListener("error", (event) => {
   const message = event.error?.message || event.message || "Unbekannter Frontend-Fehler";
@@ -195,7 +197,7 @@ window.addEventListener("error", (event) => {
 
 const state = {
   booting: true,
-  view: "today",
+  view: ["agents", "today", "capture", "review", "sell", "shipping", "inventory", "settings"].includes(initialView) ? initialView : "today",
   organizations: [],
   activeOrganizationId: initialOrganizationId,
   activeOrganization: null,
@@ -218,11 +220,12 @@ const state = {
   agentControl: { available: false, playbooks: [], runs: [], approvals: [], channelAccounts: [] },
   startingAgent: "",
   decidingApproval: "",
+  ebaySetupBusy: "",
   creatingOrganization: false,
   selected: "itm-001",
   search: "",
   boxFilter: "",
-  importStatus: "Lade lokale App...",
+  importStatus: ebayCallbackState === "connected" ? "eBay hat den Zugriff bestätigt. RAMROD prüft jetzt die Verkaufseinstellungen." : "Lade lokale App...",
   channelPlan: null,
   persistence: { configured: false, writable: false },
   runtimeConfig: { authRequired: false, supabaseUrl: "", supabaseAnonKey: "", channels: [], providers: {} },
@@ -2565,6 +2568,8 @@ function agentsView() {
       <div class="agent-provider-state"><span class="agent-state ${onlineRunners.length ? "online" : "waiting"}">${onlineRunners.length ? `${onlineRunners.length} Runner aktiv` : "Runner wartet"}</span><span class="agent-state ${hermesRunner && agentRunnerOnline(hermesRunner) ? "online" : "waiting"}">${hermesRunner && agentRunnerOnline(hermesRunner) ? "Hermes verbunden" : "Hermes offen"}</span><span class="agent-state ${control.telegramConfigured ? "online" : "waiting"}">${control.telegramConfigured ? "Telegram bereit" : "Telegram offen"}</span></div>
     </div>
 
+    ${ebaySetupPanel(control.ebaySetup)}
+
     <div class="agent-stats" aria-label="Agentenstatus">
       ${agentStat("Aktive Missionen", activeRuns.length)}
       ${agentStat("Deine Freigaben", approvals.length, approvals.length ? "attention" : "")}
@@ -2598,6 +2603,32 @@ function agentsView() {
         <div class="panel-heading agent-subheading"><div><p>Connectoren</p><h2>Verkaufskonten</h2></div></div>
         <div class="agent-account-list">${accounts.length ? accounts.map(agentAccountRow).join("") : `<div class="agent-empty"><strong>Noch kein Konto verbunden</strong><p>Mit „eBay-Konto verbinden“ beginnt das geführte Onboarding.</p></div>`}</div>
       </section>
+    </div>
+  </section>`;
+}
+
+function ebaySetupPanel(setup) {
+  if (!setup) return "";
+  const steps = Array.isArray(setup.steps) ? setup.steps : [];
+  const busy = Boolean(state.ebaySetupBusy);
+  const complete = Boolean(setup.ready);
+  return `<section class="ebay-setup-panel ${complete ? "complete" : ""}">
+    <div class="ebay-setup-copy">
+      <p>Geführte Einrichtung</p>
+      <h2>${complete ? "eBay ist verbunden" : "eBay Schritt für Schritt verbinden"}</h2>
+      <span>${complete ? "RAMROD kann jetzt Angebote vorbereiten und den Kontostatus prüfen." : "RAMROD erledigt die Technik. Du meldest dich nur bei eBay an und bestätigst den Zugriff."}</span>
+    </div>
+    <ol class="ebay-setup-steps">
+      ${steps.map((step, index) => `<li class="${step.ready ? "ready" : ""}">
+        <span>${step.ready ? "✓" : index + 1}</span>
+        <div><strong>${escapeHtml(step.label)}</strong><small>${escapeHtml(step.detail)}</small></div>
+      </li>`).join("")}
+    </ol>
+    <div class="ebay-setup-action">
+      <button class="primary-action" data-ebay-setup-action="${escapeHtml(setup.nextAction)}" type="button" ${busy || complete ? "disabled" : ""}>
+        ${busy ? "RAMROD prüft..." : escapeHtml(setup.actionLabel)}
+      </button>
+      <small>${setup.environment === "production" ? "Echtes eBay-Verkäuferkonto" : "eBay-Sandbox zum Testen"}</small>
     </div>
   </section>`;
 }
@@ -2969,6 +3000,49 @@ function bindEvents() {
       await loadTeamSettings();
     } catch (error) {
       state.importStatus = `Kanäle konnten nicht gespeichert werden: ${error.message}`;
+      render();
+    }
+  });
+  document.querySelector("[data-ebay-setup-action]")?.addEventListener("click", async (event) => {
+    const action = event.currentTarget.dataset.ebaySetupAction;
+    const setup = state.agentControl?.ebaySetup;
+    if (!action || !setup || state.ebaySetupBusy) return;
+
+    if (action === "developer") {
+      window.open(setup.links?.developerPortal || "https://developer.ebay.com/my/keys", "_blank", "noopener");
+      state.importStatus = "eBay Developer ist geöffnet. RAMROD zeigt dir dort als Nächstes nur die nötige Bestätigung.";
+      render();
+      return;
+    }
+
+    if (action === "policies") {
+      window.open(setup.links?.sellerPolicies || "https://www.ebay.de/sh/pp", "_blank", "noopener");
+      state.importStatus = "eBay-Verkaufsregeln sind geöffnet. Nach dem Speichern klickst du hier nur noch auf „Verbindung prüfen“.";
+      state.agentControl.ebaySetup = { ...setup, nextAction: "verify", actionLabel: "Verbindung prüfen" };
+      render();
+      return;
+    }
+
+    state.ebaySetupBusy = action;
+    state.importStatus = action === "connect"
+      ? "Sichere eBay-Anmeldung wird vorbereitet..."
+      : "RAMROD prüft eBay-Zugriff, Verkaufsregeln und Lagerort...";
+    render();
+    try {
+      if (action === "connect") {
+        const result = await postJson("/api/channel-setup/ebay/start", {});
+        window.location.assign(result.authorizeUrl);
+        return;
+      }
+      const result = await postJson("/api/channel-setup/ebay/verify", {});
+      state.agentControl.ebaySetup = result.setup;
+      state.importStatus = result.setup?.ready
+        ? "eBay ist vollständig verbunden und für Angebote bereit."
+        : "eBay ist verbunden. RAMROD zeigt den nächsten fehlenden Schritt.";
+    } catch (error) {
+      state.importStatus = `eBay-Einrichtung: ${error.message}`;
+    } finally {
+      state.ebaySetupBusy = "";
       render();
     }
   });

@@ -1,4 +1,5 @@
 import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 
 const envPath = process.argv[2];
 if (!envPath) {
@@ -17,7 +18,9 @@ const updates = {
   RAMROD_SELF_SERVICE_SIGNUP: "true",
   SHOP_PREVIEW_MODE: "false",
   SHOP_HOST_ROUTING: "true",
-  SHOP_ORGANIZATION_SLUG: "creators"
+  SHOP_ORGANIZATION_SLUG: "creators",
+  RAMROD_PUBLIC_APP_URL: "https://admin.ramrod.live",
+  RAMROD_SECRET_STORE_PATH: "/home/node/.ramrod/credentials.enc.json"
 };
 
 const ensureKeys = [
@@ -31,7 +34,14 @@ const ensureKeys = [
   "RAMROD_TELEGRAM_BOT_TOKEN",
   "RAMROD_TELEGRAM_WEBHOOK_SECRET",
   "RAMROD_TELEGRAM_APPROVAL_CHAT_ID",
-  "RAMROD_TELEGRAM_ALLOWED_CHAT_IDS"
+  "RAMROD_TELEGRAM_ALLOWED_CHAT_IDS",
+  "EBAY_RUNAME",
+  "EBAY_OAUTH_SCOPES"
+];
+
+const generatedSecretKeys = [
+  "RAMROD_SECRET_ENCRYPTION_KEY",
+  "RAMROD_OAUTH_STATE_SECRET"
 ];
 
 let text = readFileSync(envPath, "utf8");
@@ -46,8 +56,17 @@ for (const key of ensureKeys) {
   if (!pattern.test(text)) text = `${text.trimEnd()}\n${key}=\n`;
 }
 
+for (const key of generatedSecretKeys) {
+  const pattern = new RegExp(`^${key}=(.*)$`, "m");
+  const match = text.match(pattern);
+  if (!match || !String(match[1] || "").trim()) {
+    const line = `${key}=${randomBytes(32).toString("hex")}`;
+    text = pattern.test(text) ? text.replace(pattern, line) : `${text.trimEnd()}\n${line}\n`;
+  }
+}
+
 const temporaryPath = `${envPath}.tmp`;
 writeFileSync(temporaryPath, text, { mode: 0o600 });
 chmodSync(temporaryPath, 0o600);
 renameSync(temporaryPath, envPath);
-console.log(JSON.stringify({ updatedKeys: Object.keys(updates), ensuredKeys: ensureKeys }));
+console.log(JSON.stringify({ updatedKeys: Object.keys(updates), ensuredKeys: ensureKeys, generatedSecretKeys }));

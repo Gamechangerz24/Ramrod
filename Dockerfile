@@ -7,6 +7,8 @@ RUN npm ci --omit=dev
 
 COPY --chown=node:node . .
 
+RUN mkdir -p /home/node/.ramrod && chown -R node:node /home/node/.ramrod
+
 USER node
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0

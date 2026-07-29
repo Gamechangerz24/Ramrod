@@ -28,6 +28,7 @@
     "test:agent-control": "node scripts/test-agent-control.mjs",
     "test:agent-executor": "node scripts/test-agent-executor.mjs",
     "test:workspace-access": "node scripts/test-workspace-access.mjs",
+    "test:ebay-onboarding": "node scripts/test-ebay-onboarding.mjs",
     "test:mcp": "node scripts/test-mcp-adapter.mjs"
   },
   "dependencies": {

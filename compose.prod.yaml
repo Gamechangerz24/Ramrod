@@ -11,6 +11,8 @@ services:
       PORT: 3001
     ports:
       - "127.0.0.1:3001:3001"
+    volumes:
+      - ramrod-secrets:/home/node/.ramrod
     restart: unless-stopped
   agent-runner:
     build:
@@ -29,3 +31,6 @@ services:
     healthcheck:
       disable: true
     restart: unless-stopped
+
+volumes:
+  ramrod-secrets:

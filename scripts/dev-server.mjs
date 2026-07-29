@@ -30,6 +30,21 @@ import {
   telegramApprovalKeyboard
 } from "./lib/agent-control.mjs";
 import {
+  buildEbayConsentUrl,
+  createEbayOAuthState,
+  ebayOAuthConfig,
+  ebayOAuthReadiness,
+  ensureFreshEbayCredentials,
+  exchangeEbayAuthorizationCode,
+  inspectEbaySellerSetup,
+  mapEbayTokenResponse,
+  verifyEbayOAuthState
+} from "./lib/ebay-oauth.mjs";
+import {
+  buildSecretRef,
+  createEncryptedSecretStore
+} from "./lib/secret-store.mjs";
+import {
   canAssignOrganizationRole,
   createInvitationToken,
   hashInvitationToken,
@@ -92,6 +107,9 @@ const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "";
 const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 const workerJobTypes = new Set(["health_check", "price_check", "ebay_draft", "recognize_image", "analyze_image"]);
 const automaticPriceCheckSources = new Set(["live_openai", "batch_openai", "local_qwen"]);
+const publicAppUrl = String(process.env.RAMROD_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "");
+const ebaySellerOAuthConfig = ebayOAuthConfig(process.env);
+const credentialStore = createEncryptedSecretStore();
 let ebayAppTokenCache = null;
 let multiTenantSchemaAvailable = null;
 let lastAgentMaintenanceAt = 0;
@@ -157,6 +175,20 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/ebay/oauth/callback") {
+      await handleEbayOAuthCallback(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/ebay/oauth/declined") {
+      sendEbayOAuthResult(response, {
+        ok: false,
+        title: "eBay-Verbindung abgebrochen",
+        message: "Es wurde nichts geändert. Du kannst die Verbindung jederzeit erneut starten."
+      });
+      return;
+    }
+
     const invitationPreviewMatch = /^\/api\/invitations\/([A-Za-z0-9_-]{40,100})$/i.exec(pathname);
     if (request.method === "GET" && invitationPreviewMatch) {
       await handleInvitationPreview(response, invitationPreviewMatch[1]);
@@ -212,6 +244,21 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && pathname === "/api/organization-channels") {
       await handleSaveOrganizationChannels(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/channel-setup/ebay") {
+      await handleEbaySetupStatus(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/channel-setup/ebay/start") {
+      await handleEbaySetupStart(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/channel-setup/ebay/verify") {
+      await handleEbaySetupVerify(request, response);
       return;
     }
 
@@ -485,6 +532,7 @@ function unavailableAgentControl(message = "Agent Control ist noch nicht eingeri
     runs: [],
     approvals: [],
     channelAccounts: [],
+    ebaySetup: null,
     runners: []
   };
 }
@@ -493,11 +541,12 @@ async function buildAgentControlSnapshot(organizationId) {
   if (!organizationId) return unavailableAgentControl("Kein Kundenbereich ausgewählt.");
   const organizationFilter = encodeURIComponent(organizationId);
   try {
-    const [runs, approvals, channelAccounts, workers] = await Promise.all([
+    const [runs, approvals, channelAccounts, workers, ebaySetup] = await Promise.all([
       supabaseSelect(`/agent_runs?select=id,organization_id,item_id,channel_account_id,agent_type,objective,status,risk_level,plan,result,error,started_at,completed_at,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=40`),
       supabaseSelect(`/approval_requests?select=id,organization_id,agent_run_id,agent_step_id,approval_type,status,summary,payload,expires_at,decided_at,decision_note,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=60`),
       supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,external_account_ref,browser_profile_key,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${organizationFilter}&order=created_at.desc&limit=80`),
-      supabaseSelect("/workers?select=id,worker_key,name,status,capabilities,metadata,last_seen_at,created_at,updated_at&order=last_seen_at.desc&limit=80")
+      supabaseSelect("/workers?select=id,worker_key,name,status,capabilities,metadata,last_seen_at,created_at,updated_at&order=last_seen_at.desc&limit=80"),
+      buildEbaySetupState(organizationId)
     ]);
     const runIds = runs.map((run) => run.id).filter(Boolean);
     const steps = runIds.length
@@ -517,6 +566,7 @@ async function buildAgentControlSnapshot(organizationId) {
       runs: runs.map((run) => ({ ...run, steps: stepsByRun.get(run.id) || [] })),
       approvals,
       channelAccounts,
+      ebaySetup,
       runners: workers.filter((entry) => entry.metadata?.runner || entry.capabilities?.some((capability) => String(capability).startsWith("agent:")))
     };
   } catch (error) {
@@ -1441,6 +1491,253 @@ async function handleSaveOrganizationChannels(request, response) {
   } catch (error) {
     sendJson(response, error.status || 500, { error: "channel_save_failed", message: redactSecret(error.message) });
   }
+}
+
+async function handleEbaySetupStatus(request, response) {
+  const tenant = await requireTenantPermission(request, response, "channels:manage");
+  if (!tenant) return;
+  sendJson(response, 200, {
+    setup: await buildEbaySetupState(tenant.activeOrganization.id, request)
+  });
+}
+
+async function handleEbaySetupStart(request, response) {
+  const tenant = await requireTenantPermission(request, response, "channels:manage");
+  if (!tenant) return;
+  const readiness = ebayOAuthReadiness(ebaySellerOAuthConfig);
+  if (!credentialStore.available) readiness.missing.push("RAMROD_SECRET_ENCRYPTION_KEY");
+  if (!readiness.ready || !credentialStore.available) {
+    sendJson(response, 409, {
+      error: "ebay_oauth_not_ready",
+      message: "RAMROD muss den eBay-Zugang noch technisch vervollständigen.",
+      missing: [...new Set(readiness.missing)]
+    });
+    return;
+  }
+
+  try {
+    const account = await ensureEbayChannelAccount(tenant.activeOrganization.id);
+    const state = createEbayOAuthState({
+      organizationId: tenant.activeOrganization.id,
+      channelAccountId: account.id,
+      requestedBy: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null
+    }, ebaySellerOAuthConfig.stateSecret);
+    const authorizeUrl = buildEbayConsentUrl(ebaySellerOAuthConfig, state);
+    await supabaseUpdate(`/organization_channel_accounts?id=eq.${encodeURIComponent(account.id)}`, {
+      status: "onboarding",
+      metadata: {
+        ...(account.metadata || {}),
+        setupStartedAt: new Date().toISOString(),
+        oauthEnvironment: ebaySellerOAuthConfig.environment
+      }
+    });
+    sendJson(response, 200, {
+      authorizeUrl,
+      message: "Melde dich bei eBay an und bestätige den Zugriff. Danach prüft RAMROD automatisch weiter."
+    });
+  } catch (error) {
+    sendJson(response, 500, { error: "ebay_setup_start_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleEbaySetupVerify(request, response) {
+  const tenant = await requireTenantPermission(request, response, "channels:manage");
+  if (!tenant) return;
+  try {
+    const account = await ebayChannelAccount(tenant.activeOrganization.id);
+    if (!account?.secret_ref || !credentialStore.has(account.secret_ref)) {
+      sendJson(response, 409, { error: "ebay_oauth_required", message: "Bitte eBay zuerst verbinden." });
+      return;
+    }
+    await verifyAndPersistEbaySetup(account);
+    sendJson(response, 200, {
+      setup: await buildEbaySetupState(tenant.activeOrganization.id, request)
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: "ebay_setup_verify_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleEbayOAuthCallback(request, response) {
+  const url = new URL(request.url, "http://localhost");
+  const code = url.searchParams.get("code") || "";
+  const stateValue = url.searchParams.get("state") || "";
+  if (!code || !stateValue) {
+    sendEbayOAuthResult(response, {
+      ok: false,
+      title: "eBay-Verbindung unvollständig",
+      message: "eBay hat keine vollständige Freigabe zurückgegeben. Starte die Verbindung in RAMROD erneut."
+    });
+    return;
+  }
+
+  try {
+    const state = verifyEbayOAuthState(stateValue, ebaySellerOAuthConfig.stateSecret);
+    if (!isUuid(state.organizationId) || !isUuid(state.channelAccountId)) {
+      throw new Error("Der Kundenbereich der eBay-Freigabe ist ungültig.");
+    }
+    const accounts = await supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,status,secret_ref,capabilities,metadata&id=eq.${encodeURIComponent(state.channelAccountId)}&organization_id=eq.${encodeURIComponent(state.organizationId)}&channel_id=eq.ebay&limit=1`);
+    const account = accounts[0];
+    if (!account) throw new Error("Das zugehörige eBay-Konto wurde in RAMROD nicht gefunden.");
+
+    const token = await exchangeEbayAuthorizationCode(ebaySellerOAuthConfig, code);
+    const credentials = mapEbayTokenResponse(token, ebaySellerOAuthConfig.scopes, {
+      environment: ebaySellerOAuthConfig.environment
+    });
+    const secretRef = account.secret_ref || buildSecretRef("ebay", account.organization_id, account.id);
+    credentialStore.put(secretRef, credentials);
+    await supabaseUpdate(`/organization_channel_accounts?id=eq.${encodeURIComponent(account.id)}`, {
+      secret_ref: secretRef,
+      status: "connected",
+      capabilities: ["sell.account", "sell.inventory", "sell.fulfillment"],
+      metadata: {
+        ...(account.metadata || {}),
+        oauthEnvironment: ebaySellerOAuthConfig.environment,
+        oauthConnectedAt: new Date().toISOString()
+      }
+    });
+
+    const updatedAccount = { ...account, secret_ref: secretRef };
+    await verifyAndPersistEbaySetup(updatedAccount).catch(async (error) => {
+      await supabaseUpdate(`/organization_channel_accounts?id=eq.${encodeURIComponent(account.id)}`, {
+        status: "action_required",
+        metadata: {
+          ...(account.metadata || {}),
+          oauthEnvironment: ebaySellerOAuthConfig.environment,
+          oauthConnectedAt: new Date().toISOString(),
+          verificationMessage: redactSecret(error.message)
+        }
+      });
+    });
+
+    const redirectBase = publicAppUrl || requestBaseUrl(request);
+    response.writeHead(302, {
+      Location: `${redirectBase}/?view=agents&ebay=connected`,
+      "Cache-Control": "no-store"
+    });
+    response.end();
+  } catch (error) {
+    console.error("eBay OAuth callback failed:", redactSecret(error.message));
+    sendEbayOAuthResult(response, {
+      ok: false,
+      title: "eBay konnte noch nicht verbunden werden",
+      message: redactSecret(error.message)
+    });
+  }
+}
+
+async function buildEbaySetupState(organizationId, request = null) {
+  const readiness = ebayOAuthReadiness(ebaySellerOAuthConfig);
+  if (!credentialStore.available) readiness.missing.push("RAMROD_SECRET_ENCRYPTION_KEY");
+  const account = await ebayChannelAccount(organizationId).catch(() => null);
+  const oauthConnected = Boolean(account?.secret_ref && credentialStore.available && credentialStore.has(account.secret_ref));
+  const verification = account?.metadata?.sellerSetup || null;
+  const policiesReady = Boolean(
+    verification?.paymentPolicyCount > 0
+    && verification?.fulfillmentPolicyCount > 0
+    && verification?.returnPolicyCount > 0
+  );
+  const locationReady = Boolean(verification?.locationCount > 0);
+  const verified = Boolean(verification?.verifiedAt);
+  const ready = Boolean(readiness.ready && credentialStore.available && oauthConnected && policiesReady && locationReady);
+  const callbackBase = publicAppUrl || (request ? requestBaseUrl(request) : "");
+
+  let nextAction = "complete";
+  let actionLabel = "eBay ist bereit";
+  if (!readiness.ready || !credentialStore.available) {
+    nextAction = "developer";
+    actionLabel = "Technik vervollständigen";
+  } else if (!oauthConnected) {
+    nextAction = "connect";
+    actionLabel = "Mit eBay verbinden";
+  } else if (!verified) {
+    nextAction = "verify";
+    actionLabel = "Verbindung prüfen";
+  } else if (!policiesReady || !locationReady) {
+    nextAction = "policies";
+    actionLabel = "eBay-Einstellungen ergänzen";
+  }
+
+  return {
+    environment: ebaySellerOAuthConfig.environment,
+    accountId: account?.id || null,
+    accountStatus: account?.status || "planned",
+    ready,
+    oauthConnected,
+    policiesReady,
+    locationReady,
+    verifiedAt: verification?.verifiedAt || account?.last_verified_at || null,
+    warnings: verification?.warnings || [],
+    missingConfiguration: [...new Set(readiness.missing)],
+    callbackUrl: callbackBase ? `${callbackBase}/api/ebay/oauth/callback` : "",
+    nextAction,
+    actionLabel,
+    links: {
+      developerPortal: "https://developer.ebay.com/my/keys",
+      sellerPolicies: "https://www.ebay.de/sh/pp",
+      sellerHub: "https://www.ebay.de/sh/ovw"
+    },
+    steps: [
+      { id: "technical", label: "RAMROD-Zugang", ready: readiness.ready && credentialStore.available, detail: readiness.ready && credentialStore.available ? "Sicher vorbereitet" : "Technische Konfiguration offen" },
+      { id: "oauth", label: "eBay-Freigabe", ready: oauthConnected, detail: oauthConnected ? "Zugriff bestätigt" : "Einmal anmelden und zustimmen" },
+      { id: "policies", label: "Verkaufsregeln", ready: policiesReady, detail: policiesReady ? "Zahlung, Versand und Rückgabe gefunden" : "eBay-Regeln noch prüfen" },
+      { id: "location", label: "Lagerort", ready: locationReady, detail: locationReady ? "Lagerort gefunden" : "Lagerort noch prüfen" }
+    ]
+  };
+}
+
+async function ensureEbayChannelAccount(organizationId) {
+  const existing = await ebayChannelAccount(organizationId);
+  if (existing) return existing;
+  const rows = await supabaseInsert("/organization_channel_accounts", {
+    organization_id: organizationId,
+    channel_id: "ebay",
+    display_name: "eBay",
+    auth_mode: "oauth",
+    status: "planned",
+    metadata: { selectedInSettings: true }
+  });
+  return rows[0];
+}
+
+async function ebayChannelAccount(organizationId) {
+  const rows = await supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,external_account_ref,secret_ref,browser_profile_key,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${encodeURIComponent(organizationId)}&channel_id=eq.ebay&order=created_at.asc&limit=1`);
+  return rows[0] || null;
+}
+
+async function verifyAndPersistEbaySetup(account) {
+  let credentials = credentialStore.get(account.secret_ref);
+  const fresh = await ensureFreshEbayCredentials(ebaySellerOAuthConfig, credentials);
+  if (fresh.updatedAt !== credentials.updatedAt) {
+    credentialStore.put(account.secret_ref, fresh);
+    credentials = fresh;
+  }
+  const sellerSetup = await inspectEbaySellerSetup(ebaySellerOAuthConfig, credentials.accessToken);
+  const complete = sellerSetup.paymentPolicyCount > 0
+    && sellerSetup.fulfillmentPolicyCount > 0
+    && sellerSetup.returnPolicyCount > 0
+    && sellerSetup.locationCount > 0;
+  await supabaseUpdate(`/organization_channel_accounts?id=eq.${encodeURIComponent(account.id)}`, {
+    status: complete ? "connected" : "action_required",
+    capabilities: ["sell.account", "sell.inventory", "sell.fulfillment"],
+    last_verified_at: sellerSetup.verifiedAt,
+    metadata: {
+      ...(account.metadata || {}),
+      sellerSetup,
+      verificationMessage: complete ? "eBay ist für Listing-Entwürfe vorbereitet." : "eBay ist verbunden; mindestens eine Verkaufseinstellung fehlt noch."
+    }
+  });
+  return sellerSetup;
+}
+
+function sendEbayOAuthResult(response, { ok, title, message }) {
+  const appUrl = publicAppUrl || "https://admin.ramrod.live";
+  const tone = ok ? "#267a50" : "#a33b00";
+  response.writeHead(ok ? 200 : 400, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  response.end(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font:16px/1.5 system-ui;margin:0;background:#f4f5f6;color:#111827}.box{max-width:620px;margin:12vh auto;background:#fff;border-top:4px solid ${tone};padding:28px}h1{margin-top:0}a{display:inline-block;background:#111;color:#fff;padding:12px 16px;text-decoration:none;margin-top:12px}</style></head><body><main class="box"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><a href="${escapeHtml(appUrl)}/?view=agents">Zurück zu RAMROD</a></main></body></html>`);
 }
 
 async function requireTenantPermission(request, response, permission) {
