@@ -27,6 +27,7 @@ export function ebayOAuthConfig(env = process.env) {
     marketplaceId: String(env.EBAY_MARKETPLACE_ID || "EBAY_DE").trim(),
     authBaseUrl: production ? "https://auth.ebay.com" : "https://auth.sandbox.ebay.com",
     apiBaseUrl: production ? "https://api.ebay.com" : "https://api.sandbox.ebay.com",
+    oauthLocale: String(env.EBAY_OAUTH_LOCALE || "en-US").trim(),
     stateSecret: String(env.RAMROD_OAUTH_STATE_SECRET || "").trim()
   };
 }
@@ -78,7 +79,8 @@ export function buildEbayConsentUrl(config, state) {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", config.scopes.join(" "));
   url.searchParams.set("state", state);
-  url.searchParams.set("locale", "de-DE");
+  url.searchParams.set("prompt", "login");
+  if (config.oauthLocale) url.searchParams.set("locale", config.oauthLocale);
   return url.toString();
 }
 

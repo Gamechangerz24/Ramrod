@@ -37,7 +37,8 @@ const consentUrl = new URL(buildEbayConsentUrl(config, state));
 assert.equal(consentUrl.origin, "https://auth.ebay.com");
 assert.equal(consentUrl.searchParams.get("redirect_uri"), "Ramrod-Test-RuName");
 assert.equal(consentUrl.searchParams.get("response_type"), "code");
-assert.equal(consentUrl.searchParams.get("locale"), "de-DE");
+assert.equal(consentUrl.searchParams.get("locale"), "en-US");
+assert.equal(consentUrl.searchParams.get("prompt"), "login");
 
 const tokenResponse = await exchangeEbayAuthorizationCode(config, "authorization-code", async (_url, request) => {
   assert.match(String(request.headers.Authorization), /^Basic /);
