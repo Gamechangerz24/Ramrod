@@ -2628,6 +2628,7 @@ function ebaySetupPanel(setup) {
       <button class="primary-action" data-ebay-setup-action="${escapeHtml(setup.nextAction)}" type="button" ${busy || complete ? "disabled" : ""}>
         ${busy ? "RAMROD prüft..." : escapeHtml(setup.actionLabel)}
       </button>
+      ${setup.oauthConnected ? `<button class="secondary-action" data-ebay-setup-action="reconnect" type="button" ${busy ? "disabled" : ""}>eBay-Konto wechseln</button>` : ""}
       <small>${setup.environment === "production" ? "Echtes eBay-Verkäuferkonto" : "eBay-Sandbox zum Testen"}</small>
     </div>
   </section>`;
@@ -3003,7 +3004,7 @@ function bindEvents() {
       render();
     }
   });
-  document.querySelector("[data-ebay-setup-action]")?.addEventListener("click", async (event) => {
+  document.querySelectorAll("[data-ebay-setup-action]").forEach((button) => button.addEventListener("click", async (event) => {
     const action = event.currentTarget.dataset.ebaySetupAction;
     const setup = state.agentControl?.ebaySetup;
     if (!action || !setup || state.ebaySetupBusy) return;
@@ -3024,12 +3025,12 @@ function bindEvents() {
     }
 
     state.ebaySetupBusy = action;
-    state.importStatus = action === "connect"
-      ? "Sichere eBay-Anmeldung wird vorbereitet..."
+    state.importStatus = action === "connect" || action === "reconnect"
+      ? "Sichere eBay-Anmeldung wird vorbereitet. Prüfe vor der Freigabe das angezeigte Verkäuferkonto."
       : "RAMROD prüft eBay-Zugriff, Verkaufsregeln und Lagerort...";
     render();
     try {
-      if (action === "connect") {
+      if (action === "connect" || action === "reconnect") {
         const result = await postJson("/api/channel-setup/ebay/start", {});
         window.location.assign(result.authorizeUrl);
         return;
@@ -3045,7 +3046,7 @@ function bindEvents() {
       state.ebaySetupBusy = "";
       render();
     }
-  });
+  }));
   document.querySelectorAll("[data-start-agent]").forEach((button) => button.addEventListener("click", async () => {
     if (state.startingAgent) return;
     const agentType = button.dataset.startAgent;

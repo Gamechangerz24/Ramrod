@@ -3992,7 +3992,8 @@ img {
   min-width: 0;
 }
 
-.ebay-setup-action .primary-action {
+.ebay-setup-action .primary-action,
+.ebay-setup-action .secondary-action {
   justify-content: center;
   min-height: 44px;
   white-space: normal;
