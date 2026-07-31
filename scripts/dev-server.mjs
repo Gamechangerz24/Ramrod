@@ -59,6 +59,9 @@ import {
   createEncryptedSecretStore
 } from "./lib/secret-store.mjs";
 import {
+  createMissingEbaySellerDefaults
+} from "./lib/ebay-seller-setup.mjs";
+import {
   canAssignOrganizationRole,
   createInvitationToken,
   hashInvitationToken,
@@ -273,6 +276,11 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && pathname === "/api/channel-setup/ebay/verify") {
       await handleEbaySetupVerify(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/channel-setup/ebay/defaults") {
+      await handleEbaySetupDefaults(request, response);
       return;
     }
 
@@ -1582,6 +1590,60 @@ async function handleEbaySetupVerify(request, response) {
   }
 }
 
+async function handleEbaySetupDefaults(request, response) {
+  const tenant = await requireTenantPermission(request, response, "channels:manage");
+  if (!tenant) return;
+  try {
+    const body = JSON.parse(await readRequestBody(request, 32 * 1024));
+    if (body.confirm !== true) {
+      sendJson(response, 400, {
+        error: "explicit_confirmation_required",
+        message: "Bitte die einmalige Einrichtung ausdrücklich bestätigen."
+      });
+      return;
+    }
+
+    const account = await ebayChannelAccount(tenant.activeOrganization.id);
+    if (!account?.secret_ref || !credentialStore.has(account.secret_ref)) {
+      sendJson(response, 409, { error: "ebay_oauth_required", message: "Bitte eBay zuerst verbinden." });
+      return;
+    }
+
+    let credentials = credentialStore.get(account.secret_ref);
+    const fresh = await ensureFreshEbayCredentials(ebaySellerOAuthConfig, credentials);
+    if (fresh.updatedAt !== credentials.updatedAt) {
+      credentialStore.put(account.secret_ref, fresh);
+      credentials = fresh;
+    }
+
+    const currentSetup = await inspectEbaySellerSetup(ebaySellerOAuthConfig, credentials.accessToken);
+    const result = await createMissingEbaySellerDefaults(
+      ebaySellerOAuthConfig,
+      credentials.accessToken,
+      currentSetup,
+      body.settings || {}
+    );
+    const sellerSetup = await verifyAndPersistEbaySetup(account);
+    await supabaseUpdate(`/organization_channel_accounts?id=eq.${encodeURIComponent(account.id)}`, {
+      metadata: {
+        ...(account.metadata || {}),
+        sellerSetup,
+        sellerDefaults: result.settings,
+        verificationMessage: "eBay ist für Listing-Entwürfe vorbereitet."
+      }
+    });
+    sendJson(response, 200, {
+      created: result.created,
+      setup: await buildEbaySetupState(tenant.activeOrganization.id, request),
+      message: result.created.length
+        ? `${result.created.join(", ")} wurden bei eBay angelegt. Es wurde kein Artikel veröffentlicht.`
+        : "Die benötigten eBay-Regeln waren bereits vorhanden. Es wurde kein Artikel veröffentlicht."
+    });
+  } catch (error) {
+    sendJson(response, 400, { error: "ebay_setup_defaults_failed", message: redactSecret(error.message) });
+  }
+}
+
 async function handleEbayOAuthCallback(request, response) {
   const url = new URL(request.url, "http://localhost");
   const code = url.searchParams.get("code") || "";
@@ -1678,8 +1740,8 @@ async function buildEbaySetupState(organizationId, request = null) {
     nextAction = "verify";
     actionLabel = "Verbindung prüfen";
   } else if (!policiesReady || !locationReady) {
-    nextAction = "policies";
-    actionLabel = "eBay-Einstellungen ergänzen";
+    nextAction = "defaults";
+    actionLabel = "Verkaufsregeln anlegen";
   }
 
   return {
@@ -1690,8 +1752,10 @@ async function buildEbaySetupState(organizationId, request = null) {
     oauthConnected,
     policiesReady,
     locationReady,
+    needsSellerDefaults: oauthConnected && (!policiesReady || !locationReady),
     verifiedAt: verification?.verifiedAt || account?.last_verified_at || null,
     warnings: verification?.warnings || [],
+    sellerDefaults: account?.metadata?.sellerDefaults || null,
     missingConfiguration: [...new Set(readiness.missing)],
     callbackUrl: callbackBase ? `${callbackBase}/api/ebay/oauth/callback` : "",
     nextAction,

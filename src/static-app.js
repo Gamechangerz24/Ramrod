@@ -2688,6 +2688,8 @@ function ebaySetupPanel(setup) {
   const steps = Array.isArray(setup.steps) ? setup.steps : [];
   const busy = Boolean(state.ebaySetupBusy);
   const complete = Boolean(setup.ready);
+  const defaults = setup.sellerDefaults || {};
+  const needsDefaults = Boolean(setup.needsSellerDefaults);
   return `<section class="ebay-setup-panel ${complete ? "complete" : ""}">
     <div class="ebay-setup-copy">
       <p>Geführte Einrichtung</p>
@@ -2700,13 +2702,25 @@ function ebaySetupPanel(setup) {
         <div><strong>${escapeHtml(step.label)}</strong><small>${escapeHtml(step.detail)}</small></div>
       </li>`).join("")}
     </ol>
-    <div class="ebay-setup-action">
+    ${needsDefaults ? `<form class="ebay-defaults-form" data-ebay-defaults-form>
+      <div class="ebay-defaults-heading"><div><p>Einmalige Verkäuferregeln</p><h3>Versand und Rückgabe festlegen</h3></div><span>Kein Artikel wird veröffentlicht</span></div>
+      <div class="ebay-defaults-grid">
+        <label><span>Versand aus PLZ</span><input name="postalCode" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" placeholder="z. B. 73730" value="${escapeHtml(defaults.postalCode || "")}" required /></label>
+        <label><span>Paketdienst</span><select name="shippingServiceCode"><option value="DE_DHLPaket" ${defaults.shippingServiceCode === "DE_DHLPaket" ? "selected" : ""}>DHL Paket mit Sendungsverfolgung</option><option value="DE_HermesPaketVersichert" ${defaults.shippingServiceCode === "DE_HermesPaketVersichert" ? "selected" : ""}>Hermes Paket versichert</option><option value="DE_Paket" ${defaults.shippingServiceCode === "DE_Paket" ? "selected" : ""}>Standard-Paketversand</option></select></label>
+        <label><span>Versandkosten für Käufer</span><div class="input-suffix"><input name="shippingCost" type="number" min="0" max="100" step="0.01" value="${escapeHtml(defaults.shippingCost || "6.19")}" required /><b>EUR</b></div></label>
+        <label><span>Versandbereit in</span><select name="handlingDays"><option value="1" ${Number(defaults.handlingDays) === 1 ? "selected" : ""}>1 Werktag</option><option value="2" ${defaults.handlingDays === undefined || Number(defaults.handlingDays) === 2 ? "selected" : ""}>2 Werktagen</option><option value="3" ${Number(defaults.handlingDays) === 3 ? "selected" : ""}>3 Werktagen</option><option value="5" ${Number(defaults.handlingDays) === 5 ? "selected" : ""}>5 Werktagen</option></select></label>
+        <label><span>Freiwillige Rückgabe</span><select name="returnsAccepted"><option value="false" ${defaults.returnsAccepted !== true ? "selected" : ""}>Nein</option><option value="true" ${defaults.returnsAccepted === true ? "selected" : ""}>Ja</option></select></label>
+        <label><span>Bei Rückgabe</span><select name="returnShippingCostPayer"><option value="BUYER" ${defaults.returnShippingCostPayer !== "SELLER" ? "selected" : ""}>Käufer zahlt Rückversand</option><option value="SELLER" ${defaults.returnShippingCostPayer === "SELLER" ? "selected" : ""}>Verkäufer zahlt Rückversand</option></select></label>
+      </div>
+      <label class="ebay-defaults-confirm"><input name="confirm" type="checkbox" required /><span>Ich bestätige diese Standardregeln für dieses eBay-Verkäuferkonto. Gesetzliche Rechte bleiben unberührt.</span></label>
+      <div class="ebay-defaults-footer"><p>RAMROD verspricht bei gebrauchten Artikeln keine Garantie und erfindet weder Funktion noch Zubehör. Abweichende Artikel werden vor dem Einstellen erneut gestoppt.</p><button class="primary-action" type="submit" ${busy ? "disabled" : ""}>${busy ? "Wird bei eBay angelegt..." : "Regeln bei eBay anlegen"}</button></div>
+    </form>` : `<div class="ebay-setup-action">
       <button class="primary-action" data-ebay-setup-action="${escapeHtml(setup.nextAction)}" type="button" ${busy || complete ? "disabled" : ""}>
         ${busy ? "RAMROD prüft..." : escapeHtml(setup.actionLabel)}
       </button>
       ${setup.oauthConnected ? `<button class="secondary-action" data-ebay-setup-action="reconnect" type="button" ${busy ? "disabled" : ""}>eBay-Konto wechseln</button>` : ""}
       <small>${setup.environment === "production" ? "Echtes eBay-Verkäuferkonto" : "eBay-Sandbox zum Testen"}</small>
-    </div>
+    </div>`}
   </section>`;
 }
 
@@ -3079,6 +3093,35 @@ function bindEvents() {
       await loadTeamSettings();
     } catch (error) {
       state.importStatus = `Kanäle konnten nicht gespeichert werden: ${error.message}`;
+      render();
+    }
+  });
+  document.querySelector("[data-ebay-defaults-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.ebaySetupBusy) return;
+    const values = new FormData(event.currentTarget);
+    const settings = {
+      postalCode: String(values.get("postalCode") || "").trim(),
+      shippingServiceCode: String(values.get("shippingServiceCode") || "DE_DHLPaket"),
+      shippingCost: Number(values.get("shippingCost")),
+      handlingDays: Number(values.get("handlingDays")),
+      returnsAccepted: String(values.get("returnsAccepted")) === "true",
+      returnDays: 30,
+      returnShippingCostPayer: String(values.get("returnShippingCostPayer") || "BUYER")
+    };
+    const confirmed = window.confirm(`Diese Regeln einmalig bei eBay anlegen?\n\nVersand: ${settings.shippingCost.toFixed(2).replace(".", ",")} EUR\nBearbeitung: ${settings.handlingDays} Werktag(e)\nFreiwillige Rückgabe: ${settings.returnsAccepted ? "Ja, 30 Tage" : "Nein"}\n\nDabei wird kein Artikel veröffentlicht.`);
+    if (!confirmed) return;
+    state.ebaySetupBusy = "defaults";
+    state.importStatus = "RAMROD legt die bestätigten Verkaufsregeln und den Versandstandort bei eBay an...";
+    render();
+    try {
+      const result = await postJson("/api/channel-setup/ebay/defaults", { settings, confirm: true });
+      state.agentControl.ebaySetup = result.setup;
+      state.importStatus = result.message;
+    } catch (error) {
+      state.importStatus = `eBay-Regeln konnten nicht angelegt werden: ${error.message}`;
+    } finally {
+      state.ebaySetupBusy = "";
       render();
     }
   });
