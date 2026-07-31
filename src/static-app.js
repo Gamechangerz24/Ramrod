@@ -2690,11 +2690,12 @@ function ebaySetupPanel(setup) {
   const complete = Boolean(setup.ready);
   const defaults = setup.sellerDefaults || {};
   const needsDefaults = Boolean(setup.needsSellerDefaults);
+  const privateSeller = Boolean(setup.privateSeller);
   return `<section class="ebay-setup-panel ${complete ? "complete" : ""}">
     <div class="ebay-setup-copy">
       <p>Geführte Einrichtung</p>
       <h2>${complete ? "eBay ist verbunden" : "eBay Schritt für Schritt verbinden"}</h2>
-      <span>${complete ? "RAMROD kann jetzt Angebote vorbereiten und den Kontostatus prüfen." : "RAMROD erledigt die Technik. Du meldest dich nur bei eBay an und bestätigst den Zugriff."}</span>
+      <span>${complete ? (privateSeller ? "Privates eBay-Konto verbunden. Versand und Rückgabe werden bei jedem Artikel passend gesetzt." : "RAMROD kann jetzt Angebote vorbereiten und den Kontostatus prüfen.") : "RAMROD erledigt die Technik. Du meldest dich nur bei eBay an und bestätigst den Zugriff."}</span>
     </div>
     <ol class="ebay-setup-steps">
       ${steps.map((step, index) => `<li class="${step.ready ? "ready" : ""}">
@@ -2703,9 +2704,10 @@ function ebaySetupPanel(setup) {
       </li>`).join("")}
     </ol>
     ${needsDefaults ? `<form class="ebay-defaults-form" data-ebay-defaults-form>
-      <div class="ebay-defaults-heading"><div><p>Einmalige Kontoregeln</p><h3>Versandlogik und Rückgabe festlegen</h3></div><span>Kein Artikel wird veröffentlicht</span></div>
+      <div class="ebay-defaults-heading"><div><p>${privateSeller ? "Private Verkäuferregeln" : "Einmalige Kontoregeln"}</p><h3>Versandlogik und Rückgabe festlegen</h3></div><span>Kein Artikel wird veröffentlicht</span></div>
+      ${privateSeller ? `<div class="ebay-private-note"><strong>Privates eBay-Konto erkannt</strong><span>Dieses Konto unterstützt keine eBay-Unternehmensrichtlinien. RAMROD speichert die Angaben deshalb pro Artikel und überträgt sie beim Einstellen.</span></div>` : ""}
       <div class="ebay-shipping-logic">
-        <div><strong>Versand wird pro Artikel berechnet</strong><span>RAMROD legt DHL-Klassen von 2 bis 31,5 kg an und wählt später anhand von Gewicht, Verpackung und Größe.</span></div>
+        <div><strong>Versand wird pro Artikel berechnet</strong><span>${privateSeller ? "RAMROD nutzt DHL-Klassen von 2 bis 31,5 kg und überträgt die passende Versandart direkt in den Artikel." : "RAMROD legt DHL-Klassen von 2 bis 31,5 kg an und wählt später anhand von Gewicht, Verpackung und Größe."}</span></div>
         <div class="ebay-shipping-tiers"><span>bis 2 kg</span><span>bis 5 kg</span><span>bis 10 kg</span><span>bis 20 kg</span><span>bis 31,5 kg</span></div>
       </div>
       <div class="ebay-defaults-grid">
@@ -2715,8 +2717,8 @@ function ebaySetupPanel(setup) {
         <label data-ebay-return-option ${defaults.returnsAccepted === true ? "" : "hidden"}><span>Rückgabefrist</span><select name="returnDays"><option value="30" ${Number(defaults.returnDays || 30) === 30 ? "selected" : ""}>30 Tage</option><option value="60" ${Number(defaults.returnDays) === 60 ? "selected" : ""}>60 Tage</option></select></label>
         <label data-ebay-return-option ${defaults.returnsAccepted === true ? "" : "hidden"}><span>Rückversand</span><select name="returnShippingCostPayer"><option value="BUYER" ${defaults.returnShippingCostPayer !== "SELLER" ? "selected" : ""}>Käufer zahlt Rückversand</option><option value="SELLER" ${defaults.returnShippingCostPayer === "SELLER" ? "selected" : ""}>Verkäufer zahlt Rückversand</option></select></label>
       </div>
-      <label class="ebay-defaults-confirm"><input name="confirm" type="checkbox" required /><span>Ich bestätige diese Kontoregeln. Die konkrete Versandklasse wird für jeden Artikel einzeln gewählt. Gesetzliche Rechte bleiben unberührt.</span></label>
-      <div class="ebay-defaults-footer"><p>RAMROD verspricht bei gebrauchten Artikeln keine Garantie und erfindet weder Funktion noch Zubehör. Unklare Versanddaten oder Artikelangaben werden vor dem Einstellen erneut geprüft.</p><button class="primary-action" type="submit" ${busy ? "disabled" : ""}>${busy ? "Wird bei eBay angelegt..." : "Kontoregeln anlegen"}</button></div>
+      <label class="ebay-defaults-confirm"><input name="confirm" type="checkbox" required /><span>Ich bestätige diese ${privateSeller ? "Verkaufsregeln" : "Kontoregeln"}. Die konkrete Versandklasse wird für jeden Artikel einzeln gewählt. Gesetzliche Rechte bleiben unberührt.</span></label>
+      <div class="ebay-defaults-footer"><p>RAMROD verspricht bei gebrauchten Artikeln keine Garantie und erfindet weder Funktion noch Zubehör. Unklare Versanddaten oder Artikelangaben werden vor dem Einstellen erneut geprüft.</p><button class="primary-action" type="submit" ${busy ? "disabled" : ""}>${busy ? (privateSeller ? "Wird gespeichert..." : "Wird bei eBay angelegt...") : (privateSeller ? "Privatregeln speichern" : "Kontoregeln anlegen")}</button></div>
     </form>` : `<div class="ebay-setup-action">
       <button class="primary-action" data-ebay-setup-action="${escapeHtml(setup.nextAction)}" type="button" ${busy || complete ? "disabled" : ""}>
         ${busy ? "RAMROD prüft..." : escapeHtml(setup.actionLabel)}
@@ -3110,10 +3112,11 @@ function bindEvents() {
       returnDays: Number(values.get("returnDays") || 30),
       returnShippingCostPayer: String(values.get("returnShippingCostPayer") || "BUYER")
     };
-    const confirmed = window.confirm(`Diese Kontoregeln einmalig bei eBay anlegen?\n\nVersand: automatische Klassen von 2 bis 31,5 kg\nBearbeitung: ${settings.handlingDays} Werktag(e)\nFreiwillige Rückgabe: ${settings.returnsAccepted ? `Ja, ${settings.returnDays} Tage` : "Nein"}\n\nDer konkrete Versand wird später pro Artikel gewählt. Dabei wird kein Artikel veröffentlicht.`);
+    const privateSeller = Boolean(state.agentControl?.ebaySetup?.privateSeller);
+    const confirmed = window.confirm(`${privateSeller ? "Diese privaten Verkaufsregeln in RAMROD speichern?" : "Diese Kontoregeln einmalig bei eBay anlegen?"}\n\nVersand: automatische Klassen von 2 bis 31,5 kg\nBearbeitung: ${settings.handlingDays} Werktag(e)\nFreiwillige Rückgabe: ${settings.returnsAccepted ? `Ja, ${settings.returnDays} Tage` : "Nein"}\n\nDer konkrete Versand wird später pro Artikel gewählt. Dabei wird kein Artikel veröffentlicht.`);
     if (!confirmed) return;
     state.ebaySetupBusy = "defaults";
-    state.importStatus = "RAMROD legt die bestätigten Verkaufsregeln und den Versandstandort bei eBay an...";
+    state.importStatus = privateSeller ? "RAMROD speichert die privaten Verkaufsregeln..." : "RAMROD legt die bestätigten Verkaufsregeln und den Versandstandort bei eBay an...";
     render();
     try {
       const result = await postJson("/api/channel-setup/ebay/defaults", { settings, confirm: true });

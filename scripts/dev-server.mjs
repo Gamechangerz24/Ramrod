@@ -59,6 +59,7 @@ import {
   createEncryptedSecretStore
 } from "./lib/secret-store.mjs";
 import {
+  buildPrivateEbaySellerSetup,
   createMissingEbaySellerDefaults
 } from "./lib/ebay-seller-setup.mjs";
 import {
@@ -1617,6 +1618,28 @@ async function handleEbaySetupDefaults(request, response) {
     }
 
     const currentSetup = await inspectEbaySellerSetup(ebaySellerOAuthConfig, credentials.accessToken);
+    const privateSeller = tenant.activeOrganization.sellerMode === "private";
+    if (privateSeller) {
+      const result = buildPrivateEbaySellerSetup(currentSetup, body.settings || {});
+      await supabaseUpdate(`/organization_channel_accounts?id=eq.${encodeURIComponent(account.id)}`, {
+        status: "connected",
+        capabilities: ["sell.trading", "sell.fulfillment"],
+        last_verified_at: result.sellerSetup.verifiedAt,
+        metadata: {
+          ...(account.metadata || {}),
+          sellerSetup: result.sellerSetup,
+          sellerDefaults: result.settings,
+          verificationMessage: "Privates eBay-Konto verbunden; Versand und Rückgabe werden pro Artikel übertragen."
+        }
+      });
+      sendJson(response, 200, {
+        created: ["Private Verkaufsregeln"],
+        setup: await buildEbaySetupState(tenant.activeOrganization.id, request),
+        message: "Private Verkaufsregeln gespeichert. Versand und Rückgabe werden für jeden Artikel einzeln gesetzt. Es wurde nichts veröffentlicht."
+      });
+      return;
+    }
+
     const result = await createMissingEbaySellerDefaults(
       ebaySellerOAuthConfig,
       credentials.accessToken,
@@ -1640,6 +1663,7 @@ async function handleEbaySetupDefaults(request, response) {
         : "Die benötigten eBay-Regeln waren bereits vorhanden. Es wurde kein Artikel veröffentlicht."
     });
   } catch (error) {
+    console.error("eBay seller defaults failed:", redactSecret(error.message));
     sendJson(response, 400, { error: "ebay_setup_defaults_failed", message: redactSecret(error.message) });
   }
 }
@@ -1716,14 +1740,22 @@ async function buildEbaySetupState(organizationId, request = null) {
   const readiness = ebayOAuthReadiness(ebaySellerOAuthConfig);
   if (!credentialStore.available) readiness.missing.push("RAMROD_SECRET_ENCRYPTION_KEY");
   const account = await ebayChannelAccount(organizationId).catch(() => null);
+  const sellerMode = await organizationSellerMode(organizationId).catch(() => "business");
   const oauthConnected = Boolean(account?.secret_ref && credentialStore.available && credentialStore.has(account.secret_ref));
   const verification = account?.metadata?.sellerSetup || null;
-  const policiesReady = Boolean(
-    verification?.paymentPolicyCount > 0
-    && verification?.fulfillmentPolicyCount > 0
-    && verification?.returnPolicyCount > 0
-  );
-  const locationReady = Boolean(verification?.locationCount > 0);
+  const privateSeller = sellerMode === "private";
+  const privateListingMode = privateSeller;
+  const privateRulesReady = Boolean(verification?.privateSellerRulesReady && verification?.merchantPostalCode);
+  const policiesReady = privateListingMode
+    ? privateRulesReady
+    : Boolean(
+      verification?.paymentPolicyCount > 0
+      && verification?.fulfillmentPolicyCount > 0
+      && verification?.returnPolicyCount > 0
+    );
+  const locationReady = privateListingMode
+    ? privateRulesReady
+    : Boolean(verification?.locationCount > 0);
   const verified = Boolean(verification?.verifiedAt);
   const ready = Boolean(readiness.ready && credentialStore.available && oauthConnected && policiesReady && locationReady);
   const callbackBase = publicAppUrl || (request ? requestBaseUrl(request) : "");
@@ -1746,6 +1778,9 @@ async function buildEbaySetupState(organizationId, request = null) {
 
   return {
     environment: ebaySellerOAuthConfig.environment,
+    sellerMode,
+    listingMode: privateListingMode ? "trading" : "inventory",
+    privateSeller,
     accountId: account?.id || null,
     accountStatus: account?.status || "planned",
     ready,
@@ -1768,10 +1803,20 @@ async function buildEbaySetupState(organizationId, request = null) {
     steps: [
       { id: "technical", label: "RAMROD-Zugang", ready: readiness.ready && credentialStore.available, detail: readiness.ready && credentialStore.available ? "Sicher vorbereitet" : "Technische Konfiguration offen" },
       { id: "oauth", label: "eBay-Freigabe", ready: oauthConnected, detail: oauthConnected ? "Zugriff bestätigt" : "Einmal anmelden und zustimmen" },
-      { id: "policies", label: "Verkaufsregeln", ready: policiesReady, detail: policiesReady ? "Zahlung, Versand und Rückgabe gefunden" : "eBay-Regeln noch prüfen" },
-      { id: "location", label: "Lagerort", ready: locationReady, detail: locationReady ? "Lagerort gefunden" : "Lagerort noch prüfen" }
+      { id: "policies", label: "Verkaufsregeln", ready: policiesReady, detail: privateListingMode ? (policiesReady ? "Versand und Rückgabe pro Artikel gespeichert" : "Privatregeln noch bestätigen") : (policiesReady ? "Zahlung, Versand und Rückgabe gefunden" : "eBay-Regeln noch prüfen") },
+      { id: "location", label: "Versandort", ready: locationReady, detail: privateListingMode ? (locationReady ? "Versand-PLZ gespeichert" : "Versand-PLZ noch speichern") : (locationReady ? "Lagerort gefunden" : "Lagerort noch prüfen") }
     ]
   };
+}
+
+async function organizationSellerMode(organizationId) {
+  if (!organizationId) return "business";
+  try {
+    const rows = await supabaseSelect(`/customers?select=seller_mode&id=eq.${encodeURIComponent(organizationId)}&limit=1`);
+    return rows[0]?.seller_mode || "business";
+  } catch {
+    return "business";
+  }
 }
 
 async function ensureEbayChannelAccount(organizationId) {
@@ -1800,19 +1845,29 @@ async function verifyAndPersistEbaySetup(account) {
     credentialStore.put(account.secret_ref, fresh);
     credentials = fresh;
   }
-  const sellerSetup = await inspectEbaySellerSetup(ebaySellerOAuthConfig, credentials.accessToken);
-  const complete = sellerSetup.paymentPolicyCount > 0
-    && sellerSetup.fulfillmentPolicyCount > 0
-    && sellerSetup.returnPolicyCount > 0
-    && sellerSetup.locationCount > 0;
+  const inspectedSetup = await inspectEbaySellerSetup(ebaySellerOAuthConfig, credentials.accessToken);
+  const sellerMode = await organizationSellerMode(account.organization_id);
+  const previousSetup = account.metadata?.sellerSetup || {};
+  const privateListingMode = sellerMode === "private";
+  const sellerSetup = privateListingMode
+    ? { ...inspectedSetup, ...previousSetup, warnings: inspectedSetup.warnings, verifiedAt: inspectedSetup.verifiedAt, listingMode: "trading" }
+    : inspectedSetup;
+  const complete = privateListingMode
+    ? Boolean(sellerSetup.privateSellerRulesReady && sellerSetup.merchantPostalCode)
+    : sellerSetup.paymentPolicyCount > 0
+      && sellerSetup.fulfillmentPolicyCount > 0
+      && sellerSetup.returnPolicyCount > 0
+      && sellerSetup.locationCount > 0;
   await supabaseUpdate(`/organization_channel_accounts?id=eq.${encodeURIComponent(account.id)}`, {
     status: complete ? "connected" : "action_required",
-    capabilities: ["sell.account", "sell.inventory", "sell.fulfillment"],
+    capabilities: privateListingMode ? ["sell.trading", "sell.fulfillment"] : ["sell.account", "sell.inventory", "sell.fulfillment"],
     last_verified_at: sellerSetup.verifiedAt,
     metadata: {
       ...(account.metadata || {}),
       sellerSetup,
-      verificationMessage: complete ? "eBay ist für Listing-Entwürfe vorbereitet." : "eBay ist verbunden; mindestens eine Verkaufseinstellung fehlt noch."
+      verificationMessage: complete
+        ? (privateListingMode ? "Privates eBay-Konto verbunden; Regeln werden pro Artikel übertragen." : "eBay ist für Listing-Entwürfe vorbereitet.")
+        : (privateListingMode ? "eBay ist verbunden; private Verkaufsregeln müssen noch bestätigt werden." : "eBay ist verbunden; mindestens eine Verkaufseinstellung fehlt noch.")
     }
   });
   return sellerSetup;

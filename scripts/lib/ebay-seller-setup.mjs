@@ -41,6 +41,31 @@ export function normalizeEbaySellerDefaults(input = {}) {
   };
 }
 
+export function ebayBusinessPoliciesUnavailable(setup = {}) {
+  return (Array.isArray(setup.warnings) ? setup.warnings : []).some((warning) =>
+    /not eligible for Business Policy/i.test(String(warning || ""))
+  );
+}
+
+export function buildPrivateEbaySellerSetup(currentSetup = {}, input = {}, now = new Date()) {
+  const settings = normalizeEbaySellerDefaults(input);
+  return {
+    settings,
+    sellerSetup: {
+      ...currentSetup,
+      listingMode: "trading",
+      privateSellerRulesReady: true,
+      merchantPostalCode: settings.postalCode,
+      localShippingProfiles: settings.shippingProfiles,
+      handlingDays: settings.handlingDays,
+      returnsAccepted: settings.returnsAccepted,
+      returnDays: settings.returnDays,
+      returnShippingCostPayer: settings.returnShippingCostPayer,
+      verifiedAt: now.toISOString()
+    }
+  };
+}
+
 export async function createMissingEbaySellerDefaults(config, accessToken, currentSetup, input, fetchImpl = fetch) {
   const settings = normalizeEbaySellerDefaults(input);
   const setup = currentSetup || {};

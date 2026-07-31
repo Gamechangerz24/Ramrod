@@ -4299,6 +4299,26 @@ img {
   padding: 7px 9px;
 }
 
+.ebay-private-note {
+  align-items: start;
+  background: #fff4ea;
+  border: 1px solid #ffc79f;
+  border-left: 4px solid var(--orange);
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.ebay-private-note strong {
+  font-size: 12px;
+}
+
+.ebay-private-note span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .ebay-defaults-grid {
   display: grid;
   gap: 10px;

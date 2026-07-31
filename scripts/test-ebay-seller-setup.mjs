@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
+  buildPrivateEbaySellerSetup,
   buildMerchantLocationKey,
   createMissingEbaySellerDefaults,
+  ebayBusinessPoliciesUnavailable,
   normalizeEbaySellerDefaults
 } from "./lib/ebay-seller-setup.mjs";
 
@@ -20,6 +22,15 @@ assert.equal(normalized.shippingProfiles[0].shippingCost, "6.19");
 assert.equal(normalized.shippingProfiles.at(-1).maxWeightKg, 31.5);
 assert.equal(buildMerchantLocationKey("73730"), "ramrod-de-73730");
 assert.throws(() => normalizeEbaySellerDefaults({ postalCode: "7373" }), /Postleitzahl/);
+
+const privateSetup = buildPrivateEbaySellerSetup({
+  warnings: ["paymentPolicies: User is not eligible for Business Policy."]
+}, normalized, new Date("2026-07-31T12:00:00.000Z"));
+assert.equal(ebayBusinessPoliciesUnavailable(privateSetup.sellerSetup), true);
+assert.equal(privateSetup.sellerSetup.listingMode, "trading");
+assert.equal(privateSetup.sellerSetup.privateSellerRulesReady, true);
+assert.equal(privateSetup.sellerSetup.merchantPostalCode, "73730");
+assert.equal(privateSetup.sellerSetup.verifiedAt, "2026-07-31T12:00:00.000Z");
 
 const requests = [];
 const result = await createMissingEbaySellerDefaults(config, "access", {
