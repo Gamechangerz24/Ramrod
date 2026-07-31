@@ -2386,7 +2386,8 @@ function sellView() {
   const queues = getWorkQueues();
   const campaigns = queues.campaigns;
   const ebayNeedsDraft = queues.ebay.filter((item) => !item.ebayDraft);
-  const ebayDrafts = queues.ebay.filter((item) => item.ebayDraft);
+  const ebayPreviews = queues.ebay.filter((item) => item.ebayDraft && item.ebayListing?.status !== "prepared");
+  const ebayPrepared = queues.ebay.filter((item) => item.ebayListing?.status === "prepared");
   const assistedItems = visibleItems().filter((item) => item.approval?.status === "approved" && !["eBay", "Whatnot", "Pruefen", "Problemfall"].includes(item.channel));
 
   return `<div class="sales-flow">
@@ -2400,8 +2401,12 @@ function sellView() {
         ${listingQueue(ebayNeedsDraft, "Keine offenen eBay-Entwürfe.")}
       </div>
       <div class="sell-section">
-        <h3>Entwurf vorbereitet, noch nicht veröffentlicht</h3>
-        ${listingQueue(ebayDrafts, "Noch keine eBay-Entwürfe erstellt.")}
+        <h3>Vorschau in RAMROD</h3>
+        ${listingQueue(ebayPreviews, "Noch keine eBay-Vorschau erstellt.")}
+      </div>
+      <div class="sell-section">
+        <h3>Bei eBay vorbereitet, noch nicht veröffentlicht</h3>
+        ${listingQueue(ebayPrepared, "Noch kein Angebot zu eBay übertragen.")}
       </div>
     </div>
     <div class="sell-column">
@@ -2453,7 +2458,7 @@ function salesOverview() {
 function salesProgress(item) {
   if (item.stage === "Versand") return 5;
   if (item.stage === "Verkauft") return 4;
-  if ((item.channel === "eBay" && (item.ebayDraft || item.ebayListing)) || (item.approval?.status === "approved" && ["Whatnot", "Strongvision"].includes(item.channel))) return 3;
+  if ((item.channel === "eBay" && item.ebayListing?.status === "prepared") || (item.approval?.status === "approved" && ["Whatnot", "Strongvision"].includes(item.channel))) return 3;
   if (item.approval?.status === "approved") return 2;
   return item.priceCheck ? 1 : 0;
 }
@@ -2463,7 +2468,14 @@ function salesStatus(item) {
   if (item.stage === "Verkauft") return { label: "Verkauft", note: "Der Verkauf wurde erkannt", tone: "sold" };
   if (item.ebayListing?.status === "active" || item.stage === "Gelistet") return { label: "Bei eBay live", note: "Öffentlich gelistet · Verkauf wird überwacht", tone: "prepared" };
   if (item.ebayListing?.status === "prepared") return { label: "eBay bereit", note: "Bei eBay vorbereitet · noch nicht veröffentlicht", tone: "prepared" };
-  if (item.channel === "eBay" && item.ebayDraft) return { label: "eBay-Entwurf", note: "Vorbereitet · noch nicht auf eBay veröffentlicht", tone: "prepared" };
+  if (item.channel === "eBay" && item.ebayDraft) {
+    const ready = item.ebayDraft.status === "ready_for_ebay";
+    return {
+      label: ready ? "eBay-Vorschau bereit" : "eBay-Angaben offen",
+      note: ready ? "Nur in RAMROD · noch nicht zu eBay übertragen" : "Vorschau erstellt · Pflichtangaben oder Kontoeinrichtung fehlen",
+      tone: ready ? "approved" : "muted"
+    };
+  }
   if (item.channel === "Whatnot" && item.approval?.status === "approved") return { label: "Whatnot-Kampagne", note: item.campaignSuggestion || "Für die passende Live-Show vorsortiert", tone: "prepared" };
   if (!["eBay", "Whatnot", "Pruefen", "Problemfall", "Strongvision"].includes(item.channel) && item.approval?.status === "approved") {
     const primary = normalizeSalesStrategy(item).channelPlan?.primary;
@@ -2916,7 +2928,9 @@ async function approveItemForSale(item) {
     strategyAccepted: true,
     summary: strategy.approvalSummary
   };
-  item.stage = "Verkaufsbereit";
+  item.stage = item.channel === "eBay" && item.ebayDraft?.status !== "ready_for_ebay"
+    ? "Freigegeben"
+    : "Verkaufsbereit";
   await persistItem(item, "Verkaufsfreigabe");
   return item;
 }
@@ -3339,6 +3353,9 @@ function bindEvents() {
       const result = await postJson("/api/ebay-draft", { item });
       item.ebayDraft = result.ebayDraft;
       item.ebayListing = null;
+      state.selected = item.id;
+      state.view = "inventory";
+      state.mobileDetailsItem = item.id;
       state.importStatus = result.ebayDraft?.status === "ready_for_ebay"
         ? "eBay-Vorschau vollständig. Prüfe sie und lege danach den unveröffentlichten Entwurf bei eBay an."
         : "eBay-Vorschau erzeugt. Ergänze die markierten Pflichtangaben.";
@@ -3422,7 +3439,9 @@ function bindEvents() {
       await approveItemForSale(item);
       state.view = "sell";
       state.importStatus = item.channel === "eBay"
-        ? `${item.sku} freigegeben. Der eBay-Entwurf ist vorbereitet; die Live-Veröffentlichung folgt mit dem eBay-Connector.`
+        ? item.ebayDraft?.status === "ready_for_ebay"
+          ? `${item.sku} freigegeben. Die RAMROD-Vorschau ist vollständig; noch wurde nichts zu eBay übertragen.`
+          : `${item.sku} freigegeben. Die RAMROD-Vorschau zeigt noch offene eBay- oder Kontoeinstellungen.`
         : `${item.sku} freigegeben und für ${channelLabel(item.channel)} vorbereitet.`;
     } catch (error) {
       state.importStatus = `Freigabe fehlgeschlagen: ${error.message}`;
