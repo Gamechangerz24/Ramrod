@@ -2709,8 +2709,9 @@ function ebaySetupPanel(setup) {
         <label><span>Paketdienst</span><select name="shippingServiceCode"><option value="DE_DHLPaket" ${defaults.shippingServiceCode === "DE_DHLPaket" ? "selected" : ""}>DHL Paket mit Sendungsverfolgung</option><option value="DE_HermesPaketVersichert" ${defaults.shippingServiceCode === "DE_HermesPaketVersichert" ? "selected" : ""}>Hermes Paket versichert</option><option value="DE_Paket" ${defaults.shippingServiceCode === "DE_Paket" ? "selected" : ""}>Standard-Paketversand</option></select></label>
         <label><span>Versandkosten für Käufer</span><div class="input-suffix"><input name="shippingCost" type="number" min="0" max="100" step="0.01" value="${escapeHtml(defaults.shippingCost || "6.19")}" required /><b>EUR</b></div></label>
         <label><span>Versandbereit in</span><select name="handlingDays"><option value="1" ${Number(defaults.handlingDays) === 1 ? "selected" : ""}>1 Werktag</option><option value="2" ${defaults.handlingDays === undefined || Number(defaults.handlingDays) === 2 ? "selected" : ""}>2 Werktagen</option><option value="3" ${Number(defaults.handlingDays) === 3 ? "selected" : ""}>3 Werktagen</option><option value="5" ${Number(defaults.handlingDays) === 5 ? "selected" : ""}>5 Werktagen</option></select></label>
-        <label><span>Freiwillige Rückgabe</span><select name="returnsAccepted"><option value="false" ${defaults.returnsAccepted !== true ? "selected" : ""}>Nein</option><option value="true" ${defaults.returnsAccepted === true ? "selected" : ""}>Ja</option></select></label>
-        <label><span>Bei Rückgabe</span><select name="returnShippingCostPayer"><option value="BUYER" ${defaults.returnShippingCostPayer !== "SELLER" ? "selected" : ""}>Käufer zahlt Rückversand</option><option value="SELLER" ${defaults.returnShippingCostPayer === "SELLER" ? "selected" : ""}>Verkäufer zahlt Rückversand</option></select></label>
+        <label><span>Freiwillige Rückgabe</span><select name="returnsAccepted" data-ebay-returns-select><option value="false" ${defaults.returnsAccepted !== true ? "selected" : ""}>Nein</option><option value="true" ${defaults.returnsAccepted === true ? "selected" : ""}>Ja</option></select></label>
+        <label data-ebay-return-option ${defaults.returnsAccepted === true ? "" : "hidden"}><span>Rückgabefrist</span><select name="returnDays"><option value="30" ${Number(defaults.returnDays || 30) === 30 ? "selected" : ""}>30 Tage</option><option value="60" ${Number(defaults.returnDays) === 60 ? "selected" : ""}>60 Tage</option></select></label>
+        <label data-ebay-return-option ${defaults.returnsAccepted === true ? "" : "hidden"}><span>Rückversand</span><select name="returnShippingCostPayer"><option value="BUYER" ${defaults.returnShippingCostPayer !== "SELLER" ? "selected" : ""}>Käufer zahlt Rückversand</option><option value="SELLER" ${defaults.returnShippingCostPayer === "SELLER" ? "selected" : ""}>Verkäufer zahlt Rückversand</option></select></label>
       </div>
       <label class="ebay-defaults-confirm"><input name="confirm" type="checkbox" required /><span>Ich bestätige diese Standardregeln für dieses eBay-Verkäuferkonto. Gesetzliche Rechte bleiben unberührt.</span></label>
       <div class="ebay-defaults-footer"><p>RAMROD verspricht bei gebrauchten Artikeln keine Garantie und erfindet weder Funktion noch Zubehör. Abweichende Artikel werden vor dem Einstellen erneut gestoppt.</p><button class="primary-action" type="submit" ${busy ? "disabled" : ""}>${busy ? "Wird bei eBay angelegt..." : "Regeln bei eBay anlegen"}</button></div>
@@ -3106,10 +3107,10 @@ function bindEvents() {
       shippingCost: Number(values.get("shippingCost")),
       handlingDays: Number(values.get("handlingDays")),
       returnsAccepted: String(values.get("returnsAccepted")) === "true",
-      returnDays: 30,
+      returnDays: Number(values.get("returnDays") || 30),
       returnShippingCostPayer: String(values.get("returnShippingCostPayer") || "BUYER")
     };
-    const confirmed = window.confirm(`Diese Regeln einmalig bei eBay anlegen?\n\nVersand: ${settings.shippingCost.toFixed(2).replace(".", ",")} EUR\nBearbeitung: ${settings.handlingDays} Werktag(e)\nFreiwillige Rückgabe: ${settings.returnsAccepted ? "Ja, 30 Tage" : "Nein"}\n\nDabei wird kein Artikel veröffentlicht.`);
+    const confirmed = window.confirm(`Diese Regeln einmalig bei eBay anlegen?\n\nVersand: ${settings.shippingCost.toFixed(2).replace(".", ",")} EUR\nBearbeitung: ${settings.handlingDays} Werktag(e)\nFreiwillige Rückgabe: ${settings.returnsAccepted ? `Ja, ${settings.returnDays} Tage` : "Nein"}\n\nDabei wird kein Artikel veröffentlicht.`);
     if (!confirmed) return;
     state.ebaySetupBusy = "defaults";
     state.importStatus = "RAMROD legt die bestätigten Verkaufsregeln und den Versandstandort bei eBay an...";
@@ -3124,6 +3125,12 @@ function bindEvents() {
       state.ebaySetupBusy = "";
       render();
     }
+  });
+  document.querySelector("[data-ebay-returns-select]")?.addEventListener("change", (event) => {
+    const visible = event.currentTarget.value === "true";
+    document.querySelectorAll("[data-ebay-return-option]").forEach((field) => {
+      field.hidden = !visible;
+    });
   });
   document.querySelectorAll("[data-ebay-setup-action]").forEach((button) => button.addEventListener("click", async (event) => {
     const action = event.currentTarget.dataset.ebaySetupAction;
