@@ -1,25 +1,17 @@
 const categoryTypes = Object.freeze([{ name: "ALL_EXCLUDING_MOTORS_VEHICLES" }]);
 
-const shippingServices = Object.freeze({
-  DE_DHLPaket: { carrierCode: "DHL", label: "DHL Paket" },
-  DE_HermesPaketVersichert: { carrierCode: "Hermes", label: "Hermes Paket" },
-  DE_Paket: { carrierCode: "Other", label: "Standard-Paketversand" }
-});
+export const ramrodShippingProfiles = Object.freeze([
+  Object.freeze({ name: "RAMROD DHL Paket bis 2 kg", maxWeightKg: 2, shippingCost: "6.19" }),
+  Object.freeze({ name: "RAMROD DHL Paket bis 5 kg", maxWeightKg: 5, shippingCost: "7.69" }),
+  Object.freeze({ name: "RAMROD DHL Paket bis 10 kg", maxWeightKg: 10, shippingCost: "10.49" }),
+  Object.freeze({ name: "RAMROD DHL Paket bis 20 kg", maxWeightKg: 20, shippingCost: "18.99" }),
+  Object.freeze({ name: "RAMROD DHL Paket bis 31,5 kg", maxWeightKg: 31.5, shippingCost: "23.99" })
+]);
 
 export function normalizeEbaySellerDefaults(input = {}) {
   const postalCode = String(input.postalCode || "").trim();
   if (!/^\d{5}$/.test(postalCode)) {
     throw new Error("Bitte eine deutsche Postleitzahl mit fünf Ziffern angeben.");
-  }
-
-  const shippingServiceCode = String(input.shippingServiceCode || "DE_DHLPaket").trim();
-  if (!shippingServices[shippingServiceCode]) {
-    throw new Error("Der gewählte Paketdienst wird von RAMROD noch nicht unterstützt.");
-  }
-
-  const shippingCost = Number(input.shippingCost);
-  if (!Number.isFinite(shippingCost) || shippingCost < 0 || shippingCost > 100) {
-    throw new Error("Bitte gültige Versandkosten zwischen 0 und 100 Euro angeben.");
   }
 
   const handlingDays = Number(input.handlingDays);
@@ -41,10 +33,7 @@ export function normalizeEbaySellerDefaults(input = {}) {
   return {
     postalCode,
     country: "DE",
-    shippingServiceCode,
-    shippingCarrierCode: shippingServices[shippingServiceCode].carrierCode,
-    shippingLabel: shippingServices[shippingServiceCode].label,
-    shippingCost: shippingCost.toFixed(2),
+    shippingProfiles: ramrodShippingProfiles.map((profile) => ({ ...profile })),
     handlingDays,
     returnsAccepted,
     returnDays,
@@ -75,27 +64,39 @@ export async function createMissingEbaySellerDefaults(config, accessToken, curre
     created.push("Zahlungsregel");
   }
 
-  if (!setup.fulfillmentPolicyCount) {
-    await ebayJsonRequest(config, "/sell/account/v1/fulfillment_policy", {
-      name: "RAMROD Versand Deutschland",
-      description: "Von RAMROD angelegte Standardregel für nachverfolgten Paketversand innerhalb Deutschlands.",
-      marketplaceId,
-      categoryTypes,
-      handlingTime: { value: settings.handlingDays, unit: "BUSINESS_DAY" },
-      shippingOptions: [{
-        optionType: "DOMESTIC",
-        costType: "FLAT_RATE",
-        shippingServices: [{
-          sortOrder: 1,
-          shippingCarrierCode: settings.shippingCarrierCode,
-          shippingServiceCode: settings.shippingServiceCode,
-          freeShipping: Number(settings.shippingCost) === 0,
-          shippingCost: { value: settings.shippingCost, currency: "EUR" },
-          additionalShippingCost: { value: "0.00", currency: "EUR" }
+  const existingFulfillmentNames = new Set(
+    (Array.isArray(setup.fulfillmentPolicies) ? setup.fulfillmentPolicies : [])
+      .map((policy) => String(policy?.name || "").trim())
+      .filter(Boolean)
+  );
+  const shippingProfilesToCreate = !setup.fulfillmentPolicyCount
+    ? settings.shippingProfiles
+    : Array.isArray(setup.fulfillmentPolicies)
+      ? settings.shippingProfiles.filter((profile) => !existingFulfillmentNames.has(profile.name))
+      : [];
+  if (shippingProfilesToCreate.length) {
+    for (const profile of shippingProfilesToCreate) {
+      await ebayJsonRequest(config, "/sell/account/v1/fulfillment_policy", {
+        name: profile.name,
+        description: `Von RAMROD angelegte Versandklasse bis ${String(profile.maxWeightKg).replace(".", ",")} kg. Die passende Klasse wird pro Artikel gewählt.`,
+        marketplaceId,
+        categoryTypes,
+        handlingTime: { value: settings.handlingDays, unit: "BUSINESS_DAY" },
+        shippingOptions: [{
+          optionType: "DOMESTIC",
+          costType: "FLAT_RATE",
+          shippingServices: [{
+            sortOrder: 1,
+            shippingCarrierCode: "DHL",
+            shippingServiceCode: "DE_DHLPaket",
+            freeShipping: false,
+            shippingCost: { value: profile.shippingCost, currency: "EUR" },
+            additionalShippingCost: { value: "0.00", currency: "EUR" }
+          }]
         }]
-      }]
-    }, headers, fetchImpl);
-    created.push("Versandregel");
+      }, headers, fetchImpl);
+    }
+    created.push(`${shippingProfilesToCreate.length} Versandklassen`);
   }
 
   if (!setup.returnPolicyCount) {

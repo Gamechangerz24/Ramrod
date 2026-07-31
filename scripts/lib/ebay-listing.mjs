@@ -130,7 +130,7 @@ export function buildEbayListingPreview({
     item.image
   ]).filter((value) => /^https:\/\//i.test(value) || /^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(value));
   const descriptionHtml = buildDescriptionHtml(normalized, sellerProfile);
-  const shipping = policySummary(sellerSetup.fulfillmentPolicy, sellerSetup.fulfillmentPolicyId, "Versandregel");
+  const shipping = selectFulfillmentPolicy(sellerSetup, item);
   const returns = policySummary(sellerSetup.returnPolicy, sellerSetup.returnPolicyId, "Rueckgaberegel");
   const payment = policySummary(sellerSetup.paymentPolicy, sellerSetup.paymentPolicyId, "Zahlungsregel");
   const readiness = [
@@ -358,6 +358,38 @@ function policySummary(policy, fallbackId, fallbackName) {
     id: policy?.id || fallbackId || "",
     name: policy?.name || fallbackName,
     summary: policy?.summary || "Details werden aus dem verbundenen eBay-Konto uebernommen."
+  };
+}
+
+function selectFulfillmentPolicy(sellerSetup, item) {
+  const candidates = Array.isArray(sellerSetup.fulfillmentPolicies)
+    ? sellerSetup.fulfillmentPolicies.filter((policy) => policy?.id)
+    : [];
+  if (!candidates.length) {
+    return policySummary(sellerSetup.fulfillmentPolicy, sellerSetup.fulfillmentPolicyId, "Versandregel");
+  }
+
+  const itemWeightKg = Number(item.shippingWeightKg || item.weight || 0);
+  const estimatedPackedWeightKg = itemWeightKg > 0
+    ? Math.round((itemWeightKg * 1.15 + 0.2) * 100) / 100
+    : 0;
+  const weighted = candidates
+    .filter((policy) => Number(policy.maxWeightKg) > 0)
+    .sort((left, right) => Number(left.maxWeightKg) - Number(right.maxWeightKg));
+  const selected = estimatedPackedWeightKg > 0
+    ? weighted.find((policy) => Number(policy.maxWeightKg) >= estimatedPackedWeightKg) || weighted.at(-1)
+    : weighted[0] || candidates[0];
+  const selectionNote = estimatedPackedWeightKg > 0
+    ? `Automatisch gewählt für ca. ${estimatedPackedWeightKg.toFixed(2).replace(".", ",")} kg Versandgewicht.`
+    : "Vor Veröffentlichung anhand von Gewicht und Verpackung prüfen.";
+
+  return {
+    ...policySummary(selected, selected?.id, "Versandregel"),
+    maxWeightKg: selected?.maxWeightKg || null,
+    shippingCost: selected?.shippingCost ?? null,
+    estimatedPackedWeightKg: estimatedPackedWeightKg || null,
+    selectionMode: estimatedPackedWeightKg > 0 ? "automatic" : "requires_check",
+    summary: [selected?.summary, selectionNote].filter(Boolean).join(" · ")
   };
 }
 

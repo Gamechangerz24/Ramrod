@@ -12,13 +12,12 @@ const config = {
 
 const normalized = normalizeEbaySellerDefaults({
   postalCode: "73730",
-  shippingServiceCode: "DE_DHLPaket",
-  shippingCost: 6.19,
   handlingDays: 2,
   returnsAccepted: false
 });
-assert.equal(normalized.shippingCost, "6.19");
-assert.equal(normalized.shippingCarrierCode, "DHL");
+assert.equal(normalized.shippingProfiles.length, 5);
+assert.equal(normalized.shippingProfiles[0].shippingCost, "6.19");
+assert.equal(normalized.shippingProfiles.at(-1).maxWeightKg, 31.5);
 assert.equal(buildMerchantLocationKey("73730"), "ramrod-de-73730");
 assert.throws(() => normalizeEbaySellerDefaults({ postalCode: "7373" }), /Postleitzahl/);
 
@@ -33,13 +32,14 @@ const result = await createMissingEbaySellerDefaults(config, "access", {
   return jsonResponse({}, url.includes("/location/") ? 204 : 201);
 });
 
-assert.deepEqual(result.created, ["Zahlungsregel", "Versandregel", "Rückgaberegel", "Versandstandort"]);
-assert.equal(requests.length, 4);
+assert.deepEqual(result.created, ["Zahlungsregel", "5 Versandklassen", "Rückgaberegel", "Versandstandort"]);
+assert.equal(requests.length, 8);
 assert.equal(requests[1].body.shippingOptions[0].optionType, "DOMESTIC");
 assert.equal(requests[1].body.shippingOptions[0].shippingServices[0].shippingServiceCode, "DE_DHLPaket");
 assert.equal(requests[1].body.shippingOptions[0].shippingServices[0].shippingCost.value, "6.19");
-assert.equal(requests[2].body.returnsAccepted, false);
-assert.equal(requests[3].body.location.address.postalCode, "73730");
+assert.equal(requests[5].body.shippingOptions[0].shippingServices[0].shippingCost.value, "23.99");
+assert.equal(requests[6].body.returnsAccepted, false);
+assert.equal(requests[7].body.location.address.postalCode, "73730");
 
 const noChanges = await createMissingEbaySellerDefaults(config, "access", {
   paymentPolicyCount: 1,

@@ -149,6 +149,7 @@ export async function inspectEbaySellerSetup(config, accessToken, fetchImpl = fe
   const results = Object.fromEntries(settled);
   const authorizationError = Object.values(results).find((entry) => [401, 403].includes(entry.status));
   if (authorizationError) throw new Error(authorizationError.message);
+  const fulfillmentPolicies = summarizeFulfillmentPolicies(results.fulfillmentPolicies?.body);
 
   return {
     marketplaceId,
@@ -157,11 +158,12 @@ export async function inspectEbaySellerSetup(config, accessToken, fetchImpl = fe
     returnPolicyCount: results.returnPolicies?.count || 0,
     locationCount: results.locations?.count || 0,
     paymentPolicyId: firstCollectionValue(results.paymentPolicies?.body, "paymentPolicies", "paymentPolicyId"),
-    fulfillmentPolicyId: firstCollectionValue(results.fulfillmentPolicies?.body, "fulfillmentPolicies", "fulfillmentPolicyId"),
+    fulfillmentPolicyId: fulfillmentPolicies[0]?.id || null,
     returnPolicyId: firstCollectionValue(results.returnPolicies?.body, "returnPolicies", "returnPolicyId"),
     merchantLocationKey: firstCollectionValue(results.locations?.body, "locations", "merchantLocationKey"),
     paymentPolicy: summarizePolicy(results.paymentPolicies?.body, "paymentPolicies", "paymentPolicyId", summarizePaymentPolicy),
-    fulfillmentPolicy: summarizePolicy(results.fulfillmentPolicies?.body, "fulfillmentPolicies", "fulfillmentPolicyId", summarizeFulfillmentPolicy),
+    fulfillmentPolicy: fulfillmentPolicies[0] || null,
+    fulfillmentPolicies,
     returnPolicy: summarizePolicy(results.returnPolicies?.body, "returnPolicies", "returnPolicyId", summarizeReturnPolicy),
     warnings: Object.entries(results)
       .filter(([, entry]) => !entry.ok)
@@ -230,6 +232,26 @@ function summarizeFulfillmentPolicy(policy) {
     ? `Bearbeitung ${policy.handlingTime.value} ${policy.handlingTime.unit || "BUSINESS_DAY"}`
     : "";
   return [services.slice(0, 3).join("; "), handling].filter(Boolean).join(" · ") || "Versanddetails sind im eBay-Konto hinterlegt.";
+}
+
+function summarizeFulfillmentPolicies(body) {
+  const policies = Array.isArray(body?.fulfillmentPolicies) ? body.fulfillmentPolicies : [];
+  return policies
+    .filter((policy) => policy?.fulfillmentPolicyId)
+    .map((policy) => {
+      const service = (policy.shippingOptions || [])
+        .flatMap((option) => option.shippingServices || [])
+        .find(Boolean);
+      const weightMatch = String(policy.name || "").match(/bis\s+(\d+(?:[.,]\d+)?)\s*kg/i);
+      return {
+        id: policy.fulfillmentPolicyId,
+        name: policy.name || "eBay-Versandregel",
+        summary: summarizeFulfillmentPolicy(policy),
+        maxWeightKg: weightMatch ? Number(weightMatch[1].replace(",", ".")) : null,
+        shippingCost: service?.shippingCost?.value ?? null,
+        shippingServiceCode: service?.shippingServiceCode || null
+      };
+    });
 }
 
 function summarizeReturnPolicy(policy) {

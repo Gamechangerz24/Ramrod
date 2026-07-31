@@ -19,6 +19,7 @@ const item = {
   completeness: "Linker und rechter Joy-Con",
   fair: 49,
   confidence: 94,
+  weight: 0.35,
   image: "https://images.example.test/joycon.jpg"
 };
 const content = {
@@ -41,6 +42,10 @@ const sellerSetup = {
   merchantLocationKey: "warehouse-1",
   paymentPolicy: { id: "pay-1", name: "eBay-Zahlung", summary: "Zahlung ueber eBay" },
   fulfillmentPolicy: { id: "ship-1", name: "DHL Paket", summary: "DHL Paket: 5.49 EUR" },
+  fulfillmentPolicies: [
+    { id: "ship-2", name: "RAMROD DHL Paket bis 2 kg", summary: "DHL Paket: 6.19 EUR", maxWeightKg: 2, shippingCost: "6.19" },
+    { id: "ship-5", name: "RAMROD DHL Paket bis 5 kg", summary: "DHL Paket: 7.69 EUR", maxWeightKg: 5, shippingCost: "7.69" }
+  ],
   returnPolicy: { id: "return-1", name: "Keine Rueckgabe", summary: "Keine Rueckgabe laut eBay-Regel" }
 };
 const category = { id: "117042", name: "Controller", treeId: "77", path: ["Videospiele"] };
@@ -59,7 +64,8 @@ const preview = buildEbayListingPreview({
 });
 assert.equal(preview.status, "ready_for_ebay");
 assert.equal(preview.title.length <= 80, true);
-assert.equal(preview.shipping.id, "ship-1");
+assert.equal(preview.shipping.id, "ship-2");
+assert.equal(preview.shipping.selectionMode, "automatic");
 assert.equal(preview.warranty.mode, "not_stated");
 assert.deepEqual(preview.missingAspects, []);
 

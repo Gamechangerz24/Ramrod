@@ -57,12 +57,14 @@ assert.ok(credentials.accessTokenExpiresAt > Date.now());
 
 const setup = await inspectEbaySellerSetup(config, "access", async (url) => {
   if (url.includes("payment_policy")) return jsonResponse({ total: 1, paymentPolicies: [{ paymentPolicyId: "pay-1" }] });
-  if (url.includes("fulfillment_policy")) return jsonResponse({ total: 1, fulfillmentPolicies: [{ fulfillmentPolicyId: "ship-1" }] });
+  if (url.includes("fulfillment_policy")) return jsonResponse({ total: 1, fulfillmentPolicies: [{ fulfillmentPolicyId: "ship-1", name: "RAMROD DHL Paket bis 2 kg", shippingOptions: [{ shippingServices: [{ shippingServiceCode: "DE_DHLPaket", shippingCost: { value: "6.19", currency: "EUR" } }] }] }] });
   if (url.includes("return_policy")) return jsonResponse({ total: 1, returnPolicies: [{ returnPolicyId: "return-1" }] });
   return jsonResponse({ total: 1, locations: [{ merchantLocationKey: "warehouse-1" }] });
 });
 assert.equal(setup.paymentPolicyId, "pay-1");
 assert.equal(setup.fulfillmentPolicyId, "ship-1");
+assert.equal(setup.fulfillmentPolicies[0].maxWeightKg, 2);
+assert.equal(setup.fulfillmentPolicies[0].shippingCost, "6.19");
 assert.equal(setup.returnPolicyId, "return-1");
 assert.equal(setup.merchantLocationKey, "warehouse-1");
 
