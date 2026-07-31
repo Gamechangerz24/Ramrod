@@ -41,6 +41,19 @@ import {
   verifyEbayOAuthState
 } from "./lib/ebay-oauth.mjs";
 import {
+  buildEbayListingPreview,
+  buildEbayListingPrompt,
+  buildFallbackEbayContent,
+  createEbayOffer,
+  createOrReplaceEbayInventoryItem,
+  ebayListingContentSchema,
+  getEbayCategoryAspects,
+  normalizeEbayListingContent,
+  publishEbayOffer,
+  suggestEbayCategory,
+  uploadEbayImageFromUrl
+} from "./lib/ebay-listing.mjs";
+import {
   buildSecretRef,
   createEncryptedSecretStore
 } from "./lib/secret-store.mjs";
@@ -345,6 +358,16 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && pathname === "/api/ebay-draft") {
       await handleEbayDraft(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/ebay-listing/prepare") {
+      await handlePrepareEbayListing(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/ebay-listing/publish") {
+      await handlePublishEbayListing(request, response);
       return;
     }
 
@@ -2611,13 +2634,7 @@ async function handlePriceCheck(request, response) {
 
   const priceCheck = await buildPriceCheck(item);
   const decision = reconcileSalesDecision(item, priceCheck);
-  const decidedItem = {
-    ...item,
-    channel: decision.channel,
-    whatnotEligible: decision.whatnotEligible,
-    salesStrategy: decision.salesStrategy
-  };
-  const ebayDraft = decision.channel === "eBay" ? buildEbayDraft(decidedItem, priceCheck) : null;
+  const ebayDraft = null;
 
   sendJson(response, 200, {
     provider: priceCheck.method,
@@ -2647,10 +2664,273 @@ async function handleEbayDraft(request, response) {
     return;
   }
 
-  sendJson(response, 200, {
-    provider: "local-draft",
-    ebayDraft: buildEbayDraft(item, item.priceCheck || null)
+  try {
+    const account = await ebayChannelAccount(tenant.activeOrganization.id);
+    if (!account?.secret_ref || !credentialStore.has(account.secret_ref)) {
+      throw httpError(409, "Verbinde zuerst das eBay-Verkaeuferkonto dieses Kundenbereichs.");
+    }
+    const sellerSetup = account.metadata?.sellerSetup || await verifyAndPersistEbaySetup(account);
+    const appToken = await getEbayAppToken();
+    const category = await suggestEbayCategory(ebaySellerOAuthConfig, appToken, item.title);
+    const categoryAspects = await getEbayCategoryAspects(ebaySellerOAuthConfig, appToken, category);
+    const sellerProfile = await activeSellerProfile(tenant.activeOrganization.id);
+    const content = await optimizeEbayListingContent(item, category, categoryAspects);
+    const ebayDraft = buildEbayListingPreview({
+      item,
+      content,
+      category,
+      categoryAspects,
+      sellerSetup,
+      sellerProfile
+    });
+    sendJson(response, 200, {
+      provider: process.env.OPENAI_API_KEY ? "openai-ebay-listing-agent" : "deterministic-ebay-listing-agent",
+      ebayDraft
+    });
+  } catch (error) {
+    sendJson(response, error.status || 500, {
+      error: "ebay_preview_failed",
+      message: redactSecret(error.message),
+      details: redactEbayErrors(error.details)
+    });
+  }
+}
+
+async function handlePrepareEbayListing(request, response) {
+  const tenant = await requireTenantPermission(request, response, "sales:approve");
+  if (!tenant) return;
+  const body = JSON.parse(await readRequestBody(request, 12 * 1024 * 1024));
+  const item = body.item;
+  const preview = item?.ebayDraft;
+  if (!item?.sku || !preview?.title) {
+    sendJson(response, 400, { error: "missing_ebay_preview", message: "Erzeuge und pruefe zuerst die eBay-Vorschau." });
+    return;
+  }
+  const missing = (preview.readiness || []).filter((entry) => !entry.ready);
+  if (missing.length || preview.status !== "ready_for_ebay") {
+    sendJson(response, 409, {
+      error: "ebay_preview_incomplete",
+      message: `Vor dem eBay-Entwurf fehlt: ${missing.map((entry) => entry.label).join(", ") || "Pflichtangaben"}.`
+    });
+    return;
+  }
+
+  try {
+    const dbItem = await tenantItem(tenant.activeOrganization.id, item);
+    const account = await ebayChannelAccount(tenant.activeOrganization.id);
+    if (!account?.secret_ref || !credentialStore.has(account.secret_ref)) {
+      throw httpError(409, "Das eBay-Verkaeuferkonto ist nicht verbunden.");
+    }
+    const previous = await supabaseSelect(`/listings?select=*&item_id=eq.${encodeURIComponent(dbItem.id)}&channel_id=eq.ebay&status=eq.prepared&order=created_at.desc&limit=1`);
+    if (previous[0]?.external_id) {
+      sendJson(response, 200, {
+        provider: "ebay-inventory-api",
+        prepared: true,
+        reused: true,
+        listing: publicListing(previous[0])
+      });
+      return;
+    }
+
+    let credentials = credentialStore.get(account.secret_ref);
+    const fresh = await ensureFreshEbayCredentials(ebaySellerOAuthConfig, credentials);
+    if (fresh.updatedAt !== credentials.updatedAt) {
+      credentialStore.put(account.secret_ref, fresh);
+      credentials = fresh;
+    }
+
+    const sourceImages = (preview.sourceImages || []).filter(validHttpsUrl).slice(0, 12);
+    if (!sourceImages.length) throw httpError(409, "Mindestens ein veroeffentlichtes HTTPS-Foto fehlt.");
+    const ebayImages = [];
+    for (const imageUrl of sourceImages) {
+      const uploaded = await uploadEbayImageFromUrl(ebaySellerOAuthConfig, credentials.accessToken, imageUrl);
+      ebayImages.push(uploaded.imageUrl);
+    }
+
+    const inventoryPayload = await createOrReplaceEbayInventoryItem(
+      ebaySellerOAuthConfig,
+      credentials.accessToken,
+      preview,
+      ebayImages
+    );
+    const offer = await createEbayOffer(ebaySellerOAuthConfig, credentials.accessToken, preview);
+    const rows = await supabaseInsert("/listings", {
+      item_id: dbItem.id,
+      channel_id: "ebay",
+      external_id: offer.offerId,
+      status: "prepared",
+      title: preview.title,
+      price: preview.price,
+      payload: {
+        preview,
+        inventoryItem: inventoryPayload,
+        offer: offer.payload,
+        ebayImages,
+        preparedAt: new Date().toISOString()
+      }
+    });
+    sendJson(response, 201, {
+      provider: "ebay-inventory-api",
+      prepared: true,
+      reused: false,
+      listing: publicListing(rows[0]),
+      message: "Der Artikel ist als unveroeffentlichtes eBay-Angebot vorbereitet."
+    });
+  } catch (error) {
+    sendJson(response, error.status || 500, {
+      error: "ebay_prepare_failed",
+      message: redactSecret(error.message),
+      details: redactEbayErrors(error.details)
+    });
+  }
+}
+
+async function handlePublishEbayListing(request, response) {
+  const tenant = await requireTenantPermission(request, response, "sales:approve");
+  if (!tenant) return;
+  const body = JSON.parse(await readRequestBody(request, 256 * 1024));
+  if (body.confirm !== true) {
+    sendJson(response, 409, { error: "publish_confirmation_required", message: "Die Live-Veroeffentlichung muss ausdruecklich bestaetigt werden." });
+    return;
+  }
+
+  try {
+    const dbItem = await tenantItem(tenant.activeOrganization.id, body.item || {});
+    const listings = await supabaseSelect(`/listings?select=*&item_id=eq.${encodeURIComponent(dbItem.id)}&channel_id=eq.ebay&status=eq.prepared&order=created_at.desc&limit=1`);
+    const listing = listings[0];
+    if (!listing?.external_id) throw httpError(409, "Lege zuerst den unveroeffentlichten eBay-Entwurf an.");
+    const account = await ebayChannelAccount(tenant.activeOrganization.id);
+    if (!account?.secret_ref || !credentialStore.has(account.secret_ref)) throw httpError(409, "Das eBay-Verkaeuferkonto ist nicht verbunden.");
+    let credentials = credentialStore.get(account.secret_ref);
+    const fresh = await ensureFreshEbayCredentials(ebaySellerOAuthConfig, credentials);
+    if (fresh.updatedAt !== credentials.updatedAt) {
+      credentialStore.put(account.secret_ref, fresh);
+      credentials = fresh;
+    }
+
+    const published = await publishEbayOffer(
+      ebaySellerOAuthConfig,
+      credentials.accessToken,
+      listing.external_id,
+      listing.payload?.preview?.marketplaceId || "EBAY_DE"
+    );
+    const listingId = String(published.listingId);
+    const listingUrl = `https://www.ebay.de/itm/${encodeURIComponent(listingId)}`;
+    const listedAt = new Date().toISOString();
+    const updatedRows = await supabaseUpdate(`/listings?id=eq.${encodeURIComponent(listing.id)}`, {
+      status: "active",
+      url: listingUrl,
+      listed_at: listedAt,
+      payload: { ...(listing.payload || {}), publishResponse: published, publishedAt: listedAt }
+    });
+    const raw = dbItem.raw_analysis || {};
+    const uiItem = {
+      ...(raw.uiItem || {}),
+      stage: "Gelistet",
+      ebayListing: { offerId: listing.external_id, listingId, url: listingUrl, status: "active", listedAt }
+    };
+    await supabaseUpdate(`/items?id=eq.${encodeURIComponent(dbItem.id)}`, {
+      status: "Gelistet",
+      raw_analysis: { ...raw, uiItem, ebayListing: uiItem.ebayListing }
+    });
+    sendJson(response, 200, {
+      provider: "ebay-inventory-api",
+      published: true,
+      listing: publicListing(updatedRows[0]),
+      listingId,
+      url: listingUrl,
+      message: "Der Artikel ist jetzt live bei eBay."
+    });
+  } catch (error) {
+    sendJson(response, error.status || 500, {
+      error: "ebay_publish_failed",
+      message: redactSecret(error.message),
+      details: redactEbayErrors(error.details)
+    });
+  }
+}
+
+async function optimizeEbayListingContent(item, category, categoryAspects) {
+  const fallback = buildFallbackEbayContent(item);
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return fallback;
+  const requestBody = {
+    model,
+    input: [{
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: buildEbayListingPrompt(item, { category, aspects: categoryAspects })
+      }]
+    }],
+    max_output_tokens: 1800,
+    text: {
+      ...(isGpt56Model(model) ? { verbosity: "low" } : {}),
+      format: {
+        type: "json_schema",
+        name: "ramrod_ebay_listing_content",
+        strict: true,
+        schema: ebayListingContentSchema()
+      }
+    },
+    ...(isGpt56Model(model) ? { reasoning: { effort: strategyReasoningEffort } } : {})
+  };
+  const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(requestBody)
   });
+  const result = await openAiResponse.json().catch(() => ({}));
+  if (!openAiResponse.ok) {
+    console.warn("eBay listing optimizer fallback:", redactSecret(result.error?.message || `OpenAI HTTP ${openAiResponse.status}`));
+    return fallback;
+  }
+  return normalizeEbayListingContent(extractJson(result), item);
+}
+
+async function activeSellerProfile(organizationId) {
+  if (multiTenantSchemaAvailable === false) return null;
+  const rows = await supabaseSelect(`/seller_profiles?select=id,organization_id,name,seller_type,legal_name,return_policy,config&organization_id=eq.${encodeURIComponent(organizationId)}&active=eq.true&order=created_at.asc&limit=1`).catch(() => []);
+  return rows[0] || null;
+}
+
+async function tenantItem(organizationId, item) {
+  const filters = item.dbId
+    ? `id=eq.${encodeURIComponent(item.dbId)}`
+    : `sku=eq.${encodeURIComponent(item.sku || "")}`;
+  const rows = await supabaseSelect(`/items?select=*&customer_id=eq.${encodeURIComponent(organizationId)}&${filters}&limit=1`);
+  if (!rows[0]) throw httpError(404, "Der Artikel wurde in diesem Kundenbereich nicht gefunden.");
+  return rows[0];
+}
+
+function publicListing(listing) {
+  if (!listing) return null;
+  return {
+    id: listing.id,
+    itemId: listing.item_id,
+    offerId: listing.external_id,
+    status: listing.status,
+    title: listing.title,
+    price: Number(listing.price || 0),
+    url: listing.url || "",
+    listedAt: listing.listed_at || null,
+    createdAt: listing.created_at || null
+  };
+}
+
+function redactEbayErrors(details) {
+  return (Array.isArray(details) ? details : []).slice(0, 8).map((entry) => ({
+    errorId: entry.errorId || null,
+    category: entry.category || "",
+    message: redactSecret(entry.longMessage || entry.message || "eBay hat die Anfrage abgelehnt."),
+    parameters: (entry.parameters || []).map((parameter) => ({
+      name: parameter.name || "",
+      value: redactSecret(parameter.value || "")
+    }))
+  }));
 }
 
 async function buildPriceCheck(item) {
@@ -3053,63 +3333,6 @@ function ebayApiBaseUrl() {
   return (process.env.EBAY_ENV || "sandbox").toLowerCase() === "production"
     ? "https://api.ebay.com"
     : "https://api.sandbox.ebay.com";
-}
-
-function buildEbayDraft(item, priceCheck = null) {
-  const fair = Number(priceCheck?.fair || item.fair || 1);
-  const title = clampText(cleanTitle(item.title), 80);
-  const description = [
-    `<p><strong>${escapeHtml(title)}</strong></p>`,
-    `<p>Zustand: ${escapeHtml(item.condition || "Gebraucht")}</p>`,
-    `<p>Vollstaendigkeit: ${escapeHtml(item.completeness || "siehe Fotos")}</p>`,
-    item.notes ? `<p>Hinweise: ${escapeHtml(item.notes)}</p>` : "",
-    `<p>SKU: ${escapeHtml(item.sku)}</p>`,
-    "<p>Bitte Fotos genau pruefen. Verkauf erfolgt aus dem CREATORS RAMROD Intake.</p>"
-  ].filter(Boolean).join("");
-
-  return {
-    status: "draft_only",
-    sku: item.sku,
-    marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_DE",
-    inventoryItem: {
-      sku: item.sku,
-      availability: {
-        shipToLocationAvailability: { quantity: 1 }
-      },
-      condition: mapEbayCondition(item.condition),
-      product: {
-        title,
-        description,
-        imageUrls: item.image?.startsWith("http") ? [item.image] : [],
-        aspects: {
-          Brand: [item.franchise || "Unbekannt"],
-          Type: [item.category || "Collectible"],
-          ConditionNotes: [item.completeness || item.condition || "siehe Fotos"]
-        }
-      }
-    },
-    offerDraft: {
-      marketplaceId: process.env.EBAY_MARKETPLACE_ID || "EBAY_DE",
-      format: "FIXED_PRICE",
-      availableQuantity: 1,
-      categoryId: "TODO_TAXONOMY_LOOKUP",
-      merchantLocationKey: process.env.EBAY_MERCHANT_LOCATION_KEY || "creators-warehouse-01",
-      listingDescription: description,
-      pricingSummary: {
-        price: { value: fair.toFixed(2), currency: "EUR" }
-      },
-      listingPolicies: {
-        paymentPolicyId: process.env.EBAY_PAYMENT_POLICY_ID || "TODO_PAYMENT_POLICY_ID",
-        fulfillmentPolicyId: process.env.EBAY_FULFILLMENT_POLICY_ID || "TODO_FULFILLMENT_POLICY_ID",
-        returnPolicyId: process.env.EBAY_RETURN_POLICY_ID || "TODO_RETURN_POLICY_ID"
-      }
-    },
-    warnings: [
-      "Noch nicht an eBay gesendet.",
-      "Kategorie und Business Policies muessen vor Publish gesetzt sein.",
-      "Bilder als Data-URL muessen vor eBay Upload extern gehostet oder per Media API verarbeitet werden."
-    ]
-  };
 }
 
 function normalizeResearch(item) {
@@ -3543,15 +3766,6 @@ function cleanTitle(value) {
 function clampText(value, maxLength) {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3).trim()}...`;
-}
-
-function mapEbayCondition(value = "") {
-  const text = value.toLowerCase();
-  if (text.includes("neu")) return "NEW";
-  if (text.includes("defekt")) return "FOR_PARTS_OR_NOT_WORKING";
-  if (text.includes("sehr gut")) return "USED_EXCELLENT";
-  if (text.includes("gut")) return "USED_GOOD";
-  return "USED_ACCEPTABLE";
 }
 
 function escapeHtml(value) {

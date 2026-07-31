@@ -1896,6 +1896,219 @@ img {
   gap: 10px;
 }
 
+.ebay-draft-card {
+  border-top: 3px solid var(--orange);
+}
+
+.ebay-listing-head,
+.ebay-preview-title,
+.ebay-publish-actions,
+.ebay-external-status {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.ebay-listing-head small,
+.ebay-preview-copy small,
+.ebay-policy-grid small {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ebay-listing-head h3 {
+  font-size: 22px;
+  margin: 2px 0 0;
+}
+
+.ebay-preview-title {
+  background: #0d0d0d;
+  color: #fff;
+  padding: 14px;
+}
+
+.ebay-preview-title strong {
+  font-size: 19px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.ebay-preview-title em {
+  color: var(--orange);
+  flex: 0 0 auto;
+  font-size: 22px;
+  font-style: normal;
+  font-weight: 950;
+}
+
+.ebay-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ebay-preview-meta span {
+  background: #f1f3f5;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 8px;
+}
+
+.ebay-preview-copy {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ebay-preview-copy > div,
+.ebay-policy-grid article,
+.ebay-readiness,
+.ebay-missing-form,
+.ebay-external-status {
+  border: 1px solid var(--line);
+  padding: 12px;
+}
+
+.ebay-preview-copy p,
+.ebay-policy-grid span,
+.ebay-missing-form p {
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.ebay-policy-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ebay-policy-grid article {
+  display: grid;
+  gap: 3px;
+}
+
+.ebay-policy-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.ebay-readiness {
+  display: grid;
+  gap: 0;
+}
+
+.ebay-readiness-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  min-height: 52px;
+}
+
+.ebay-readiness-row:first-of-type {
+  border-top: 0;
+}
+
+.ebay-readiness-row .mini-icon {
+  background: #fff2e8;
+  color: #a33b00;
+}
+
+.ebay-readiness-row.done .mini-icon {
+  background: #e9f5ee;
+  color: #267a50;
+}
+
+.ebay-readiness-row span,
+.ebay-readiness-row small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ebay-readiness-row small {
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.ebay-missing-form {
+  display: grid;
+  gap: 10px;
+}
+
+.ebay-missing-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ebay-missing-grid label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ebay-missing-grid label span {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ebay-missing-grid input,
+.ebay-missing-grid select {
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font: inherit;
+  min-width: 0;
+  padding: 10px;
+  width: 100%;
+}
+
+.ebay-external-status {
+  align-items: flex-start;
+  background: #f1f8f4;
+  border-color: #add3bd;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ebay-external-status span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ebay-external-status a {
+  color: #165e3b;
+  font-weight: 900;
+}
+
+.ebay-publish-actions {
+  justify-content: flex-end;
+}
+
+.ebay-publish-actions .secondary-action,
+.ebay-publish-actions .primary-action {
+  min-height: 44px;
+}
+
+.ebay-publish-actions .danger-confirm {
+  background: var(--orange);
+  color: #0d0d0d;
+}
+
+.ebay-safety-note {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .applied-price {
   align-items: center;
   background: #0d0d0d;
@@ -5101,6 +5314,32 @@ img {
 
   .release-fields-form .secondary-action {
     grid-column: 1;
+  }
+
+  .ebay-preview-copy,
+  .ebay-policy-grid,
+  .ebay-missing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ebay-preview-title,
+  .ebay-listing-head {
+    align-items: flex-start;
+  }
+
+  .ebay-preview-title {
+    display: grid;
+  }
+
+  .ebay-publish-actions {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .ebay-publish-actions > button {
+    justify-content: center;
+    width: 100%;
   }
 }
 

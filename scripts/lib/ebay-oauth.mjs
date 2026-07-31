@@ -160,6 +160,9 @@ export async function inspectEbaySellerSetup(config, accessToken, fetchImpl = fe
     fulfillmentPolicyId: firstCollectionValue(results.fulfillmentPolicies?.body, "fulfillmentPolicies", "fulfillmentPolicyId"),
     returnPolicyId: firstCollectionValue(results.returnPolicies?.body, "returnPolicies", "returnPolicyId"),
     merchantLocationKey: firstCollectionValue(results.locations?.body, "locations", "merchantLocationKey"),
+    paymentPolicy: summarizePolicy(results.paymentPolicies?.body, "paymentPolicies", "paymentPolicyId", summarizePaymentPolicy),
+    fulfillmentPolicy: summarizePolicy(results.fulfillmentPolicies?.body, "fulfillmentPolicies", "fulfillmentPolicyId", summarizeFulfillmentPolicy),
+    returnPolicy: summarizePolicy(results.returnPolicies?.body, "returnPolicies", "returnPolicyId", summarizeReturnPolicy),
     warnings: Object.entries(results)
       .filter(([, entry]) => !entry.ok)
       .map(([key, entry]) => `${key}: ${entry.message}`),
@@ -194,6 +197,48 @@ function ebayCollectionCount(body) {
 function firstCollectionValue(body, collectionKey, valueKey) {
   const rows = body?.[collectionKey];
   return Array.isArray(rows) ? rows.find((entry) => entry?.[valueKey])?.[valueKey] || null : null;
+}
+
+function summarizePolicy(body, collectionKey, idKey, summarizer) {
+  const policy = Array.isArray(body?.[collectionKey])
+    ? body[collectionKey].find((entry) => entry?.[idKey])
+    : null;
+  if (!policy) return null;
+  return {
+    id: policy[idKey],
+    name: policy.name || "eBay-Regel",
+    summary: summarizer(policy)
+  };
+}
+
+function summarizePaymentPolicy(policy) {
+  const methods = (policy.paymentMethods || [])
+    .map((entry) => entry.paymentMethodType)
+    .filter(Boolean);
+  return methods.length ? `Zahlung: ${methods.join(", ")}` : "Zahlung wird ueber eBay abgewickelt.";
+}
+
+function summarizeFulfillmentPolicy(policy) {
+  const services = (policy.shippingOptions || [])
+    .flatMap((option) => option.shippingServices || [])
+    .map((service) => {
+      const name = service.shippingServiceCode || service.shippingCarrierCode || "Versand";
+      const amount = service.shippingCost?.value;
+      return amount !== undefined ? `${name}: ${amount} ${service.shippingCost?.currency || "EUR"}` : name;
+    });
+  const handling = policy.handlingTime?.value !== undefined
+    ? `Bearbeitung ${policy.handlingTime.value} ${policy.handlingTime.unit || "BUSINESS_DAY"}`
+    : "";
+  return [services.slice(0, 3).join("; "), handling].filter(Boolean).join(" · ") || "Versanddetails sind im eBay-Konto hinterlegt.";
+}
+
+function summarizeReturnPolicy(policy) {
+  if (policy.returnsAccepted === false) return "Keine Rueckgabe laut eBay-Regel.";
+  const period = policy.returnPeriod?.value !== undefined
+    ? `${policy.returnPeriod.value} ${policy.returnPeriod.unit || "DAY"}`
+    : "";
+  const payer = policy.returnShippingCostPayer ? `Rueckversand: ${policy.returnShippingCostPayer}` : "";
+  return [policy.returnsAccepted ? "Rueckgabe akzeptiert" : "Rueckgabedetails laut eBay", period, payer].filter(Boolean).join(" · ");
 }
 
 function ebayApiMessage(body, status) {

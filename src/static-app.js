@@ -251,6 +251,8 @@ const state = {
   mobileDetailsItem: "",
   priceChecking: "",
   ebayDrafting: "",
+  ebayPreparing: "",
+  ebayPublishing: "",
   approving: "",
   draft: createEmptyDraft("SV-001"),
   items: normalizeItems(loadStoredItems(initialOrganizationId))
@@ -843,7 +845,7 @@ function getWorkQueues(items = visibleItems()) {
     || item.confidence < 70
     || ["Gescannt", "Freigabe"].includes(item.stage)
   ));
-  const ebay = approvedItems.filter((item) => item.channel === "eBay");
+  const ebay = approvedItems.filter((item) => item.channel === "eBay" && item.ebayListing?.status !== "active");
   const whatnot = approvedItems.filter((item) => item.whatnotEligible || item.channel === "Whatnot");
   const assisted = approvedItems.filter((item) => ["Kleinanzeigen", "Vinted", "Facebook Marketplace", "Spezialforum", "Strongvision", "RAMROD Shop"].includes(item.channel));
   const problem = items.filter((item) => item.channel === "Problemfall");
@@ -865,6 +867,8 @@ function getWorkQueues(items = visibleItems()) {
 function workStatus(item) {
   if (item.stage === "Versand") return "Versand";
   if (item.stage === "Verkauft") return "Verkauft";
+  if (item.ebayListing?.status === "active" || item.stage === "Gelistet") return "Bei eBay live";
+  if (item.ebayListing?.status === "prepared") return "Bei eBay vorbereitet";
   if (item.approval?.status === "approved" || item.stage === "Verkaufsbereit") return "Freigegeben";
   if (item.channel === "Problemfall") return "Problem";
   if (item.channel === "Pruefen" || item.confidence < 70) return "Prüfen";
@@ -1810,7 +1814,7 @@ function inspector(item) {
         <div class="price-grid">${suggestion("Minimum", euro(item.low))}${suggestion("Marktwert", euro(item.fair))}${suggestion("Optimistisch", euro(item.aggressive))}${suggestion("Erkennung", `${item.confidence}%`)}</div>
         <div class="draft-actions">
           <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Prüfe..." : "Preise checken"}</button>
-          <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Baue..." : "eBay-Entwurf"}</button>
+          <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Optimiere..." : "eBay-Vorschau"}</button>
         </div>
         ${priceCheckCard(item)}
         ${ebayDraftCard(item)}
@@ -2267,12 +2271,70 @@ function rejectedEvidenceRow(entry) {
 function ebayDraftCard(item) {
   const draft = item.ebayDraft;
   if (!draft) return "";
-  return `<section class="script-box ebay-draft-card">
-    <h3>eBay-Entwurf</h3>
-    <div class="detail-grid">${suggestion("Status", draft.status)}${suggestion("SKU", draft.sku)}${suggestion("Marktplatz", draft.marketplaceId)}${suggestion("Preis", euro(Number(draft.offerDraft?.pricingSummary?.price?.value || item.fair)))}</div>
-    <p>${escapeHtml(draft.inventoryItem?.product?.title || item.title)}</p>
-    <div class="source-strip">Kategorie: ${escapeHtml(draft.offerDraft?.categoryId || "TODO")} · Location: ${escapeHtml(draft.offerDraft?.merchantLocationKey || "-")}</div>
+  if (!draft.readiness) {
+    return `<section class="script-box ebay-draft-card legacy-draft">
+      <div class="ebay-listing-head"><div><small>Alter lokaler Entwurf</small><h3>eBay-Vorschau neu erzeugen</h3></div><span class="status-pill muted">Nicht verkaufsfähig</span></div>
+      <p>Dieser Entwurf stammt noch aus der alten Platzhalter-Logik. Klicke erneut auf „eBay-Vorschau“, damit Titel, Kategorie, Versand und Rückgabe vollständig geprüft werden.</p>
+    </section>`;
+  }
+  const ready = draft.status === "ready_for_ebay" && draft.readiness.every((entry) => entry.ready);
+  const prepared = item.ebayListing?.status === "prepared";
+  const active = item.ebayListing?.status === "active";
+  const missing = draft.missingAspects || [];
+  const content = draft.content || {};
+  return `<section class="script-box ebay-draft-card ${ready ? "ready" : "needs-input"}">
+    <div class="ebay-listing-head">
+      <div><small>Käuferansicht vor Veröffentlichung</small><h3>eBay-Angebot</h3></div>
+      <span class="status-pill ${active ? "live" : prepared ? "running" : ready ? "ready" : "muted"}">${active ? "Live" : prepared ? "Bei eBay vorbereitet" : ready ? "Bereit" : "Angaben fehlen"}</span>
+    </div>
+    <div class="ebay-preview-title"><strong>${escapeHtml(draft.title || item.title)}</strong><em>${euro(Number(draft.price || item.fair))}</em></div>
+    <div class="ebay-preview-meta">
+      <span>${escapeHtml(draft.category?.name || "Kategorie offen")}</span>
+      <span>${escapeHtml(draft.condition || item.condition)}</span>
+      <span>${Number(draft.sourceImages?.length || 0)} Foto${Number(draft.sourceImages?.length || 0) === 1 ? "" : "s"}</span>
+      <span>${escapeHtml(draft.sellerType === "private" ? "Privater Verkäufer" : draft.sellerType === "business" ? "Gewerblicher Verkäufer" : "Verkäuferprofil")}</span>
+    </div>
+    <div class="ebay-preview-copy">
+      <div><small>Beschreibung</small><p>${escapeHtml(content.shortDescription || "-")}</p></div>
+      <div><small>Zustand</small><p>${escapeHtml(content.conditionDescription || item.condition || "-")}</p></div>
+    </div>
+    <div class="ebay-policy-grid">
+      ${ebayPolicyCard("Versand", draft.shipping)}
+      ${ebayPolicyCard("Rückgabe", draft.returns)}
+      ${ebayPolicyCard("Zahlung", draft.payment)}
+      ${ebayPolicyCard("Garantie", draft.warranty)}
+    </div>
+    <section class="ebay-readiness">
+      <div class="section-title"><h3>Vor dem Einstellen</h3><span>${draft.readiness.filter((entry) => entry.ready).length}/${draft.readiness.length}</span></div>
+      ${draft.readiness.map((entry) => `<div class="ebay-readiness-row ${entry.ready ? "done" : "missing"}">${icon(entry.ready ? "OK" : "!")}<span><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.detail)}</small></span></div>`).join("")}
+    </section>
+    ${missing.length ? `<form class="ebay-missing-form" data-ebay-missing-form="${item.id}">
+      <strong>Fehlende eBay-Merkmale ergänzen</strong>
+      <p>Diese Angaben verlangt die gewählte eBay-Kategorie. Bitte nur sichere Werte eintragen.</p>
+      <div class="ebay-missing-grid">${missing.map((entry) => ebayAspectField(entry)).join("")}</div>
+      <button class="secondary-action" type="submit">${icon("OK")}Merkmale übernehmen</button>
+    </form>` : ""}
+    ${item.ebayListing ? `<div class="ebay-external-status"><strong>${active ? "Das Angebot ist live" : "Unveröffentlichter eBay-Entwurf angelegt"}</strong><span>Offer-ID ${escapeHtml(item.ebayListing.offerId || "-")}${item.ebayListing.listingId ? ` · Listing ${escapeHtml(item.ebayListing.listingId)}` : ""}</span>${item.ebayListing.url ? `<a href="${escapeHtml(item.ebayListing.url)}" target="_blank" rel="noreferrer">Auf eBay ansehen</a>` : ""}</div>` : ""}
+    <div class="ebay-publish-actions">
+      <button class="secondary-action" data-ebay-draft="${item.id}" type="button" ${state.ebayDrafting ? "disabled" : ""}>${icon("AI")}${state.ebayDrafting === item.id ? "Optimiere..." : "Vorschau neu erzeugen"}</button>
+      ${!prepared && !active ? `<button class="primary-action" data-ebay-prepare="${item.id}" type="button" ${!ready || state.ebayPreparing ? "disabled" : ""}>${icon("EB")}${state.ebayPreparing === item.id ? "Wird angelegt..." : "Bei eBay vorbereiten"}</button>` : ""}
+      ${prepared ? `<button class="primary-action danger-confirm" data-ebay-publish="${item.id}" type="button" ${state.ebayPublishing ? "disabled" : ""}>${icon("GO")}${state.ebayPublishing === item.id ? "Wird veröffentlicht..." : "Jetzt bei eBay veröffentlichen"}</button>` : ""}
+    </div>
+    <small class="ebay-safety-note">„Bei eBay vorbereiten“ ist noch nicht öffentlich. Erst „Jetzt bei eBay veröffentlichen“ erzeugt das sichtbare Angebot.</small>
   </section>`;
+}
+
+function ebayPolicyCard(label, policy) {
+  return `<article><small>${escapeHtml(label)}</small><strong>${escapeHtml(policy?.name || "Offen")}</strong><span>${escapeHtml(policy?.summary || policy?.text || "Noch nicht hinterlegt")}</span></article>`;
+}
+
+function ebayAspectField(entry) {
+  const name = escapeHtml(entry.name || "Merkmal");
+  const values = Array.isArray(entry.values) ? entry.values.filter(Boolean) : [];
+  if (values.length && values.length <= 40) {
+    return `<label><span>${name}</span><select name="${name}" required><option value="">Bitte wählen</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label>`;
+  }
+  return `<label><span>${name}</span><input name="${name}" required /></label>`;
 }
 
 function channelPicker(item) {
@@ -2391,7 +2453,7 @@ function salesOverview() {
 function salesProgress(item) {
   if (item.stage === "Versand") return 5;
   if (item.stage === "Verkauft") return 4;
-  if ((item.channel === "eBay" && item.ebayDraft) || (item.approval?.status === "approved" && ["Whatnot", "Strongvision"].includes(item.channel))) return 3;
+  if ((item.channel === "eBay" && (item.ebayDraft || item.ebayListing)) || (item.approval?.status === "approved" && ["Whatnot", "Strongvision"].includes(item.channel))) return 3;
   if (item.approval?.status === "approved") return 2;
   return item.priceCheck ? 1 : 0;
 }
@@ -2399,6 +2461,8 @@ function salesProgress(item) {
 function salesStatus(item) {
   if (item.stage === "Versand") return { label: "Versandbereit", note: "Verkauf erkannt · jetzt packen und versenden", tone: "shipping" };
   if (item.stage === "Verkauft") return { label: "Verkauft", note: "Der Verkauf wurde erkannt", tone: "sold" };
+  if (item.ebayListing?.status === "active" || item.stage === "Gelistet") return { label: "Bei eBay live", note: "Öffentlich gelistet · Verkauf wird überwacht", tone: "prepared" };
+  if (item.ebayListing?.status === "prepared") return { label: "eBay bereit", note: "Bei eBay vorbereitet · noch nicht veröffentlicht", tone: "prepared" };
   if (item.channel === "eBay" && item.ebayDraft) return { label: "eBay-Entwurf", note: "Vorbereitet · noch nicht auf eBay veröffentlicht", tone: "prepared" };
   if (item.channel === "Whatnot" && item.approval?.status === "approved") return { label: "Whatnot-Kampagne", note: item.campaignSuggestion || "Für die passende Live-Show vorsortiert", tone: "prepared" };
   if (!["eBay", "Whatnot", "Pruefen", "Problemfall", "Strongvision"].includes(item.channel) && item.approval?.status === "approved") {
@@ -2429,7 +2493,7 @@ function listingQueue(items, emptyText) {
     <button class="queue-row" data-select="${item.id}" data-view-after="inventory" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${euro(item.fair)} · ${item.confidence}% KI-Sicherheit</small><small>${priceCheckInline(item)}</small></span></button>
     <div class="listing-actions">
       <button class="secondary-action" data-price-check="${item.id}" type="button">${state.priceChecking === item.id ? "Prüfe..." : "Preischeck"}</button>
-      <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${state.ebayDrafting === item.id ? "Baue..." : "Entwurf"}</button>
+      <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${state.ebayDrafting === item.id ? "Optimiere..." : "Vorschau"}</button>
     </div>
   </article>`).join("")}</div>`;
 }
@@ -3269,17 +3333,82 @@ function bindEvents() {
     const item = state.items.find((entry) => entry.id === button.dataset.ebayDraft);
     if (!item || state.ebayDrafting) return;
     state.ebayDrafting = item.id;
-    state.importStatus = "eBay-Entwurf wird lokal erzeugt...";
+    state.importStatus = "RAMROD optimiert Titel, Kategorie und Käufertext und prüft die eBay-Regeln...";
     render();
     try {
       const result = await postJson("/api/ebay-draft", { item });
       item.ebayDraft = result.ebayDraft;
-      state.importStatus = "eBay-Entwurf erzeugt. Noch nicht an eBay gesendet.";
-      await persistItem(item, "eBay-Entwurf");
+      item.ebayListing = null;
+      state.importStatus = result.ebayDraft?.status === "ready_for_ebay"
+        ? "eBay-Vorschau vollständig. Prüfe sie und lege danach den unveröffentlichten Entwurf bei eBay an."
+        : "eBay-Vorschau erzeugt. Ergänze die markierten Pflichtangaben.";
+      await persistItem(item, "eBay-Vorschau");
     } catch (error) {
-      state.importStatus = `eBay-Entwurf fehlgeschlagen: ${error.message}`;
+      state.importStatus = `eBay-Vorschau fehlgeschlagen: ${error.message}`;
     } finally {
       state.ebayDrafting = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-ebay-missing-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const item = state.items.find((entry) => entry.id === form.dataset.ebayMissingForm);
+    if (!item?.ebayDraft) return;
+    const values = Object.fromEntries(new FormData(form).entries());
+    item.ebayDraft.itemSpecifics = { ...(item.ebayDraft.itemSpecifics || {}) };
+    Object.entries(values).forEach(([name, value]) => {
+      if (String(value).trim()) item.ebayDraft.itemSpecifics[name] = [String(value).trim()];
+    });
+    item.ebayDraft.missingAspects = (item.ebayDraft.missingAspects || []).filter((entry) => !item.ebayDraft.itemSpecifics[entry.name]?.[0]);
+    const aspectStep = item.ebayDraft.readiness.find((entry) => entry.id === "aspects");
+    if (aspectStep) {
+      aspectStep.ready = item.ebayDraft.missingAspects.length === 0;
+      aspectStep.detail = aspectStep.ready ? "Vollständig" : `Fehlt: ${item.ebayDraft.missingAspects.map((entry) => entry.name).join(", ")}`;
+    }
+    item.ebayDraft.status = item.ebayDraft.readiness.every((entry) => entry.ready) ? "ready_for_ebay" : "needs_input";
+    state.importStatus = item.ebayDraft.status === "ready_for_ebay"
+      ? "Alle eBay-Pflichtmerkmale sind ergänzt. Die Vorschau ist bereit."
+      : "Merkmale gespeichert. Es fehlen noch Angaben.";
+    await persistItem(item, "eBay-Pflichtmerkmale");
+    render();
+  }));
+  document.querySelectorAll("[data-ebay-prepare]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.ebayPrepare);
+    if (!item?.ebayDraft || state.ebayPreparing) return;
+    state.ebayPreparing = item.id;
+    state.importStatus = "Fotos und Artikeldaten werden sicher zu eBay übertragen. Das Angebot bleibt noch unsichtbar.";
+    render();
+    try {
+      const result = await postJson("/api/ebay-listing/prepare", { item });
+      item.ebayListing = { ...result.listing, status: "prepared" };
+      item.stage = "Verkaufsbereit";
+      state.importStatus = result.message || "Unveröffentlichter eBay-Entwurf angelegt.";
+      await persistItem(item, "eBay-Angebot vorbereitet");
+    } catch (error) {
+      state.importStatus = `eBay konnte den Entwurf nicht anlegen: ${error.message}`;
+    } finally {
+      state.ebayPreparing = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-ebay-publish]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.ebayPublish);
+    if (!item?.ebayListing || state.ebayPublishing) return;
+    const confirmed = window.confirm(`Jetzt wirklich live auf eBay veröffentlichen?\n\n${item.ebayDraft?.title || item.title}\n${euro(item.ebayDraft?.price || item.fair)}\n\nDas Angebot ist danach öffentlich und kann gekauft werden.`);
+    if (!confirmed) return;
+    state.ebayPublishing = item.id;
+    state.importStatus = "eBay veröffentlicht das Angebot...";
+    render();
+    try {
+      const result = await postJson("/api/ebay-listing/publish", { item, confirm: true });
+      item.ebayListing = { ...item.ebayListing, ...result.listing, listingId: result.listingId, url: result.url, status: "active" };
+      item.stage = "Gelistet";
+      state.importStatus = result.message || "Der Artikel ist jetzt live bei eBay.";
+      await persistItem(item, "eBay-Angebot veröffentlicht");
+    } catch (error) {
+      state.importStatus = `eBay-Veröffentlichung fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.ebayPublishing = "";
       render();
     }
   }));
