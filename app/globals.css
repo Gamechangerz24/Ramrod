@@ -644,6 +644,46 @@ img {
   align-content: start;
 }
 
+@media (min-width: 1181px) {
+  .workspace.view-today {
+    align-content: start;
+    grid-auto-rows: max-content;
+    grid-template-rows: none;
+  }
+
+  .workspace.view-today .metrics {
+    gap: 10px;
+  }
+
+  .workspace.view-today .metric {
+    min-height: 64px;
+    padding: 10px 12px;
+  }
+
+  .workspace.view-today .metric > span {
+    flex: 0 0 36px;
+    height: 36px;
+    width: 36px;
+  }
+
+  .workspace.view-today .metric strong {
+    font-size: 20px;
+  }
+
+  .workspace.view-today .metric small {
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+  .workspace.view-today .filter-bar {
+    padding: 9px 12px;
+  }
+
+  .workspace.view-today .day-focus {
+    padding: 14px 18px;
+  }
+}
+
 .day-focus {
   align-items: center;
   display: flex;
