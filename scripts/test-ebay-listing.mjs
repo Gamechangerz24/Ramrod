@@ -6,6 +6,7 @@ import {
   getEbayCategoryAspects,
   publishEbayOffer,
   suggestEbayCategory,
+  uploadEbayImageFromDataUrl,
   uploadEbayImageFromUrl
 } from "./lib/ebay-listing.mjs";
 
@@ -85,6 +86,7 @@ const fetchMock = async (url, options = {}) => {
   if (String(url).includes("get_category_suggestions")) return response({ categorySuggestions: [{ category: { categoryId: "117042", categoryName: "Controller" }, categoryTreeNodeAncestors: [] }] });
   if (String(url).includes("get_item_aspects_for_category")) return response({ aspects: [{ localizedAspectName: "Marke", aspectConstraint: { aspectRequired: true }, aspectValues: [{ localizedValue: "Nintendo" }] }] });
   if (String(url).includes("create_image_from_url")) return response({ imageUrl: "https://i.ebayimg.com/images/g/test/s-l1600.jpg" }, 201, { location: "https://apim.ebay.com/commerce/media/v1_beta/image/image-1" });
+  if (String(url).includes("create_image_from_file")) return response({ imageUrl: "https://i.ebayimg.com/images/g/data/s-l1600.jpg" }, 201, { location: "https://apim.ebay.com/commerce/media/v1_beta/image/image-2" });
   if (String(url).includes("/inventory_item/")) return response(null, 204);
   if (/\/offer$/.test(String(url))) return response({ offerId: "offer-1" }, 201);
   if (String(url).includes("/publish")) return response({ listingId: "123456789" }, 200);
@@ -97,6 +99,9 @@ const aspects = await getEbayCategoryAspects(config, "app-token", suggested, fet
 assert.equal(aspects[0].required, true);
 const image = await uploadEbayImageFromUrl(config, "user-token", item.image, fetchMock);
 assert.match(image.imageUrl, /ebayimg/);
+const embeddedImage = await uploadEbayImageFromDataUrl(config, "user-token", "data:image/jpeg;base64,aGVsbG8=", fetchMock);
+assert.match(embeddedImage.imageUrl, /ebayimg/);
+assert.equal(calls.find((entry) => entry.url.includes("create_image_from_file"))?.options.body instanceof FormData, true);
 await createOrReplaceEbayInventoryItem(config, "user-token", preview, [image.imageUrl], fetchMock);
 const offer = await createEbayOffer(config, "user-token", preview, fetchMock);
 assert.equal(offer.offerId, "offer-1");

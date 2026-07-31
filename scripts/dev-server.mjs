@@ -51,6 +51,7 @@ import {
   normalizeEbayListingContent,
   publishEbayOffer,
   suggestEbayCategory,
+  uploadEbayImageFromDataUrl,
   uploadEbayImageFromUrl
 } from "./lib/ebay-listing.mjs";
 import {
@@ -2739,11 +2740,15 @@ async function handlePrepareEbayListing(request, response) {
       credentials = fresh;
     }
 
-    const sourceImages = (preview.sourceImages || []).filter(validHttpsUrl).slice(0, 12);
-    if (!sourceImages.length) throw httpError(409, "Mindestens ein veroeffentlichtes HTTPS-Foto fehlt.");
+    const sourceImages = (preview.sourceImages || [])
+      .filter((value) => validHttpsUrl(value) || /^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(String(value)))
+      .slice(0, 12);
+    if (!sourceImages.length) throw httpError(409, "Mindestens ein Artikelfoto fehlt.");
     const ebayImages = [];
     for (const imageUrl of sourceImages) {
-      const uploaded = await uploadEbayImageFromUrl(ebaySellerOAuthConfig, credentials.accessToken, imageUrl);
+      const uploaded = /^data:image\//i.test(String(imageUrl))
+        ? await uploadEbayImageFromDataUrl(ebaySellerOAuthConfig, credentials.accessToken, imageUrl)
+        : await uploadEbayImageFromUrl(ebaySellerOAuthConfig, credentials.accessToken, imageUrl);
       ebayImages.push(uploaded.imageUrl);
     }
 

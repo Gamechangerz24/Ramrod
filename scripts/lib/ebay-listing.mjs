@@ -128,7 +128,7 @@ export function buildEbayListingPreview({
   const sourceImages = uniqueStrings([
     ...(Array.isArray(item.images) ? item.images : []),
     item.image
-  ]).filter((value) => /^https:\/\//i.test(value));
+  ]).filter((value) => /^https:\/\//i.test(value) || /^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(value));
   const descriptionHtml = buildDescriptionHtml(normalized, sellerProfile);
   const shipping = policySummary(sellerSetup.fulfillmentPolicy, sellerSetup.fulfillmentPolicyId, "Versandregel");
   const returns = policySummary(sellerSetup.returnPolicy, sellerSetup.returnPolicyId, "Rueckgaberegel");
@@ -217,6 +217,23 @@ export async function uploadEbayImageFromUrl(config, accessToken, imageUrl, fetc
       "Content-Type": "application/json"
     },
     body: JSON.stringify({ imageUrl })
+  }, fetchImpl);
+  const epsUrl = result.body?.imageUrl;
+  if (!epsUrl) throw new Error("eBay hat fuer das Foto keine verwendbare Bild-URL geliefert.");
+  return { imageUrl: epsUrl, location: result.headers?.get?.("location") || "" };
+}
+
+export async function uploadEbayImageFromDataUrl(config, accessToken, dataUrl, fetchImpl = fetch) {
+  const match = String(dataUrl || "").match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) throw new Error("Das eingebettete Artikelfoto ist ungueltig.");
+  const mediaBaseUrl = config.environment === "production" ? "https://apim.ebay.com" : "https://apim.sandbox.ebay.com";
+  const extension = match[1].split("/")[1]?.replace(/[^a-zA-Z0-9]/g, "") || "jpg";
+  const form = new FormData();
+  form.append("image", new Blob([Buffer.from(match[2], "base64")], { type: match[1] }), `ramrod-item.${extension}`);
+  const result = await ebayRequest(`${mediaBaseUrl}/commerce/media/v1_beta/image/create_image_from_file`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form
   }, fetchImpl);
   const epsUrl = result.body?.imageUrl;
   if (!epsUrl) throw new Error("eBay hat fuer das Foto keine verwendbare Bild-URL geliefert.");
