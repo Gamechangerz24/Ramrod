@@ -4271,6 +4271,10 @@ img {
   min-width: 0;
 }
 
+.ebay-defaults-grid label[hidden] {
+  display: none;
+}
+
 .ebay-defaults-grid label > span {
   color: var(--muted);
   font-size: 11px;
