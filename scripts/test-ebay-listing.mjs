@@ -18,6 +18,14 @@ const item = {
   condition: "Gut",
   completeness: "Linker und rechter Joy-Con",
   fair: 49,
+  salesStrategy: {
+    targetPrice: 53,
+    channelPlan: {
+      primary: { id: "ebay", name: "eBay", targetPrice: 53 },
+      parallel: [],
+      fallback: null
+    }
+  },
   confidence: 94,
   weight: 0.35,
   image: "https://images.example.test/joycon.jpg"
@@ -63,6 +71,7 @@ const preview = buildEbayListingPreview({
   sellerProfile: { seller_type: "private", config: {} }
 });
 assert.equal(preview.status, "ready_for_ebay");
+assert.equal(preview.price, 53);
 assert.equal(preview.title.length <= 80, true);
 assert.equal(preview.shipping.id, "ship-2");
 assert.equal(preview.shipping.selectionMode, "automatic");
