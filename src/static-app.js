@@ -262,8 +262,65 @@ const watchedAutomationJobs = new Set();
 function localItemsKey(organizationId = state.activeOrganizationId) {
   return organizationId ? `ramrod-items:${organizationId}` : "creators-scanapp-items";
 }
-const saveLocal = () => localStorage.setItem(localItemsKey(), JSON.stringify(state.items));
+
+function localItemJson(items = state.items) {
+  return JSON.stringify(items, (key, value) => {
+    if (typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(value)) return "";
+    if (key === "photos" && Array.isArray(value)) return [];
+    if (key === "sourceImages" && Array.isArray(value)) {
+      return value.filter((entry) => typeof entry === "string" && !/^data:image\//i.test(entry)).slice(0, 12);
+    }
+    return value;
+  });
+}
+
+function minimalLocalItems(items = state.items) {
+  return items.map((item) => ({
+    id: item.id,
+    dbId: item.dbId,
+    sku: item.sku,
+    boxId: item.boxId,
+    title: item.title,
+    category: item.category,
+    franchise: item.franchise,
+    condition: item.condition,
+    completeness: item.completeness,
+    confidence: item.confidence,
+    low: item.low,
+    fair: item.fair,
+    aggressive: item.aggressive,
+    channel: item.channel,
+    stage: item.stage,
+    weight: item.weight,
+    image: typeof item.image === "string" && !/^data:image\//i.test(item.image) ? item.image : "",
+    sourceType: item.sourceType,
+    archivedAt: item.archivedAt || null
+  }));
+}
+
+function saveLocal() {
+  const key = localItemsKey();
+  try {
+    localStorage.setItem(key, localItemJson());
+  } catch (error) {
+    try {
+      localStorage.removeItem(key);
+      localStorage.setItem(key, JSON.stringify(minimalLocalItems()));
+    } catch {
+      // Supabase remains authoritative when Safari declines all local caching.
+    }
+    console.warn("RAMROD local cache was compacted:", error?.name || "storage_limit");
+  }
+}
 const save = saveLocal;
+
+function liveAnalysisErrorMessage(error) {
+  const message = String(error?.message || "Unbekannter Fehler");
+  if (error?.name === "QuotaExceededError" || /quota has been exceeded/i.test(message)) {
+    return "Der lokale Gerätespeicher war voll. RAMROD hat den Cache bereinigt. Bitte den Scan erneut speichern.";
+  }
+  return `Live-KI fehlgeschlagen: ${message}. Es wurde kein Live-Artikel erzeugt.`;
+}
 
 function createEmptyDraft(boxId = "SV-001") {
   return {
@@ -3622,7 +3679,7 @@ function bindEvents() {
         : "Demo-Artikelkarte und Verkaufsstrategie erzeugt.";
       await persistItem(item, "Artikel");
     } catch (error) {
-      state.importStatus = `Live-KI fehlgeschlagen: ${error.message}. Es wurde kein Live-Artikel erzeugt.`;
+      state.importStatus = liveAnalysisErrorMessage(error);
     } finally {
       state.analyzing = false;
       render();
