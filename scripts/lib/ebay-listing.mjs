@@ -124,7 +124,11 @@ export function buildEbayListingPreview({
   const missingAspects = requiredAspects
     .filter((entry) => !specifics[entry.name]?.[0])
     .map((entry) => ({ name: entry.name, values: entry.values?.slice(0, 50) || [] }));
-  const price = Math.max(0, Number(item.priceCheck?.fair || item.fair || 0));
+  const channelPlan = item.salesStrategy?.channelPlan || {};
+  const ebayPlan = [channelPlan.primary, ...(channelPlan.parallel || []), channelPlan.fallback]
+    .filter(Boolean)
+    .find((entry) => String(entry.name || entry.id || "").toLowerCase() === "ebay");
+  const price = Math.max(0, Number(ebayPlan?.targetPrice || item.salesStrategy?.targetPrice || item.priceCheck?.fair || item.fair || 0));
   const sourceImages = uniqueStrings([
     ...(Array.isArray(item.images) ? item.images : []),
     item.image

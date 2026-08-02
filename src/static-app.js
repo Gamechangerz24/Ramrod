@@ -485,7 +485,7 @@ function normalizeSalesStrategy(item) {
       : channelPlanAlternatives(channelPlan),
     channelPlan,
     salesFormat: strategy.salesFormat || (item.channel === "Whatnot" ? "live_show" : item.channel === "Bundle" ? "bundle" : "fixed_price"),
-    targetPrice: Number(strategy.targetPrice || fair),
+    targetPrice: Number(channelPlan.primary?.targetPrice || strategy.targetPrice || fair),
     minimumAcceptablePrice: Number(strategy.minimumAcceptablePrice || low),
     expectedTimeToSell: strategy.expectedTimeToSell || "unknown",
     requiredChecks: Array.isArray(strategy.requiredChecks) && strategy.requiredChecks.length
@@ -508,12 +508,12 @@ function normalizeChannelPlan(item, strategy, fair, low) {
     targetPrice: fair,
     activation: item.channel === "Pruefen" ? "blocked" : "after-approval",
     reason: strategy.routeReason || `${channelLabel(item.channel)} passt aktuell am besten zu diesem Artikel.`
-  });
+  }, { fair, low, role: "primary" });
   const legacyAlternatives = Array.isArray(strategy.alternativeChannels) && strategy.alternativeChannels.length
     ? strategy.alternativeChannels
     : channelAlternatives(item.channel);
   const parallel = Array.isArray(source.parallel) && source.parallel.length
-    ? source.parallel.map((entry) => normalizeChannelPlanEntry(entry))
+    ? source.parallel.map((entry) => normalizeChannelPlanEntry(entry, {}, { fair, low, role: "parallel" }))
     : legacyAlternatives.slice(0, 2).map((name, index) => normalizeChannelPlanEntry(null, {
       name: channelLabel(name),
       role: "parallel",
@@ -522,12 +522,12 @@ function normalizeChannelPlan(item, strategy, fair, low) {
       targetPrice: fair,
       activation: "manual-after-approval",
       reason: "Als ergänzender Kanal nach Freigabe prüfen."
-    }));
+    }, { fair, low, role: "parallel" }));
   const discovery = Array.isArray(source.discovery)
-    ? source.discovery.map((entry) => normalizeChannelPlanEntry(entry))
+    ? source.discovery.map((entry) => normalizeChannelPlanEntry(entry, {}, { fair, low, role: "discovery" }))
     : [];
   const fallback = source.fallback
-    ? normalizeChannelPlanEntry(source.fallback)
+    ? normalizeChannelPlanEntry(source.fallback, {}, { fair, low, role: "fallback" })
     : null;
 
   return {
@@ -547,16 +547,22 @@ function normalizeChannelPlan(item, strategy, fair, low) {
   };
 }
 
-function normalizeChannelPlanEntry(entry, fallback = {}) {
+function normalizeChannelPlanEntry(entry, fallback = {}, pricingContext = {}) {
   const value = { ...fallback, ...(entry || {}) };
   const registry = channelCatalog().find((channel) => channel.id === value.id || channel.name === value.name);
+  const pricing = clientChannelPricing(value.name || registry?.name, pricingContext);
+  const hasChannelPricing = Boolean(value.priceLabel);
   return {
     id: value.id || registry?.id || channelClass(value.name || "offen"),
     name: value.name || registry?.name || "Offen",
     role: value.role || "parallel",
     roleLabel: value.roleLabel || "Ergänzung",
     score: Number(value.score || 0),
-    targetPrice: Number(value.targetPrice || 0),
+    targetPrice: Number(hasChannelPricing ? value.targetPrice : pricing.targetPrice),
+    priceLabel: value.priceLabel || pricing.priceLabel,
+    expectedSalePrice: Number(hasChannelPricing ? value.expectedSalePrice : pricing.expectedSalePrice),
+    expectedPriceLabel: value.expectedPriceLabel || pricing.expectedPriceLabel,
+    priceBasis: value.priceBasis || pricing.priceBasis,
     activation: value.activation || "after-approval",
     reason: value.reason || "Als ergänzenden Verkaufskanal prüfen.",
     status: value.status || registry?.status || "planned",
@@ -565,6 +571,37 @@ function normalizeChannelPlanEntry(entry, fallback = {}) {
     automationLevel: value.automationLevel || registry?.automationLevel || "manual",
     delistSupported: value.delistSupported ?? registry?.delistSupported ?? false
   };
+}
+
+function clientChannelPricing(identifier, context = {}) {
+  const channel = String(identifier || "").trim().toLowerCase();
+  const fair = Math.max(0, Number(context.fair) || 0);
+  const low = Math.max(0, Number(context.low) || Math.round(fair * 0.65));
+  const role = context.role || "parallel";
+  const amount = (value) => value > 0 ? Math.max(1, Math.round(value)) : 0;
+  const result = (targetPrice, priceLabel, expectedSalePrice, expectedPriceLabel, priceBasis) => ({
+    targetPrice: amount(targetPrice),
+    priceLabel,
+    expectedSalePrice: amount(expectedSalePrice),
+    expectedPriceLabel,
+    priceBasis
+  });
+
+  if (role === "discovery" || ["instagram", "google shopping", "tiktok shop"].includes(channel)) {
+    return result(0, "Reichweite", 0, "Kein eigener Verkaufspreis", "Preis bleibt am Hauptangebot.");
+  }
+  if (role === "fallback") {
+    if (channel === "whatnot") return result(low * 0.65, "Startpreis", low, "Erwarteter Abverkauf", "Späterer Live-Abverkauf.");
+    if (channel === "liquidation basket") return result(low * 0.7, "Postenwert", low * 0.7, "Erwarteter Erlös", "Konservativer Restpostenwert.");
+    return result(low, "Schnellpreis", low, "Erwarteter Verkauf", "Reduzierter Zweitmarktpreis.");
+  }
+  if (channel === "whatnot") return result(low * 0.65, "Startpreis", fair * 0.85, "Erwarteter Zuschlag", "Live-Start statt Festpreis.");
+  if (["kleinanzeigen", "facebook marketplace", "vinted"].includes(channel)) return result(fair * 1.1, "Angebotspreis", fair, "Nach Verhandlung", "Verhandlungsspielraum eingerechnet.");
+  if (channel === "ebay") return result(fair * 1.08, "Angebotspreis", fair, "Erwarteter Verkauf", "Preisvorschläge eingerechnet.");
+  if (channel === "ramrod shop") return result(fair, "Shoppreis", fair, "Erwarteter Verkauf", "Marktnaher Direktpreis.");
+  if (channel === "catawiki") return result(low * 0.75, "Auktionsstart", fair * 1.05, "Erwarteter Zuschlag", "Auktionsstart mit Sammlerpotenzial.");
+  if (["cardmarket", "bricklink", "discogs", "reverb", "spezialforum"].includes(channel)) return result(fair * 1.04, "Fachmarktpreis", fair, "Erwarteter Verkauf", "Leichter Fachmarkt-Aufschlag.");
+  return result(fair, channel === "pruefen" ? "Vorläufiger Marktwert" : "Zielpreis", fair, "Erwarteter Verkauf", "Marktwert als Preisbasis.");
 }
 
 function channelPlanAlternatives(plan) {
@@ -1505,6 +1542,7 @@ function scanView() {
       <label class="photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
       <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder Mediathek"}</strong></div>
       ${photos.length ? `<div class="photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Bildqualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
+      ${quickValueCard(state.recognition)}
       ${manualFields}
       ${batchMode
         ? `<div class="batch-capture-actions">
@@ -1692,6 +1730,19 @@ function fastRecognitionPanel(photos) {
     ${missing.length ? `<section class="recognition-missing"><strong>Noch nicht belegt</strong><p>${missing.slice(0, 5).map(escapeHtml).join(" · ")}</p></section>` : ""}
     ${requests.length && evidence.status !== "manual_review_ready" ? `<section class="requested-photos"><strong>Nächstes hilfreiches Foto</strong>${requests.slice(0, 3).map((entry) => `<div>${icon("KA")}<span>${escapeHtml(entry.instruction)}</span></div>`).join("")}</section>` : ""}
     ${scanReleaseGuide(recognition)}`;
+}
+
+function quickValueCard(recognition) {
+  const estimate = recognition?.quickEstimate;
+  const fair = Number(estimate?.fair || 0);
+  if (!fair) return "";
+  const low = Number(estimate.low || fair);
+  const high = Number(estimate.high || fair);
+  return `<section class="quick-value-card" aria-label="Erste Wertschätzung">
+    <div class="quick-value-heading"><div><small>Erste Wertschätzung</small><strong>${euro(fair)}</strong></div><span>Vorläufig</span></div>
+    <p>${euro(low)} bis ${euro(high)} · ${Number(estimate.confidence || 0)}% Sicherheit</p>
+    <small>${escapeHtml(estimate.basis || "Bildschätzung ohne aktuelle Marktquellen.")} Marktcheck und Plattformpreise folgen danach.</small>
+  </section>`;
 }
 
 function scanReleaseGuide(recognition) {
@@ -1984,10 +2035,13 @@ function channelPlanStep(entry, index, phase) {
       : entry.activation === "blocked"
         ? "blocked"
         : "planned";
+  const priceMarkup = entry.targetPrice
+    ? `<small class="channel-price-label">${escapeHtml(entry.priceLabel || "Zielpreis")}</small><strong>${euro(entry.targetPrice)}</strong>${entry.expectedSalePrice && entry.expectedSalePrice !== entry.targetPrice ? `<em>${escapeHtml(entry.expectedPriceLabel || "Erwartet")} ${euro(entry.expectedSalePrice)}</em>` : ""}`
+    : `<strong class="channel-no-price">${escapeHtml(entry.priceLabel || "Reichweite")}</strong>`;
   return `<article class="channel-plan-step ${statusTone}">
     <span class="channel-plan-index">${index}</span>
     <div class="channel-plan-copy"><small>${escapeHtml(phase)} · ${escapeHtml(entry.roleLabel || "Kanal")}</small><strong>${escapeHtml(channelLabel(entry.name))}</strong><p>${escapeHtml(entry.reason || "Als Verkaufskanal prüfen.")}</p></div>
-    <div class="channel-plan-status"><strong>${entry.targetPrice ? euro(entry.targetPrice) : ""}</strong><span>${escapeHtml(entry.statusLabel || channelActivationLabel(entry.activation))}</span></div>
+    <div class="channel-plan-status">${priceMarkup}<span>${escapeHtml(entry.statusLabel || channelActivationLabel(entry.activation))}</span></div>
   </article>`;
 }
 

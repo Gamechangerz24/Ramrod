@@ -76,6 +76,7 @@ function printResult(result, wallDurationMs, jobId = null) {
     rotation: recognition.image?.rotation,
     imageIssues: recognition.image?.issues,
     visibleText: recognition.visibleText,
+    quickEstimate: recognition.quickEstimate,
     evidence: recognition.evidence,
     requestedPhotos: recognition.requestedPhotos
   }, null, 2));

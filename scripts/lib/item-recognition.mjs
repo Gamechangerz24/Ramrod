@@ -6,7 +6,9 @@ export function buildItemRecognitionPrompt() {
     "Uebernimm Identitaetsfelder nur bei sichtbarem Beleg; sonst leerer String.",
     "Verpackung beweist keinen Inhalt. Erfinde keine Variante oder Vollstaendigkeit.",
     "visibleText enthaelt maximal 12 sicher gelesene Texte, identifiers maximal 4 Codes oder Modellnummern.",
-    "Keine Preise, Erklaerungen, Alternativen oder Verkaufsstrategie. Nur JSON auf Deutsch."
+    "Gib quickEstimate als sehr grobe EUR-Vorbewertung aus Bild, sichtbarer Identitaet und allgemeinem Produktwissen aus, ohne aktuelle Marktrecherche vorzutäuschen.",
+    "Wenn die Identitaet nicht belastbar genug ist, setze quickEstimate auf 0 und erklaere das knapp in basis.",
+    "Keine Verkaufskanaele, Erklaerungen ausserhalb des Schemas, Alternativen oder Verkaufsstrategie. Nur JSON auf Deutsch."
   ].join(" ");
 }
 
@@ -14,7 +16,7 @@ export function itemRecognitionSchema() {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["image", "identity", "visibleText", "identifiers", "modelConfidence"],
+    required: ["image", "identity", "visibleText", "identifiers", "quickEstimate", "modelConfidence"],
     properties: {
       image: {
         type: "object",
@@ -56,6 +58,18 @@ export function itemRecognitionSchema() {
           }
         }
       },
+      quickEstimate: {
+        type: "object",
+        additionalProperties: false,
+        required: ["low", "fair", "high", "confidence", "basis"],
+        properties: {
+          low: { type: "number", minimum: 0 },
+          fair: { type: "number", minimum: 0 },
+          high: { type: "number", minimum: 0 },
+          confidence: { type: "integer", minimum: 0, maximum: 100 },
+          basis: { type: "string" }
+        }
+      },
       modelConfidence: { type: "integer", minimum: 0, maximum: 100 }
     }
   };
@@ -77,6 +91,18 @@ export function scoreItemRecognition(input, context = {}) {
     .map((entry) => Number(entry?.score))
     .filter(Number.isFinite);
   const modelConfidence = clampInteger(recognition.modelConfidence, 0, 100, 0);
+  const quickPrices = [
+    recognition.quickEstimate?.low,
+    recognition.quickEstimate?.fair,
+    recognition.quickEstimate?.high
+  ].map((value) => Math.max(0, Number(value) || 0)).sort((left, right) => left - right);
+  recognition.quickEstimate = {
+    low: quickPrices[0],
+    fair: quickPrices[1],
+    high: quickPrices[2],
+    confidence: clampInteger(recognition.quickEstimate?.confidence, 0, 100, 0),
+    basis: String(recognition.quickEstimate?.basis || "Vorläufige Bildschätzung ohne Quellenabgleich.")
+  };
   const evidenceText = [
     ...visibleText,
     ...identifiers.map((entry) => entry.value),

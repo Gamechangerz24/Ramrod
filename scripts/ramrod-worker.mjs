@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { arch, cpus, hostname, platform, totalmem } from "node:os";
 import { applyAnalysisGuardrails, buildItemAnalysisPrompt, itemAnalysisSchema, mapAnalysisToItem } from "./lib/item-analysis.mjs";
 import { buildItemRecognitionPrompt, itemRecognitionSchema, scoreItemRecognition } from "./lib/item-recognition.mjs";
+import { reconcileSalesDecision } from "./lib/sales-decision.mjs";
 
 loadDotEnv(".env.local");
 
@@ -264,6 +265,26 @@ async function analyzeImageWithOllama(payload) {
     throw error;
   }
 
+  const item = mapAnalysisToItem(analysis, payload, {
+    model: body.model || config.ollamaModel,
+    sourceType: "local_qwen",
+    researchSource: "Qwen Query"
+  });
+  item.recognition = payload.recognition || null;
+  item.recognitionEvidence = payload.recognition?.evidence || null;
+  const decision = reconcileSalesDecision(item, {
+    method: "ai-precheck",
+    low: item.low,
+    fair: item.fair,
+    aggressive: item.aggressive,
+    confidence: Math.max(55, Math.min(70, Number(item.confidence) || 55)),
+    evidence: []
+  });
+  item.channel = decision.channel;
+  item.whatnotEligible = decision.whatnotEligible;
+  item.reviewRequired = decision.reviewRequired;
+  item.salesStrategy = decision.salesStrategy;
+
   return {
     provider: "local-qwen",
     model: body.model || config.ollamaModel,
@@ -274,11 +295,7 @@ async function analyzeImageWithOllama(payload) {
       outputTokens: numberOrNull(body.eval_count)
     },
     analysis,
-    item: mapAnalysisToItem(analysis, payload, {
-      model: body.model || config.ollamaModel,
-      sourceType: "local_qwen",
-      researchSource: "Qwen Query"
-    })
+    item
   };
 }
 

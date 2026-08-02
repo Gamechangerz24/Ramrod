@@ -17,6 +17,7 @@ const clearGame = scoreItemRecognition({
   },
   visibleText: ["DRAGON AGE INQUISITION", "XBOX ONE", "BIOWARE", "PAL"],
   identifiers: [{ type: "ean", value: "5030930111345" }],
+  quickEstimate: { low: 14, fair: 9, high: 6, confidence: 52, basis: "Grobe Bildschätzung ohne Marktquellen" },
   alternatives: [],
   missingEvidence: [],
   requestedPhotos: [],
@@ -27,6 +28,11 @@ assert.equal(clearGame.evidence.status, "ready_for_research");
 assert.ok(clearGame.evidence.score >= 65);
 assert.equal(clearGame.evidence.autoApprovalEligible, false);
 assert.equal(clearGame.evidence.releaseGate, "blocked_until_source_match");
+assert.deepEqual(
+  [clearGame.quickEstimate.low, clearGame.quickEstimate.fair, clearGame.quickEstimate.high],
+  [6, 9, 14]
+);
+assert.equal(clearGame.quickEstimate.confidence, 52);
 
 const blurryUnknown = scoreItemRecognition({
   image: { rotation: 90, usable: false, issues: ["unscharf", "abgeschnitten"] },

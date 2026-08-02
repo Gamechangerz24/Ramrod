@@ -181,7 +181,7 @@ export function reconcileSalesDecision(item, priceCheck) {
     alternativeChannels,
     channelPlan,
     salesFormat,
-    targetPrice: fair,
+    targetPrice: channelPlan.primary.targetPrice || fair,
     minimumAcceptablePrice: low,
     expectedTimeToSell: fair < 15 ? "fast" : "normal",
     requiredChecks: uniqueStrings([
@@ -191,7 +191,7 @@ export function reconcileSalesDecision(item, priceCheck) {
     ]),
     approvalSummary: channel === "Pruefen"
       ? "Noch nicht freigeben: Identität oder Marktbelege fehlen."
-      : `Nach Zustandsprüfung für ${channel} zum Zielpreis ${Math.round(fair)} EUR vorbereiten.`
+      : `Nach Zustandsprüfung für ${channel} zum ${channelPlan.primary.priceLabel || "Zielpreis"} ${Math.round(channelPlan.primary.targetPrice || fair)} EUR vorbereiten.`
   };
 
   return {
@@ -234,7 +234,7 @@ function buildChannelPlan(context) {
     role: "primary",
     roleLabel: channel === "Pruefen" ? "Vor Freigabe" : "Hauptverkauf",
     score: channel === "Pruefen" ? 0 : 92,
-    targetPrice: fair,
+    ...channelPricing(channel, { fair, low, role: "primary" }),
     activation: channel === "Pruefen" ? "blocked" : "after-approval",
     reason: reasons.join(" ")
   });
@@ -243,11 +243,25 @@ function buildChannelPlan(context) {
 
   const addParallel = (name, roleLabel, score, reason, activation = "after-approval") => {
     if (name === channel || parallel.some((entry) => entry.name === name)) return;
-    parallel.push(channelPlanEntry(name, { role: "parallel", roleLabel, score, targetPrice: fair, activation, reason }));
+    parallel.push(channelPlanEntry(name, {
+      role: "parallel",
+      roleLabel,
+      score,
+      ...channelPricing(name, { fair, low, role: "parallel" }),
+      activation,
+      reason
+    }));
   };
   const addDiscovery = (name, roleLabel, score, reason) => {
     if (name === channel || discovery.some((entry) => entry.name === name)) return;
-    discovery.push(channelPlanEntry(name, { role: "discovery", roleLabel, score, targetPrice: fair, activation: "content-after-approval", reason }));
+    discovery.push(channelPlanEntry(name, {
+      role: "discovery",
+      roleLabel,
+      score,
+      ...channelPricing(name, { fair, low, role: "discovery" }),
+      activation: "content-after-approval",
+      reason
+    }));
   };
 
   if (channel !== "Pruefen") {
@@ -279,7 +293,7 @@ function buildChannelPlan(context) {
         role: "fallback",
         roleLabel: "Schneller Abverkauf",
         score: 55,
-        targetPrice: low,
+        ...channelPricing("Liquidation Basket", { fair, low, role: "fallback" }),
         activation: "after-30-days",
         reason: "Wenn Einzelverkauf und Aufbereitung unwirtschaftlich bleiben, in ein transparentes Restposten-Bundle verschieben."
       });
@@ -288,7 +302,7 @@ function buildChannelPlan(context) {
         role: "fallback",
         roleLabel: "Breiter Zweitmarkt",
         score: 68,
-        targetPrice: low,
+        ...channelPricing("eBay", { fair, low, role: "fallback" }),
         activation: "after-14-days",
         reason: "Wenn der Fach- oder Live-Kanal nicht verkauft, nach 14 Tagen als suchbares Festpreisangebot testen."
       });
@@ -297,7 +311,7 @@ function buildChannelPlan(context) {
         role: "fallback",
         roleLabel: "Themen-Bundle",
         score: 66,
-        targetPrice: low,
+        ...channelPricing("Whatnot", { fair, low, role: "fallback" }),
         activation: "after-14-days",
         reason: "Bleibt das Einzelangebot liegen, mit passenden Artikeln in eine thematische Live-Kampagne bündeln."
       });
@@ -317,6 +331,116 @@ function buildChannelPlan(context) {
       delistOtherChannels: true,
       note: "Ein Artikel bleibt ein Bestandseintrag. Parallele Transaktionsangebote werden erst mit zuverlässigem Verkaufssync aktiviert."
     }
+  };
+}
+
+export function channelPricing(identifier, context = {}) {
+  const channel = String(identifier || "").trim().toLowerCase();
+  const fair = Math.max(0, Number(context.fair) || 0);
+  const low = Math.max(0, Number(context.low) || Math.round(fair * 0.65));
+  const role = context.role || "parallel";
+  const amount = (value) => value > 0 ? Math.max(1, Math.round(value)) : 0;
+
+  if (role === "discovery" || ["instagram", "google shopping", "tiktok shop"].includes(channel)) {
+    return {
+      targetPrice: 0,
+      priceLabel: "Reichweite",
+      expectedSalePrice: 0,
+      expectedPriceLabel: "Kein eigener Verkaufspreis",
+      priceBasis: "Der Verkaufspreis bleibt am verlinkten Hauptangebot."
+    };
+  }
+
+  if (role === "fallback") {
+    if (channel === "whatnot") {
+      return {
+        targetPrice: amount(low * 0.65),
+        priceLabel: "Startpreis",
+        expectedSalePrice: amount(low),
+        expectedPriceLabel: "Erwarteter Abverkauf",
+        priceBasis: "Niedriger Live-Start für den späteren Themen-Abverkauf."
+      };
+    }
+    if (channel === "liquidation basket") {
+      const liquidation = amount(low * 0.7);
+      return {
+        targetPrice: liquidation,
+        priceLabel: "Postenwert",
+        expectedSalePrice: liquidation,
+        expectedPriceLabel: "Erwarteter Erlös",
+        priceBasis: "Konservativer Restpostenwert für schnellen Abverkauf."
+      };
+    }
+    return {
+      targetPrice: amount(low),
+      priceLabel: "Schnellpreis",
+      expectedSalePrice: amount(low),
+      expectedPriceLabel: "Erwarteter Verkauf",
+      priceBasis: "Reduzierter Preis für den späteren Zweitmarkt."
+    };
+  }
+
+  if (channel === "whatnot") {
+    return {
+      targetPrice: amount(low * 0.65),
+      priceLabel: "Startpreis",
+      expectedSalePrice: amount(fair * 0.85),
+      expectedPriceLabel: "Erwarteter Zuschlag",
+      priceBasis: "Live-Start und erwarteter Zuschlag statt Festpreis."
+    };
+  }
+  if (["kleinanzeigen", "facebook marketplace", "vinted"].includes(channel)) {
+    return {
+      targetPrice: amount(fair * 1.1),
+      priceLabel: "Angebotspreis",
+      expectedSalePrice: amount(fair),
+      expectedPriceLabel: "Nach Verhandlung",
+      priceBasis: "Verhandlungsspielraum für Direktverkauf eingerechnet."
+    };
+  }
+  if (channel === "ebay") {
+    return {
+      targetPrice: amount(fair * 1.08),
+      priceLabel: "Angebotspreis",
+      expectedSalePrice: amount(fair),
+      expectedPriceLabel: "Erwarteter Verkauf",
+      priceBasis: "Preisvorschläge und üblicher Verhandlungsspielraum eingerechnet; Gebühren folgen im Nettoerlös."
+    };
+  }
+  if (channel === "ramrod shop") {
+    return {
+      targetPrice: amount(fair),
+      priceLabel: "Shoppreis",
+      expectedSalePrice: amount(fair),
+      expectedPriceLabel: "Erwarteter Verkauf",
+      priceBasis: "Marktnaher Direktpreis ohne Marktplatz-Aufschlag."
+    };
+  }
+  if (channel === "catawiki") {
+    return {
+      targetPrice: amount(low * 0.75),
+      priceLabel: "Auktionsstart",
+      expectedSalePrice: amount(fair * 1.05),
+      expectedPriceLabel: "Erwarteter Zuschlag",
+      priceBasis: "Konservativer Auktionsstart mit möglichem Sammleraufschlag."
+    };
+  }
+  if (["cardmarket", "bricklink", "discogs", "reverb", "spezialforum"].includes(channel)) {
+    return {
+      targetPrice: amount(fair * 1.04),
+      priceLabel: "Fachmarktpreis",
+      expectedSalePrice: amount(fair),
+      expectedPriceLabel: "Erwarteter Verkauf",
+      priceBasis: "Leichter Fachmarkt-Aufschlag bei präziser Identifikation und Zustandsangabe."
+    };
+  }
+
+  return {
+    targetPrice: amount(fair),
+    priceLabel: channel === "pruefen" ? "Vorläufiger Marktwert" : "Zielpreis",
+    expectedSalePrice: amount(fair),
+    expectedPriceLabel: "Erwarteter Verkauf",
+    priceBasis: "Marktwert als vorläufiger Kanalpreis."
   };
 }
 

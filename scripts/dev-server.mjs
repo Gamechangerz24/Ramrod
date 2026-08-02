@@ -2608,6 +2608,7 @@ async function handleAnalyzeImage(request, response) {
     sourceType: "live_openai",
     researchSource: "OpenAI Query"
   });
+  applyProvisionalSalesDecision(item, body.recognition);
 
   sendJson(response, 200, {
     provider: "openai-strategy",
@@ -2616,6 +2617,25 @@ async function handleAnalyzeImage(request, response) {
     analysis,
     item
   });
+}
+
+function applyProvisionalSalesDecision(item, recognition = null) {
+  item.recognition = recognition || item.recognition || null;
+  item.recognitionEvidence = recognition?.evidence || item.recognitionEvidence || null;
+  const priceCheck = {
+    method: "ai-precheck",
+    low: item.low,
+    fair: item.fair,
+    aggressive: item.aggressive,
+    confidence: Math.max(55, Math.min(70, Number(item.confidence) || 55)),
+    evidence: []
+  };
+  const decision = reconcileSalesDecision(item, priceCheck);
+  item.channel = decision.channel;
+  item.whatnotEligible = decision.whatnotEligible;
+  item.reviewRequired = decision.reviewRequired;
+  item.salesStrategy = decision.salesStrategy;
+  return item;
 }
 
 async function queueImageAnalysis(response, body, images = normalizeImageDataUrls(body)) {

@@ -27,11 +27,15 @@ const massEffect = reconcileSalesDecision({
 assert.equal(massEffect.channel, "eBay");
 assert.equal(massEffect.salesStrategy.recommendedAction, "clean_and_sell");
 assert.equal(massEffect.salesStrategy.repairDecision.recommendation, "not_applicable");
-assert.equal(massEffect.salesStrategy.targetPrice, 23);
+assert.equal(massEffect.salesStrategy.targetPrice, 25);
 assert.equal(massEffect.salesStrategy.channelPlan.primary.name, "eBay");
+assert.equal(massEffect.salesStrategy.channelPlan.primary.priceLabel, "Angebotspreis");
+assert.equal(massEffect.salesStrategy.channelPlan.primary.expectedSalePrice, 23);
 assert.ok(massEffect.salesStrategy.channelPlan.parallel.some((entry) => entry.name === "RAMROD Shop"));
-assert.ok(massEffect.salesStrategy.channelPlan.discovery.some((entry) => entry.name === "Instagram"));
+assert.equal(massEffect.salesStrategy.channelPlan.parallel.find((entry) => entry.name === "RAMROD Shop").targetPrice, 23);
+assert.equal(massEffect.salesStrategy.channelPlan.discovery.find((entry) => entry.name === "Instagram").targetPrice, 0);
 assert.equal(massEffect.salesStrategy.channelPlan.fallback.name, "Whatnot");
+assert.equal(massEffect.salesStrategy.channelPlan.fallback.targetPrice, 3);
 
 const suspectedScratch = reconcileSalesDecision({
   title: "Mass Effect Collector's Edition",
@@ -74,6 +78,8 @@ const cheapGame = reconcileSalesDecision({
 });
 
 assert.equal(cheapGame.channel, "Whatnot");
+assert.equal(cheapGame.salesStrategy.channelPlan.primary.priceLabel, "Startpreis");
+assert.equal(cheapGame.salesStrategy.channelPlan.primary.targetPrice, 1);
 
 const scratchedConsole = reconcileSalesDecision({
   title: "Sony PlayStation 3 Slim",
@@ -112,6 +118,7 @@ const childSeat = reconcileSalesDecision({
 assert.equal(childSeat.channel, "Kleinanzeigen");
 assert.equal(childSeat.salesStrategy.salesFormat, "local_pickup");
 assert.deepEqual(childSeat.salesStrategy.alternativeChannels, ["Facebook Marketplace"]);
+assert.equal(childSeat.salesStrategy.channelPlan.primary.targetPrice, 61);
 
 const handbag = reconcileSalesDecision({
   title: "Leder Handtasche Damen",
@@ -131,6 +138,7 @@ const handbag = reconcileSalesDecision({
 assert.equal(handbag.channel, "Vinted");
 assert.ok(handbag.salesStrategy.alternativeChannels.includes("Kleinanzeigen"));
 assert.ok(handbag.salesStrategy.alternativeChannels.includes("Instagram"));
+assert.equal(handbag.salesStrategy.channelPlan.primary.targetPrice, 55);
 
 const householdBundle = reconcileSalesDecision({
   title: "Gemischtes Spielzeugpaket zur Abholung",
