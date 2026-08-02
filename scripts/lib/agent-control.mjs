@@ -74,10 +74,32 @@ export function publicAgentPlaybooks() {
   }));
 }
 
-export function buildAgentPlan({ agentType, objective, channelId = null, itemId = null } = {}) {
+export function buildAgentPlan({
+  agentType,
+  objective,
+  channelId = null,
+  itemId = null,
+  accountEmail = null,
+  sellerMode = null,
+  accountLabel = null
+} = {}) {
   const playbook = playbooks[String(agentType || "")];
   if (!playbook) {
     throw new Error(`Unsupported agent type: ${String(agentType || "missing")}`);
+  }
+
+  const cleanChannelId = cleanIdentifier(channelId);
+  const accountContext = agentType === "onboard_channel_account"
+    ? {
+        accountEmail: cleanEmail(accountEmail),
+        sellerMode: ["private", "business"].includes(String(sellerMode || "").toLowerCase())
+          ? String(sellerMode).toLowerCase()
+          : null,
+        accountLabel: cleanText(accountLabel || "", 120) || null
+      }
+    : { accountEmail: null, sellerMode: null, accountLabel: null };
+  if (agentType === "onboard_channel_account" && accountEmail && !accountContext.accountEmail) {
+    throw new Error("Ungültige E-Mail-Adresse für das Verkaufskonto.");
   }
 
   const cleanObjective = cleanText(objective || playbook.defaultObjective, 800);
@@ -93,8 +115,9 @@ export function buildAgentPlan({ agentType, objective, channelId = null, itemId 
     agentType,
     label: playbook.label,
     objective: cleanObjective,
-    channelId: cleanIdentifier(channelId),
+    channelId: cleanChannelId,
     itemId: cleanIdentifier(itemId),
+    ...accountContext,
     riskLevel: highestRisk,
     status: steps[0]?.status === "waiting_approval" ? "waiting_approval" : "ready",
     steps
@@ -172,6 +195,11 @@ export function isUuid(value) {
 function cleanIdentifier(value) {
   const text = String(value || "").trim();
   return text ? text.slice(0, 120) : null;
+}
+
+function cleanEmail(value) {
+  const email = String(value || "").trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email.slice(0, 254) : null;
 }
 
 function cleanText(value, maxLength) {

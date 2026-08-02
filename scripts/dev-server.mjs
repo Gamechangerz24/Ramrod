@@ -847,7 +847,10 @@ async function handleCreateAgentRun(request, response) {
       agentType: body.agentType,
       objective: body.objective,
       channelId: body.channelId,
-      itemId: body.itemId
+      itemId: body.itemId,
+      accountEmail: body.accountEmail,
+      sellerMode: body.sellerMode,
+      accountLabel: body.accountLabel
     });
   } catch (error) {
     sendJson(response, 400, { error: "invalid_agent_mission", message: redactSecret(error.message) });
@@ -855,6 +858,16 @@ async function handleCreateAgentRun(request, response) {
   }
 
   const organizationId = tenant.activeOrganization.id;
+  if (plan.agentType === "onboard_channel_account") {
+    if (!tenant.permissions.includes("channels:manage")) {
+      sendJson(response, 403, { error: "channel_management_required", message: "Nur Inhaber und Admins können Verkaufskonten einrichten." });
+      return;
+    }
+    if (!plan.channelId || !plan.accountEmail || !plan.sellerMode) {
+      sendJson(response, 400, { error: "account_context_required", message: "Plattform, Kontakt-E-Mail und Verkäuferart werden benötigt." });
+      return;
+    }
+  }
   if (plan.itemId) {
     if (!isUuid(plan.itemId)) {
       sendJson(response, 400, { error: "invalid_item", message: "itemId muss eine gültige UUID sein." });
@@ -868,16 +881,50 @@ async function handleCreateAgentRun(request, response) {
   }
 
   try {
+    let channelAccount = null;
+    if (plan.agentType === "onboard_channel_account") {
+      const channel = publicChannelRegistry().find((entry) => entry.id === plan.channelId);
+      if (!channel) throw httpError(400, "Unbekannter Verkaufskanal.");
+      const displayName = (plan.accountLabel || `${channel.name} · ${plan.accountEmail}`).slice(0, 160);
+      const existingAccounts = await supabaseSelect(`/organization_channel_accounts?select=*&organization_id=eq.${encodeURIComponent(organizationId)}&channel_id=eq.${encodeURIComponent(plan.channelId)}&order=created_at.desc&limit=50`);
+      channelAccount = existingAccounts.find((entry) => entry.display_name === displayName || entry.metadata?.accountEmail === plan.accountEmail) || null;
+      if (!channelAccount) {
+        const accountRows = await supabaseInsert("/organization_channel_accounts", {
+          organization_id: organizationId,
+          channel_id: plan.channelId,
+          display_name: displayName,
+          auth_mode: plan.channelId === "ebay" ? "oauth" : "browser",
+          status: "onboarding",
+          capabilities: [],
+          metadata: redactAgentPayload({
+            accountEmail: plan.accountEmail,
+            sellerMode: plan.sellerMode,
+            onboardingAgent: "ramrod_sales_director"
+          })
+        });
+        channelAccount = accountRows[0] || null;
+      }
+    }
+
+    const missionContext = redactAgentPayload({
+      channelId: plan.channelId,
+      accountEmail: plan.accountEmail,
+      sellerMode: plan.sellerMode,
+      accountLabel: plan.accountLabel,
+      channelAccountId: channelAccount?.id || null,
+      source: request.ramrodUser?.agent ? "mcp" : "ramrod_ui"
+    });
     const runRows = await supabaseInsert("/agent_runs", {
       organization_id: organizationId,
       item_id: plan.itemId,
+      channel_account_id: channelAccount?.id || null,
       agent_type: plan.agentType,
       objective: plan.objective,
       status: plan.status,
       risk_level: plan.riskLevel,
       requested_by: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
       plan: redactAgentPayload(plan),
-      context: redactAgentPayload({ channelId: plan.channelId, source: request.ramrodUser?.agent ? "mcp" : "ramrod_ui" })
+      context: missionContext
     });
     const run = runRows[0];
     if (!run) throw new Error("Agentenmission wurde nicht zurückgegeben.");
@@ -892,7 +939,7 @@ async function handleCreateAgentRun(request, response) {
       risk_level: step.riskLevel,
       approval_required: step.approvalRequired,
       summary: step.summary,
-      input: redactAgentPayload({ channelId: plan.channelId, itemId: plan.itemId })
+      input: redactAgentPayload({ ...missionContext, itemId: plan.itemId })
     })));
     const approvalPlan = plan.steps.find((step) => step.status === "waiting_approval") || null;
     const approvalStep = approvalPlan
@@ -911,7 +958,7 @@ async function handleCreateAgentRun(request, response) {
     const snapshot = await buildAgentControlSnapshot(organizationId);
     sendJson(response, 201, { run, steps: stepRows, approval, snapshot });
   } catch (error) {
-    sendJson(response, 500, { error: "agent_mission_create_failed", message: redactSecret(error.message) });
+    sendJson(response, error.status || 500, { error: "agent_mission_create_failed", message: redactSecret(error.message) });
   }
 }
 

@@ -2743,7 +2743,6 @@ function agentsView() {
   const onlineRunners = runners.filter(agentRunnerOnline);
   const hermesRunner = runners.find((runner) => runner.metadata?.runner === "hermes-mcp");
   const missions = [
-    { type: "onboard_channel_account", icon: "EB", title: "eBay-Konto verbinden", text: "Anforderungen prüfen, Konto vorbereiten und OAuth nach deiner Freigabe verbinden.", channelId: "ebay" },
     { type: "distribute_inventory", icon: "RT", title: "Bestand verteilen", text: "Verkaufsbereite Artikel nach Preis, Zielgruppe und Kanalpassung aufteilen." },
     { type: "create_demand_campaign", icon: "MK", title: "Kampagne aufbauen", text: "Passende Artikel bündeln und Content für Shop, Social und Live-Verkauf vorbereiten." },
     { type: "reconcile_sale", icon: "VK", title: "Verkäufe synchronisieren", text: "Bestellungen prüfen, Einzelstücke reservieren und parallele Angebote kontrolliert beenden." }
@@ -2765,6 +2764,10 @@ function agentsView() {
       ${agentStat("Abgeschlossen", completedRuns.length)}
     </div>
 
+    ${agentTeamOverview(activeRuns, runners)}
+
+    ${channelConnectorPanel(accounts)}
+
     <section class="agent-section">
       <div class="panel-heading"><div><p>Neue Mission</p><h2>Was soll RAMROD übernehmen?</h2></div></div>
       <div class="agent-mission-grid">${missions.map((mission) => `<article class="agent-mission-card">
@@ -2782,7 +2785,7 @@ function agentsView() {
     <div class="agent-columns">
       <section class="agent-section">
         <div class="panel-heading"><div><p>Aktivität</p><h2>Letzte Missionen</h2></div></div>
-        <div class="agent-run-list">${runs.length ? runs.map(agentRunRow).join("") : `<div class="agent-empty"><strong>Noch keine Mission</strong><p>Starte oben den ersten kontrollierten Auftrag.</p></div>`}</div>
+        <div class="agent-run-list">${runs.length ? runs.map((run) => agentRunRow(run, runners)).join("") : `<div class="agent-empty"><strong>Noch keine Mission</strong><p>Starte oben den ersten kontrollierten Auftrag.</p></div>`}</div>
       </section>
       <section class="agent-section">
         <div class="panel-heading"><div><p>Ausführung</p><h2>Runner</h2></div></div>
@@ -2791,6 +2794,44 @@ function agentsView() {
         <div class="agent-account-list">${accounts.length ? accounts.map(agentAccountRow).join("") : `<div class="agent-empty"><strong>Noch kein Konto verbunden</strong><p>Mit „eBay-Konto verbinden“ beginnt das geführte Onboarding.</p></div>`}</div>
       </section>
     </div>
+  </section>`;
+}
+
+function agentTeamOverview(activeRuns, runners) {
+  const assignments = activeRuns
+    .map((run) => ({ run, step: currentAgentStep(run) }))
+    .filter((entry) => entry.step);
+  return `<section class="agent-section agent-team-section">
+    <div class="panel-heading"><div><p>Live-Team</p><h2>Wer arbeitet gerade woran?</h2></div><span class="queue-count">${assignments.length} aktiv</span></div>
+    <div class="agent-org-chart">
+      <article class="agent-lead-card">
+        <span class="agent-avatar lead">VL</span>
+        <div><small>Hauptagent</small><strong>RAMROD Verkaufsleiter</strong><p>${assignments.length ? `Steuert ${assignments.length} laufende Aufgabe${assignments.length === 1 ? "" : "n"}, prüft Ergebnisse und eskaliert Entscheidungen.` : "Bereit. Plant Verkauf, verteilt Arbeit und ruft dich nur an Kontrollpunkten hinzu."}</p></div>
+        <em class="agent-state ${assignments.length ? "online" : "waiting"}">${assignments.length ? "Koordiniert" : "Bereit"}</em>
+      </article>
+      <div class="agent-specialist-grid">
+        ${assignments.length ? assignments.map(({ run, step }) => agentAssignmentCard(run, step, runners)).join("") : `<div class="agent-empty agent-team-empty"><strong>Kein Spezialagent beschäftigt</strong><p>Starte eine Mission oder gib einen Artikel frei. Der Verkaufsleiter stellt danach das passende Team zusammen.</p></div>`}
+      </div>
+    </div>
+  </section>`;
+}
+
+function channelConnectorPanel(accounts) {
+  const connectableChannels = runtimeChannelCatalog.filter((entry) => !["spezialforum", "ramrod_shop"].includes(entry.id));
+  const connected = accounts.filter((account) => account.status === "connected");
+  const defaultEmail = state.authSession?.user?.email || "";
+  const disabled = !can("channels:manage") || Boolean(state.startingAgent);
+  return `<section class="agent-section channel-onboarding-section">
+    <div class="panel-heading"><div><p>Kanal-Connector</p><h2>Neues Verkaufskonto aufbauen</h2><span>Der Mac Mini recherchiert Anforderungen, füllt Formulare und wartet bei Kontoeröffnung, AGB, CAPTCHA, KYC oder 2FA auf deine Freigabe.</span></div><span class="queue-count">${connected.length} verbunden</span></div>
+    <form class="channel-onboarding-form" data-channel-onboarding-form>
+      <label><span>Plattform</span><select name="channelId" required>${connectableChannels.map((entry) => `<option value="${escapeHtml(entry.id)}">${escapeHtml(entry.name)}</option>`).join("")}</select></label>
+      <label><span>Kontakt-E-Mail</span><input name="accountEmail" type="email" autocomplete="email" value="${escapeHtml(defaultEmail)}" placeholder="verkauf@firma.de" required /></label>
+      <label><span>Verkäuferart</span><select name="sellerMode" required><option value="business">Gewerblich</option><option value="private">Privat</option></select></label>
+      <label><span>Bezeichnung</span><input name="accountLabel" type="text" maxlength="120" placeholder="z. B. Strongvision Kleinanzeigen" /></label>
+      <button class="primary-action" type="submit" ${disabled ? "disabled" : ""}>${state.startingAgent === "onboard_channel_account" ? "Agent plant..." : `${icon("AG")}Agent beauftragen`}</button>
+    </form>
+    <div class="channel-onboarding-safety"><span>${icon("OK")}Keine Passwörter in RAMROD</span><span>${icon("MM")}Browser-Arbeit auf dem Mac Mini</span><span>${icon("TG")}Freigaben in RAMROD oder Telegram</span></div>
+    ${!can("channels:manage") ? `<p class="agent-permission-note">Nur Inhaber und Admins dürfen neue Verkaufskonten einrichten.</p>` : ""}
   </section>`;
 }
 
@@ -2852,15 +2893,92 @@ function agentApprovalCard(approval) {
   </article>`;
 }
 
-function agentRunRow(run) {
+function agentRunRow(run, runners = []) {
   const plan = run.plan || {};
   const steps = Array.isArray(run.steps) ? run.steps : [];
-  return `<article class="agent-run-row">
-    <div class="agent-run-head"><span class="agent-state ${agentStatusTone(run.status)}">${escapeHtml(agentStatusLabel(run.status))}</span><time>${escapeHtml(formatAgentDate(run.created_at))}</time></div>
-    <strong>${escapeHtml(plan.label || agentTypeLabel(run.agent_type))}</strong>
-    <p>${escapeHtml(run.objective)}</p>
-    <div class="agent-step-tags">${steps.map((step) => `<span class="${agentStatusTone(step.status)}">${step.status === "succeeded" ? "✓ " : ""}${escapeHtml(step.title)}</span>`).join("")}</div>
+  const active = ["queued", "planning", "waiting_approval", "ready", "running"].includes(run.status);
+  return `<details class="agent-run-row" ${active ? "open" : ""}>
+    <summary class="agent-run-summary">
+      <span class="agent-avatar lead">VL</span>
+      <div><small>RAMROD Verkaufsleiter</small><strong>${escapeHtml(plan.label || agentTypeLabel(run.agent_type))}</strong><p>${escapeHtml(run.objective)}</p></div>
+      <div class="agent-run-state"><span class="agent-state ${agentStatusTone(run.status)}">${escapeHtml(agentStatusLabel(run.status))}</span><time>${escapeHtml(formatAgentDate(run.created_at))}</time></div>
+    </summary>
+    <div class="agent-step-tree">${steps.map((step) => agentStepRow(step, runners)).join("")}</div>
+  </details>`;
+}
+
+function currentAgentStep(run) {
+  const steps = Array.isArray(run?.steps) ? run.steps : [];
+  return steps.find((step) => step.status === "running")
+    || steps.find((step) => step.status === "waiting_approval")
+    || steps.find((step) => step.status === "approved")
+    || steps.find((step) => step.status === "planned")
+    || null;
+}
+
+function agentAssignmentCard(run, step, runners) {
+  const specialist = agentSpecialist(step);
+  const runner = agentRunnerForStep(step, runners);
+  return `<article class="agent-assignment-card ${agentStatusTone(step.status)}">
+    <span class="agent-avatar">${escapeHtml(specialist.icon)}</span>
+    <div><small>${escapeHtml(specialist.name)}</small><strong>${escapeHtml(step.title)}</strong><p>${escapeHtml(step.status === "waiting_approval" ? "Wartet auf deine Entscheidung." : step.summary || run.objective)}</p><span>${escapeHtml(agentTypeLabel(run.agent_type))}${runner ? ` · ${escapeHtml(runner.name || runner.worker_key)}` : ""}</span></div>
+    <em class="agent-state ${agentStatusTone(step.status)}">${escapeHtml(agentStatusLabel(step.status))}</em>
   </article>`;
+}
+
+function agentStepRow(step, runners) {
+  const specialist = agentSpecialist(step);
+  const runner = agentRunnerForStep(step, runners);
+  const result = agentStepResult(step);
+  return `<article class="agent-step-row ${agentStatusTone(step.status)}">
+    <span class="agent-tree-line" aria-hidden="true"></span>
+    <span class="agent-avatar">${escapeHtml(specialist.icon)}</span>
+    <div class="agent-step-copy"><small>${escapeHtml(specialist.name)}${runner ? ` · ${escapeHtml(runner.name || runner.worker_key)}` : ""}</small><strong>${escapeHtml(step.title)}</strong><p>${escapeHtml(result)}</p></div>
+    <div class="agent-step-meta"><em class="agent-state ${agentStatusTone(step.status)}">${escapeHtml(agentStatusLabel(step.status))}</em>${step.started_at ? `<time>Start ${escapeHtml(formatAgentDate(step.started_at))}</time>` : ""}</div>
+  </article>`;
+}
+
+function agentRunnerForStep(step, runners = []) {
+  return runners.find((runner) => runner.id === step.locked_by) || null;
+}
+
+function agentStepResult(step) {
+  if (step.status === "failed") return step.error?.message || "Der Schritt ist fehlgeschlagen und wird kontrolliert erneut versucht.";
+  if (step.status === "succeeded") return step.output?.summary || step.output?.message || "Ergebnis geprüft und an den Verkaufsleiter übergeben.";
+  if (step.status === "waiting_approval") return step.summary || "Dieser Schritt benötigt deine Entscheidung.";
+  return step.summary || "Aufgabe ist vorbereitet und wartet auf ihre Ausführung.";
+}
+
+function agentSpecialist(step) {
+  const specialists = {
+    inspect_requirements: ["RS", "Plattform-Scout"],
+    prepare_account_data: ["KA", "Konto-Assistent"],
+    create_external_account: ["BA", "Browser-Agent"],
+    complete_identity: ["DU", "Kontoinhaber"],
+    connect_oauth: ["CO", "Connector-Agent"],
+    verify_connector: ["CP", "Connector-Prüfer"],
+    validate_item: ["AP", "Artikel-Prüfer"],
+    prepare_listing: ["TX", "Listing-Autor"],
+    publish_listing: ["PB", "Publisher"],
+    verify_listing: ["LP", "Listing-Prüfer"],
+    register_listing: ["BS", "Bestands-Synchronisierer"],
+    select_candidates: ["PA", "Portfolio-Agent"],
+    build_channel_plan: ["KS", "Kanalstratege"],
+    prepare_channel_drafts: ["LT", "Listing-Team"],
+    publish_channel_plan: ["KP", "Kanal-Publisher"],
+    monitor_distribution: ["VM", "Verkaufsmonitor"],
+    cluster_inventory: ["SA", "Sortier-Agent"],
+    create_content: ["CA", "Content-Agent"],
+    review_claims: ["RP", "Rechte-Prüfer"],
+    schedule_campaign: ["KM", "Kampagnen-Agent"],
+    measure_campaign: ["PF", "Performance-Agent"],
+    verify_order: ["OA", "Order-Agent"],
+    reserve_inventory: ["BW", "Bestandswächter"],
+    delist_other_channels: ["DW", "Dubletten-Wächter"],
+    create_shipping_task: ["VA", "Versand-Agent"]
+  };
+  const match = specialists[step?.step_key] || ["AG", step?.execution_mode === "human" ? "Kontoinhaber" : "Spezialagent"];
+  return { icon: match[0], name: match[1] };
 }
 
 function agentAccountRow(account) {
@@ -3311,6 +3429,43 @@ function bindEvents() {
       render();
     }
   }));
+  document.querySelector("[data-channel-onboarding-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.startingAgent) return;
+    const formData = new FormData(event.currentTarget);
+    const channelId = String(formData.get("channelId") || "").trim();
+    const accountEmail = String(formData.get("accountEmail") || "").trim();
+    const sellerMode = String(formData.get("sellerMode") || "").trim();
+    const accountLabel = String(formData.get("accountLabel") || "").trim();
+    if (!channelId || !accountEmail || !sellerMode) {
+      state.importStatus = "Bitte Plattform, Kontakt-E-Mail und Verkäuferart ausfüllen.";
+      render();
+      return;
+    }
+    state.startingAgent = "onboard_channel_account";
+    state.importStatus = "Der Verkaufsleiter plant die Kontoeinrichtung und verteilt die ersten Aufgaben...";
+    render();
+    try {
+      const platform = channelLabel(channelId);
+      const result = await postJson("/api/agent-runs", {
+        agentType: "onboard_channel_account",
+        channelId,
+        accountEmail,
+        sellerMode,
+        accountLabel,
+        objective: `${platform}-Verkaufskonto ${accountLabel || accountEmail} vorbereiten, sicher verbinden und den Connector prüfen.`
+      });
+      state.agentControl = result.snapshot || state.agentControl;
+      state.importStatus = result.approval
+        ? `${platform}-Einrichtung geplant. Der Agent arbeitet bis zum ersten persönlichen Freigabepunkt.`
+        : `${platform}-Einrichtung wurde dem Agententeam übergeben.`;
+    } catch (error) {
+      state.importStatus = `Kontoeinrichtung konnte nicht gestartet werden: ${error.message}`;
+    } finally {
+      state.startingAgent = "";
+      render();
+    }
+  });
   document.querySelectorAll("[data-agent-decision]").forEach((button) => button.addEventListener("click", async () => {
     const approvalId = button.dataset.approvalId;
     if (!approvalId || state.decidingApproval) return;

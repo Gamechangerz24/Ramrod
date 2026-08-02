@@ -24,11 +24,23 @@ for (const agentType of agentTypeIds) {
 const accountPlan = buildAgentPlan({
   agentType: "onboard_channel_account",
   objective: "Ein eBay-Verkaufskonto für CREATORS sicher verbinden.",
-  channelId: "ebay"
+  channelId: "ebay",
+  accountEmail: "verkauf@gamechangerz.io",
+  sellerMode: "business",
+  accountLabel: "CREATORS eBay"
 });
 assert.equal(accountPlan.status, "ready");
 assert.equal(firstApprovalStep(accountPlan).key, "create_external_account");
 assert.equal(accountPlan.riskLevel, "critical");
+assert.equal(accountPlan.accountEmail, "verkauf@gamechangerz.io");
+assert.equal(accountPlan.sellerMode, "business");
+assert.equal(accountPlan.accountLabel, "CREATORS eBay");
+assert.throws(() => buildAgentPlan({
+  agentType: "onboard_channel_account",
+  channelId: "ebay",
+  accountEmail: "keine-mail",
+  sellerMode: "private"
+}), /Ungültige E-Mail-Adresse/);
 
 const approvalId = "31f94b3a-7ddc-4dc5-9025-5b6af04f9f53";
 const keyboard = telegramApprovalKeyboard(approvalId);
