@@ -30,11 +30,13 @@
     "test:workspace-access": "node scripts/test-workspace-access.mjs",
     "test:ebay-onboarding": "node scripts/test-ebay-onboarding.mjs",
     "test:ebay-listing": "node scripts/test-ebay-listing.mjs",
+    "test:ebay-trading": "node scripts/test-ebay-trading-listing.mjs",
     "test:ebay-seller-setup": "node scripts/test-ebay-seller-setup.mjs",
     "test:mcp": "node scripts/test-mcp-adapter.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "fast-xml-parser": "^5.10.1",
     "three": "^0.184.0",
     "zod": "^3.25.76"
   }

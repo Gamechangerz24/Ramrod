@@ -89,6 +89,27 @@ const incomplete = buildEbayListingPreview({
 assert.equal(incomplete.status, "needs_input");
 assert.equal(incomplete.missingAspects[0].name, "Plattform");
 
+const privatePreview = buildEbayListingPreview({
+  item,
+  content,
+  category,
+  categoryAspects,
+  sellerSetup: {
+    listingMode: "trading",
+    marketplaceId: "EBAY_DE",
+    privateSellerRulesReady: true,
+    merchantPostalCode: "73730",
+    localShippingProfiles: [{ name: "DHL Paket bis 2 kg", maxWeightKg: 2, shippingCost: "6.19" }],
+    handlingDays: 2,
+    returnsAccepted: false
+  },
+  sellerProfile: { seller_type: "private", config: {} }
+});
+assert.equal(privatePreview.status, "ready_for_ebay");
+assert.equal(privatePreview.listingMode, "trading");
+assert.equal(privatePreview.merchantPostalCode, "73730");
+assert.equal(privatePreview.shipping.shippingCost, "6.19");
+
 const config = {
   environment: "production",
   apiBaseUrl: "https://api.ebay.com",

@@ -134,16 +134,27 @@ export function buildEbayListingPreview({
     item.image
   ]).filter((value) => /^https:\/\//i.test(value) || /^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(value));
   const descriptionHtml = buildDescriptionHtml(normalized, sellerProfile);
-  const shipping = selectFulfillmentPolicy(sellerSetup, item);
-  const returns = policySummary(sellerSetup.returnPolicy, sellerSetup.returnPolicyId, "Rueckgaberegel");
-  const payment = policySummary(sellerSetup.paymentPolicy, sellerSetup.paymentPolicyId, "Zahlungsregel");
+  const privateTrading = sellerSetup.listingMode === "trading";
+  const shipping = privateTrading
+    ? selectLocalShippingProfile(sellerSetup, item)
+    : selectFulfillmentPolicy(sellerSetup, item);
+  const returns = privateTrading
+    ? { id: "trading:return-policy", name: sellerSetup.returnsAccepted ? `${sellerSetup.returnDays || 30} Tage Rueckgabe` : "Keine freiwillige Rueckgabe", summary: "Wird direkt im eBay-Artikel gespeichert." }
+    : policySummary(sellerSetup.returnPolicy, sellerSetup.returnPolicyId, "Rueckgaberegel");
+  const payment = privateTrading
+    ? { id: "trading:managed-payments", name: "eBay-Zahlungsabwicklung", summary: "Wird von eBay abgewickelt." }
+    : policySummary(sellerSetup.paymentPolicy, sellerSetup.paymentPolicyId, "Zahlungsregel");
+  const policiesReady = privateTrading
+    ? Boolean(sellerSetup.privateSellerRulesReady && shipping.id)
+    : Boolean(shipping.id && returns.id && payment.id);
+  const locationValue = privateTrading ? sellerSetup.merchantPostalCode : sellerSetup.merchantLocationKey;
   const readiness = [
     readinessStep("title", "Titel", Boolean(normalized.title), normalized.title || "Titel fehlt"),
     readinessStep("category", "eBay-Kategorie", Boolean(category?.id), category?.name || "Kategorie fehlt"),
     readinessStep("images", "Fotos", sourceImages.length > 0, sourceImages.length ? `${sourceImages.length} Foto${sourceImages.length === 1 ? "" : "s"}` : "Mindestens ein HTTPS-Foto fehlt"),
     readinessStep("price", "Preis", price > 0, price > 0 ? `${price.toFixed(2)} EUR` : "Preis fehlt"),
-    readinessStep("policies", "Versand, Zahlung und Rueckgabe", Boolean(shipping.id && returns.id && payment.id), shipping.id && returns.id && payment.id ? "eBay-Regeln gefunden" : "eBay-Regeln fehlen"),
-    readinessStep("location", "Versandort", Boolean(sellerSetup.merchantLocationKey), sellerSetup.merchantLocationKey || "Versandort fehlt"),
+    readinessStep("policies", "Versand, Zahlung und Rueckgabe", policiesReady, policiesReady ? (privateTrading ? "Private Regeln pro Artikel" : "eBay-Regeln gefunden") : "eBay-Regeln fehlen"),
+    readinessStep("location", "Versandort", Boolean(locationValue), locationValue || "Versandort fehlt"),
     readinessStep("aspects", "Pflichtmerkmale", missingAspects.length === 0, missingAspects.length ? `Fehlt: ${missingAspects.map((entry) => entry.name).join(", ")}` : "Vollstaendig")
   ];
 
@@ -152,6 +163,7 @@ export function buildEbayListingPreview({
     generatedAt: new Date().toISOString(),
     sku: item.sku,
     marketplaceId: sellerSetup.marketplaceId || "EBAY_DE",
+    listingMode: privateTrading ? "trading" : "inventory",
     sellerType: sellerProfile?.seller_type || "unknown",
     condition: item.condition || "Gebraucht",
     completeness: item.completeness || "siehe Fotos",
@@ -170,6 +182,11 @@ export function buildEbayListingPreview({
       ? { mode: "seller_profile", text: cleanText(sellerProfile.config.warrantyText) }
       : { mode: "not_stated", text: "RAMROD erzeugt keine unbelegte Garantieangabe." },
     merchantLocationKey: sellerSetup.merchantLocationKey || "",
+    merchantPostalCode: sellerSetup.merchantPostalCode || "",
+    handlingDays: Number(sellerSetup.handlingDays ?? 2),
+    returnsAccepted: Boolean(sellerSetup.returnsAccepted),
+    returnDays: Number(sellerSetup.returnDays || 30),
+    returnShippingCostPayer: sellerSetup.returnShippingCostPayer || "BUYER",
     readiness,
     warnings: [
       "Noch nicht bei eBay angelegt oder veroeffentlicht.",
@@ -394,6 +411,30 @@ function selectFulfillmentPolicy(sellerSetup, item) {
     estimatedPackedWeightKg: estimatedPackedWeightKg || null,
     selectionMode: estimatedPackedWeightKg > 0 ? "automatic" : "requires_check",
     summary: [selected?.summary, selectionNote].filter(Boolean).join(" · ")
+  };
+}
+
+function selectLocalShippingProfile(sellerSetup, item) {
+  const candidates = (Array.isArray(sellerSetup.localShippingProfiles) ? sellerSetup.localShippingProfiles : [])
+    .filter((profile) => Number(profile?.maxWeightKg) > 0)
+    .sort((left, right) => Number(left.maxWeightKg) - Number(right.maxWeightKg));
+  if (!candidates.length) return { id: "", name: "Versandklasse", summary: "Private Versandregeln fehlen." };
+  const itemWeightKg = Number(item.shippingWeightKg || item.weight || 0);
+  const estimatedPackedWeightKg = itemWeightKg > 0 ? Math.round((itemWeightKg * 1.15 + 0.2) * 100) / 100 : 0;
+  const selected = estimatedPackedWeightKg > 0
+    ? candidates.find((profile) => Number(profile.maxWeightKg) >= estimatedPackedWeightKg) || candidates.at(-1)
+    : candidates[0];
+  return {
+    id: `trading:${selected.maxWeightKg}:${selected.shippingCost}`,
+    name: selected.name || `DHL Paket bis ${selected.maxWeightKg} kg`,
+    summary: estimatedPackedWeightKg > 0
+      ? `Automatisch gewaehlt fuer ca. ${estimatedPackedWeightKg.toFixed(2).replace(".", ",")} kg Versandgewicht.`
+      : "Vor Veroeffentlichung anhand von Gewicht und Verpackung pruefen.",
+    serviceCode: "DE_DHLPaket",
+    maxWeightKg: selected.maxWeightKg,
+    shippingCost: selected.shippingCost,
+    estimatedPackedWeightKg: estimatedPackedWeightKg || null,
+    selectionMode: estimatedPackedWeightKg > 0 ? "automatic" : "requires_check"
   };
 }
 

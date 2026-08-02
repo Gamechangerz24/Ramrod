@@ -2425,7 +2425,7 @@ function ebayDraftCard(item) {
       <div class="ebay-missing-grid">${missing.map((entry) => ebayAspectField(entry)).join("")}</div>
       <button class="secondary-action" type="submit">${icon("OK")}Merkmale übernehmen</button>
     </form>` : ""}
-    ${item.ebayListing ? `<div class="ebay-external-status"><strong>${active ? "Das Angebot ist live" : "Unveröffentlichter eBay-Entwurf angelegt"}</strong><span>Offer-ID ${escapeHtml(item.ebayListing.offerId || "-")}${item.ebayListing.listingId ? ` · Listing ${escapeHtml(item.ebayListing.listingId)}` : ""}</span>${item.ebayListing.url ? `<a href="${escapeHtml(item.ebayListing.url)}" target="_blank" rel="noreferrer">Auf eBay ansehen</a>` : ""}</div>` : ""}
+    ${item.ebayListing ? `<div class="ebay-external-status"><strong>${active ? "Das Angebot ist live" : "eBay-Prüfung erfolgreich, noch nicht öffentlich"}</strong><span>${item.ebayListing.seller?.userId ? `Verkäufer: ${escapeHtml(item.ebayListing.seller.userId)} · ` : ""}${item.ebayListing.verification ? `eBay-Status: ${escapeHtml(item.ebayListing.verification.ack || "geprüft")} · mögliche Einstellgebühr: ${euro(item.ebayListing.verification.feeTotal || 0)}` : `Offer-ID ${escapeHtml(item.ebayListing.offerId || "-")}`}${item.ebayListing.listingId ? ` · Listing ${escapeHtml(item.ebayListing.listingId)}` : ""}</span>${item.ebayListing.verification?.warnings?.length ? `<span>${item.ebayListing.verification.warnings.map((entry) => escapeHtml(entry.longMessage || entry.shortMessage || "eBay-Hinweis")).join(" · ")}</span>` : ""}${item.ebayListing.url ? `<a href="${escapeHtml(item.ebayListing.url)}" target="_blank" rel="noreferrer">Auf eBay ansehen</a>` : ""}</div>` : ""}
     <div class="ebay-publish-actions">
       <button class="secondary-action" data-ebay-draft="${item.id}" type="button" ${state.ebayDrafting ? "disabled" : ""}>${icon("AI")}${state.ebayDrafting === item.id ? "Optimiere..." : "Vorschau neu erzeugen"}</button>
       ${!prepared && !active ? `<button class="primary-action" data-ebay-prepare="${item.id}" type="button" ${!ready || state.ebayPreparing ? "disabled" : ""}>${icon("EB")}${state.ebayPreparing === item.id ? "Wird angelegt..." : "Bei eBay vorbereiten"}</button>` : ""}
@@ -3730,7 +3730,8 @@ function bindEvents() {
   document.querySelectorAll("[data-ebay-publish]").forEach((button) => button.addEventListener("click", async () => {
     const item = state.items.find((entry) => entry.id === button.dataset.ebayPublish);
     if (!item?.ebayListing || state.ebayPublishing) return;
-    const confirmed = window.confirm(`Jetzt wirklich live auf eBay veröffentlichen?\n\n${item.ebayDraft?.title || item.title}\n${euro(item.ebayDraft?.price || item.fair)}\n\nDas Angebot ist danach öffentlich und kann gekauft werden.`);
+    const sellerAccount = item.ebayListing?.payload?.seller?.userId || item.ebayListing?.seller?.userId || "verbundenes eBay-Konto";
+    const confirmed = window.confirm(`Jetzt wirklich live auf eBay veröffentlichen?\n\n${item.ebayDraft?.title || item.title}\n${euro(item.ebayDraft?.price || item.fair)}\nVerkäufer: ${sellerAccount}\n\nDas Angebot ist danach öffentlich und kann gekauft werden.`);
     if (!confirmed) return;
     state.ebayPublishing = item.id;
     state.importStatus = "eBay veröffentlicht das Angebot...";

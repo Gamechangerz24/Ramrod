@@ -63,6 +63,11 @@ import {
   createMissingEbaySellerDefaults
 } from "./lib/ebay-seller-setup.mjs";
 import {
+  getTradingEbayUser,
+  publishTradingEbayItem,
+  verifyTradingEbayItem
+} from "./lib/ebay-trading-listing.mjs";
+import {
   canAssignOrganizationRole,
   createInvitationToken,
   hashInvitationToken,
@@ -2938,13 +2943,16 @@ async function handlePrepareEbayListing(request, response) {
       ebayImages.push(uploaded.imageUrl);
     }
 
-    const inventoryPayload = await createOrReplaceEbayInventoryItem(
-      ebaySellerOAuthConfig,
-      credentials.accessToken,
-      preview,
-      ebayImages
-    );
-    const offer = await createEbayOffer(ebaySellerOAuthConfig, credentials.accessToken, preview);
+    const privateTrading = preview.listingMode === "trading";
+    const seller = privateTrading
+      ? await getTradingEbayUser(ebaySellerOAuthConfig, credentials.accessToken)
+      : null;
+    const inventoryPayload = privateTrading
+      ? null
+      : await createOrReplaceEbayInventoryItem(ebaySellerOAuthConfig, credentials.accessToken, preview, ebayImages);
+    const offer = privateTrading
+      ? { offerId: `verify:${preview.sku}:${Date.now()}`, payload: null, verification: await verifyTradingEbayItem(ebaySellerOAuthConfig, credentials.accessToken, preview, ebayImages) }
+      : await createEbayOffer(ebaySellerOAuthConfig, credentials.accessToken, preview);
     const rows = await supabaseInsert("/listings", {
       item_id: dbItem.id,
       channel_id: "ebay",
@@ -2956,6 +2964,8 @@ async function handlePrepareEbayListing(request, response) {
         preview,
         inventoryItem: inventoryPayload,
         offer: offer.payload,
+        verification: offer.verification || null,
+        seller,
         ebayImages,
         preparedAt: new Date().toISOString()
       }
@@ -2999,12 +3009,20 @@ async function handlePublishEbayListing(request, response) {
       credentials = fresh;
     }
 
-    const published = await publishEbayOffer(
-      ebaySellerOAuthConfig,
-      credentials.accessToken,
-      listing.external_id,
-      listing.payload?.preview?.marketplaceId || "EBAY_DE"
-    );
+    const privateTrading = listing.payload?.preview?.listingMode === "trading";
+    const published = privateTrading
+      ? await publishTradingEbayItem(
+        ebaySellerOAuthConfig,
+        credentials.accessToken,
+        listing.payload.preview,
+        listing.payload.ebayImages || []
+      )
+      : await publishEbayOffer(
+        ebaySellerOAuthConfig,
+        credentials.accessToken,
+        listing.external_id,
+        listing.payload?.preview?.marketplaceId || "EBAY_DE"
+      );
     const listingId = String(published.listingId);
     const listingUrl = `https://www.ebay.de/itm/${encodeURIComponent(listingId)}`;
     const listedAt = new Date().toISOString();
@@ -3106,6 +3124,17 @@ function publicListing(listing) {
     status: listing.status,
     title: listing.title,
     price: Number(listing.price || 0),
+    seller: listing.payload?.seller ? {
+      userId: listing.payload.seller.userId || "",
+      sellerBusinessType: listing.payload.seller.sellerBusinessType || "",
+      feedbackScore: Number(listing.payload.seller.feedbackScore || 0)
+    } : null,
+    verification: listing.payload?.verification ? {
+      ack: listing.payload.verification.ack || "",
+      feeTotal: Number(listing.payload.verification.feeTotal || 0),
+      fees: listing.payload.verification.fees || [],
+      warnings: listing.payload.verification.warnings || []
+    } : null,
     url: listing.url || "",
     listedAt: listing.listed_at || null,
     createdAt: listing.created_at || null
