@@ -2479,9 +2479,12 @@ function ebayDraftCard(item) {
       <span>${escapeHtml(draft.sellerType === "private" ? "Privater Verkäufer" : draft.sellerType === "business" ? "Gewerblicher Verkäufer" : "Verkäuferprofil")}</span>
     </div>
     ${auction ? `<div class="ebay-auction-warning"><strong>Geschätzter Marktwert: ${euro(Number(draft.marketValue || item.fair || 0))}</strong><span>Kein Mindestpreis: Der Artikel kann für 1 € zuzüglich Versand verkauft werden, wenn es nur ein Gebot gibt.</span></div>` : ""}
+    ${listingCopyAgentCard(item, draft)}
     <div class="ebay-preview-copy">
       <div><small>Beschreibung</small><p>${escapeHtml(content.shortDescription || "-")}</p></div>
       <div><small>Zustand</small><p>${escapeHtml(content.conditionDescription || item.condition || "-")}</p></div>
+      ${content.includedItems?.length ? `<div><small>Lieferumfang</small><p>${escapeHtml(content.includedItems.join(" · "))}</p></div>` : ""}
+      ${content.defects?.length ? `<div><small>Bekannte Mängel</small><p>${escapeHtml(content.defects.join(" · "))}</p></div>` : ""}
     </div>
     <div class="ebay-policy-grid">
       ${ebayPolicyCard("Versand", draft.shipping)}
@@ -2506,6 +2509,22 @@ function ebayDraftCard(item) {
       ${prepared ? `<button class="primary-action danger-confirm" data-ebay-publish="${item.id}" type="button" ${state.ebayPublishing ? "disabled" : ""}>${icon("GO")}${state.ebayPublishing === item.id ? "Wird veröffentlicht..." : "Jetzt bei eBay veröffentlichen"}</button>` : ""}
     </div>
     <small class="ebay-safety-note">„Bei eBay vorbereiten“ ist noch nicht öffentlich. Erst „Jetzt bei eBay veröffentlichen“ erzeugt das sichtbare Angebot.</small>
+  </section>`;
+}
+
+function listingCopyAgentCard(item, draft) {
+  const agent = draft.copyAgent;
+  if (!agent) return `<section class="listing-copy-agent legacy"><span>${icon("TX")}</span><div><small>Listing-Redakteur</small><strong>Textprüfung beim nächsten Entwurf aktiv</strong><p>Erzeuge die Vorschau neu, damit Käufertext und offene Angaben getrennt geprüft werden.</p></div></section>`;
+  const missing = Array.isArray(agent.missingFacts) ? agent.missingFacts : [];
+  const locked = ["prepared", "active"].includes(item.ebayListing?.status);
+  const tone = agent.status === "ready" ? "ready" : agent.status === "needs_input" ? "blocked" : "review";
+  const status = agent.status === "ready" ? "Text bereit" : agent.status === "needs_input" ? "Angaben fehlen" : "Text prüfen";
+  return `<section class="listing-copy-agent ${tone}">
+    <header><span>${icon("TX")}</span><div><small>Listing-Redakteur</small><strong>${escapeHtml(status)} · ${Number(agent.score || 0)}/100</strong></div><em>${escapeHtml(agent.label || "Text-Agent")}</em></header>
+    <p>${escapeHtml(agent.summary || "Der Verkaufstext wurde aus Käufersicht geprüft.")}</p>
+    <div class="listing-copy-checks">${(agent.checks || []).map((entry) => `<span class="${entry.ready ? "done" : "missing"}">${icon(entry.ready ? "OK" : "!")}${escapeHtml(entry.label)}</span>`).join("")}</div>
+    ${missing.length ? `<div class="listing-copy-questions"><strong>Vor dem Einstellen klären</strong>${missing.map((entry) => `<article><span class="${entry.severity === "blocking" ? "blocking" : "warning"}">${entry.severity === "blocking" ? "Pflicht" : "Hinweis"}</span><div><strong>${escapeHtml(entry.question)}</strong><small>${escapeHtml(entry.reason)}</small></div></article>`).join("")}</div>` : ""}
+    ${missing.length && !locked ? `<form data-listing-copy-form="${item.id}"><div>${missing.map((entry) => `<label><span>${escapeHtml(entry.field)}</span><input name="${escapeHtml(entry.field)}" value="${escapeHtml(item.listingCopyAnswers?.[entry.field] || "")}" placeholder="Sichere Angabe eintragen" ${entry.severity === "blocking" ? "required" : ""} /></label>`).join("")}</div><button class="secondary-action" type="submit">${icon("AI")}Text neu schreiben</button></form>` : ""}
   </section>`;
 }
 
@@ -3032,7 +3051,7 @@ function agentSpecialist(step) {
     connect_oauth: ["CO", "Connector-Agent"],
     verify_connector: ["CP", "Connector-Prüfer"],
     validate_item: ["AP", "Artikel-Prüfer"],
-    prepare_listing: ["TX", "Listing-Autor"],
+    prepare_listing: ["TX", "Listing-Redakteur"],
     publish_listing: ["PB", "Publisher"],
     verify_listing: ["LP", "Listing-Prüfer"],
     register_listing: ["BS", "Bestands-Synchronisierer"],
@@ -3786,6 +3805,32 @@ function bindEvents() {
       await persistItem(item, "eBay-Vorschau");
     } catch (error) {
       state.importStatus = `eBay-Vorschau fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.ebayDrafting = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-listing-copy-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const item = state.items.find((entry) => entry.id === form.dataset.listingCopyForm);
+    if (!item || state.ebayDrafting || ["prepared", "active"].includes(item.ebayListing?.status)) return;
+    const values = Object.fromEntries(new FormData(form).entries());
+    item.listingCopyAnswers = {
+      ...(item.listingCopyAnswers || {}),
+      ...Object.fromEntries(Object.entries(values).map(([name, value]) => [name, String(value).trim()]).filter(([, value]) => value))
+    };
+    state.ebayDrafting = item.id;
+    state.importStatus = "Der Listing-Redakteur schreibt den Text mit den neuen Angaben neu...";
+    render();
+    try {
+      const result = await postJson("/api/ebay-draft", { item: { ...item, ebayDraft: null } });
+      item.ebayDraft = result.ebayDraft;
+      state.importStatus = result.ebayDraft?.copyAgent?.status === "ready"
+        ? "Der Listing-Redakteur hat einen verkaufsfertigen Text erstellt."
+        : "Text neu erstellt. Prüfe bitte die weiterhin markierten Angaben.";
+      await persistItem(item, "Listing-Text");
+    } catch (error) {
+      state.importStatus = `Text-Agent fehlgeschlagen: ${error.message}`;
     } finally {
       state.ebayDrafting = "";
       render();

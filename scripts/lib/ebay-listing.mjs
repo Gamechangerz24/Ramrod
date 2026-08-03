@@ -1,76 +1,16 @@
+import {
+  buildListingCopyPrompt,
+  evaluateListingCopy,
+  inferCriticalMissingFacts,
+  listingCopyContentSchema
+} from "./listing-copy-agent.mjs";
+
 export function ebayListingContentSchema() {
-  return {
-    type: "object",
-    additionalProperties: false,
-    required: [
-      "title",
-      "shortDescription",
-      "conditionDescription",
-      "includedItems",
-      "defects",
-      "sellingPoints",
-      "itemSpecifics"
-    ],
-    properties: {
-      title: { type: "string", maxLength: 80 },
-      shortDescription: { type: "string" },
-      conditionDescription: { type: "string" },
-      includedItems: { type: "array", items: { type: "string" } },
-      defects: { type: "array", items: { type: "string" } },
-      sellingPoints: { type: "array", items: { type: "string" } },
-      itemSpecifics: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["name", "value", "confidence"],
-          properties: {
-            name: { type: "string" },
-            value: { type: "string" },
-            confidence: { type: "integer", minimum: 0, maximum: 100 }
-          }
-        }
-      }
-    }
-  };
+  return listingCopyContentSchema();
 }
 
 export function buildEbayListingPrompt(item, categoryContext = {}) {
-  const requiredAspects = (categoryContext.aspects || [])
-    .filter((entry) => entry.required)
-    .map((entry) => ({ name: entry.name, allowedValues: entry.values?.slice(0, 30) || [] }));
-  const recommendedAspects = (categoryContext.aspects || [])
-    .filter((entry) => !entry.required)
-    .slice(0, 12)
-    .map((entry) => ({ name: entry.name, allowedValues: entry.values?.slice(0, 20) || [] }));
-  const facts = {
-    title: item.title,
-    category: item.category,
-    franchise: item.franchise,
-    condition: item.condition,
-    completeness: item.completeness,
-    notes: item.notes,
-    recognizedCondition: item.aiConditionObservations,
-    risks: item.aiRiskFlags || [],
-    barcode: item.barcode || "",
-    existingDraft: item.listingDraft || null,
-    categorySuggestion: categoryContext.category || null,
-    requiredAspects,
-    recommendedAspects
-  };
-
-  return [
-    "Du bist der eBay-Listing-Agent fuer RAMROD.",
-    "Erzeuge einen sachlichen, suchstarken deutschen eBay-Text fuer genau diesen gebrauchten Einzelartikel.",
-    "Der Titel hat maximal 80 Zeichen. Nutze zuerst Marke/Franchise, exakten Produktnamen, Plattform/Variante und kaufrelevanten Zustand.",
-    "Keine Keyword-Wiederholungen, Superlative, Emojis, Grossbuchstaben-Spam oder unbelegte Behauptungen.",
-    "Erfinde keine Edition, Funktion, Echtheit, Vollstaendigkeit, Seriennummer, Garantie oder Zubehoerteile.",
-    "Uebernimm sichtbare Maengel klar in conditionDescription und defects. Unsichere Fakten duerfen nicht als sicher dargestellt werden.",
-    "Bei itemSpecifics nur Werte mit mindestens 75 Prozent Sicherheit ausgeben. Verwende die exakten Namen der eBay-Merkmale.",
-    "Wenn ein Pflichtmerkmal nicht belegt ist, lasse es weg; RAMROD fragt es anschliessend beim Menschen ab.",
-    "Antworte ausschliesslich im JSON-Schema und auf Deutsch.",
-    `ARTIKELFAKTEN: ${JSON.stringify(facts)}`
-  ].join(" ");
+  return buildListingCopyPrompt(item, categoryContext);
 }
 
 export function buildFallbackEbayContent(item) {
@@ -83,6 +23,8 @@ export function buildFallbackEbayContent(item) {
     includedItems: splitList(item.completeness || "Lieferumfang siehe Fotos"),
     defects: (item.aiRiskFlags || []).filter(Boolean).slice(0, 8),
     sellingPoints: [item.franchise, item.category].filter(Boolean).map(cleanText),
+    buyerSearchTerms: uniqueStrings([item.franchise, item.category, ...String(title).split(/\s+/)]).slice(0, 12),
+    criticalMissingFacts: inferCriticalMissingFacts(item),
     itemSpecifics: [
       item.franchise ? { name: "Marke", value: cleanText(item.franchise), confidence: Number(item.confidence || 75) } : null,
       item.category ? { name: "Produktart", value: cleanText(item.category), confidence: Number(item.confidence || 75) } : null
@@ -100,6 +42,15 @@ export function normalizeEbayListingContent(content, item) {
     includedItems: cleanList(content?.includedItems || fallback.includedItems),
     defects: cleanList(content?.defects || fallback.defects),
     sellingPoints: cleanList(content?.sellingPoints || fallback.sellingPoints),
+    buyerSearchTerms: cleanList(content?.buyerSearchTerms || fallback.buyerSearchTerms),
+    criticalMissingFacts: (Array.isArray(content?.criticalMissingFacts) ? content.criticalMissingFacts : fallback.criticalMissingFacts)
+      .map((entry) => ({
+        field: cleanText(entry?.field),
+        question: cleanText(entry?.question),
+        reason: cleanText(entry?.reason),
+        severity: entry?.severity === "blocking" ? "blocking" : "warning"
+      }))
+      .filter((entry) => entry.field && entry.question),
     itemSpecifics: specifics
       .map((entry) => ({
         name: cleanText(entry?.name),
@@ -119,6 +70,7 @@ export function buildEbayListingPreview({
   sellerProfile = null
 }) {
   const normalized = normalizeEbayListingContent(content, item);
+  const copyAgent = evaluateListingCopy(normalized, item);
   const specifics = Object.fromEntries(normalized.itemSpecifics.map((entry) => [entry.name, [entry.value]]));
   const requiredAspects = categoryAspects.filter((entry) => entry.required);
   const missingAspects = requiredAspects
@@ -154,6 +106,7 @@ export function buildEbayListingPreview({
   const locationValue = privateTrading ? sellerSetup.merchantPostalCode : sellerSetup.merchantLocationKey;
   const readiness = [
     readinessStep("title", "Titel", Boolean(normalized.title), normalized.title || "Titel fehlt"),
+    readinessStep("copy", "Verkaufstext", copyAgent.status !== "needs_input", copyAgent.summary),
     readinessStep("category", "eBay-Kategorie", Boolean(category?.id), category?.name || "Kategorie fehlt"),
     readinessStep("images", "Fotos", sourceImages.length > 0, sourceImages.length ? `${sourceImages.length} Foto${sourceImages.length === 1 ? "" : "s"}` : "Mindestens ein HTTPS-Foto fehlt"),
     readinessStep("price", salesFormat === "auction" ? "Auktionsstart" : "Preis", price > 0, price > 0 ? `${price.toFixed(2)} EUR` : "Preis fehlt"),
@@ -179,6 +132,7 @@ export function buildEbayListingPreview({
     listingDuration,
     category: category || null,
     content: normalized,
+    copyAgent,
     descriptionHtml,
     itemSpecifics: specifics,
     missingAspects,
@@ -367,12 +321,11 @@ function buildDescriptionHtml(content, sellerProfile) {
     ? `<h2>Hinweis des Verkaeufers</h2><p>${escapeHtml(sellerProfile.config.legalNotice)}</p>`
     : "";
   return [
-    `<h1>${escapeHtml(content.title)}</h1>`,
     `<p>${escapeHtml(content.shortDescription)}</p>`,
+    listSection("Auf einen Blick", content.sellingPoints),
+    listSection("Lieferumfang", content.includedItems),
     "<h2>Zustand</h2>",
     `<p>${escapeHtml(content.conditionDescription)}</p>`,
-    listSection("Lieferumfang", content.includedItems),
-    listSection("Besonderheiten", content.sellingPoints),
     listSection("Bekannte Maengel", content.defects),
     profileNotice,
     "<p>Bitte beachte die Originalfotos; sie sind Bestandteil der Artikelbeschreibung.</p>"

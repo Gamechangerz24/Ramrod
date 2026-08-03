@@ -2891,7 +2891,7 @@ async function handleEbayDraft(request, response) {
       sellerProfile
     });
     sendJson(response, 200, {
-      provider: process.env.OPENAI_API_KEY ? "openai-ebay-listing-agent" : "deterministic-ebay-listing-agent",
+      provider: process.env.OPENAI_API_KEY ? "openai-listing-copy-editor" : "deterministic-listing-copy-editor",
       ebayDraft
     });
   } catch (error) {

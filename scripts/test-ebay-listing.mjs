@@ -9,6 +9,11 @@ import {
   uploadEbayImageFromDataUrl,
   uploadEbayImageFromUrl
 } from "./lib/ebay-listing.mjs";
+import {
+  evaluateListingCopy,
+  inferCriticalMissingFacts,
+  listingCopyContentSchema
+} from "./lib/listing-copy-agent.mjs";
 
 const item = {
   sku: "PR-TEST-001",
@@ -37,6 +42,8 @@ const content = {
   includedItems: ["Linker Joy-Con", "Rechter Joy-Con"],
   defects: ["Leichte Gebrauchsspuren"],
   sellingPoints: ["Neon Rot und Blau"],
+  buyerSearchTerms: ["Nintendo", "Switch", "Joy-Con", "Controller"],
+  criticalMissingFacts: [],
   itemSpecifics: [
     { name: "Marke", value: "Nintendo", confidence: 99 },
     { name: "Plattform", value: "Nintendo Switch", confidence: 99 }
@@ -77,6 +84,32 @@ assert.equal(preview.shipping.id, "ship-2");
 assert.equal(preview.shipping.selectionMode, "automatic");
 assert.equal(preview.warranty.mode, "not_stated");
 assert.deepEqual(preview.missingAspects, []);
+assert.equal(preview.copyAgent.status, "ready");
+assert.equal(preview.readiness.find((entry) => entry.id === "copy")?.ready, true);
+
+const listingSchema = listingCopyContentSchema();
+assert.equal(listingSchema.required.includes("criticalMissingFacts"), true);
+assert.equal(listingSchema.required.includes("buyerSearchTerms"), true);
+
+const safetyItem = {
+  title: "Speedo Kinder-Schwimmhilfe pink mit Seestern-Motiv",
+  category: "Kinder Schwimmhilfe",
+  condition: "Gebraucht",
+  completeness: "Schwimmhilfe wie abgebildet"
+};
+const safetyQuestions = inferCriticalMissingFacts(safetyItem);
+assert.equal(safetyQuestions.length >= 3, true);
+const safetyCopy = evaluateListingCopy({
+  ...content,
+  title: safetyItem.title,
+  shortDescription: "Speedo Kinder-Schwimmhilfe in Pink und Türkis mit Seestern-Motiv. Angeboten wird die abgebildete Schwimmhilfe.",
+  conditionDescription: "Gebrauchter Zustand mit sichtbaren leichten Gebrauchsspuren am Material.",
+  includedItems: ["Eine Kinder-Schwimmhilfe"],
+  buyerSearchTerms: ["Speedo", "Kinder", "Schwimmhilfe"],
+  criticalMissingFacts: safetyQuestions
+}, safetyItem);
+assert.equal(safetyCopy.status, "needs_input");
+assert.equal(safetyCopy.checks.find((entry) => entry.id === "blocking")?.ready, false);
 
 const auctionPreview = buildEbayListingPreview({
   item: { ...item, ebaySaleMode: "auction_1_euro" },
