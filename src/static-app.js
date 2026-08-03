@@ -3737,7 +3737,10 @@ function bindEvents() {
     state.importStatus = "eBay veröffentlicht das Angebot...";
     render();
     try {
-      const result = await postJson("/api/ebay-listing/publish", { item, confirm: true });
+      const result = await postJson("/api/ebay-listing/publish", {
+        item: { dbId: item.dbId || "", sku: item.sku },
+        confirm: true
+      });
       item.ebayListing = { ...item.ebayListing, ...result.listing, listingId: result.listingId, url: result.url, status: "active" };
       item.stage = "Gelistet";
       state.importStatus = result.message || "Der Artikel ist jetzt live bei eBay.";
@@ -3954,9 +3957,7 @@ function bindEvents() {
 
 async function fetchJson(url) {
   const response = await apiFetch(url, { cache: "no-store" });
-  const result = await response.json();
-  if (!response.ok) throw apiError(response, result);
-  return result;
+  return readJsonResponse(response);
 }
 
 async function postJson(url, payload) {
@@ -3965,9 +3966,7 @@ async function postJson(url, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  const result = await response.json();
-  if (!response.ok) throw apiError(response, result);
-  return result;
+  return readJsonResponse(response);
 }
 
 async function patchJson(url, payload) {
@@ -3976,14 +3975,29 @@ async function patchJson(url, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  const result = await response.json();
-  if (!response.ok) throw apiError(response, result);
-  return result;
+  return readJsonResponse(response);
 }
 
 async function fetchPublicJson(url) {
   const response = await fetch(url, { cache: "no-store" });
-  const result = await response.json();
+  return readJsonResponse(response);
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  let result = {};
+  try {
+    result = text ? JSON.parse(text) : {};
+  } catch {
+    const message = response.status === 413
+      ? "Die Anfrage war zu groß. RAMROD sendet beim nächsten Versuch nur noch die Artikelreferenz."
+      : response.status >= 500
+        ? `Der RAMROD-Server ist momentan nicht erreichbar oder hat die Anfrage abgebrochen (HTTP ${response.status}).`
+        : `Der Server hat keine gültige Antwort geliefert (HTTP ${response.status}).`;
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
   if (!response.ok) throw apiError(response, result);
   return result;
 }
