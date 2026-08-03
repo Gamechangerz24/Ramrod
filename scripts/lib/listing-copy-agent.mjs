@@ -161,7 +161,7 @@ export function evaluateListingCopy(content, item = {}) {
   const blockingFacts = missingFacts.filter((entry) => entry.severity === "blocking");
   const checks = [
     check("identity", "Produkt eindeutig benannt", title.length >= 20 && !/unbekannt|unknown/i.test(title)),
-    check("buyer_summary", "Kaeuferfragen kompakt beantwortet", description.length >= 70),
+    check("buyer_summary", "Käuferfragen kompakt beantwortet", description.length >= 70),
     check("condition", "Zustand konkret beschrieben", condition.length >= 20),
     check("scope", "Lieferumfang klar", included.length > 0),
     check("search", "Suchbegriffe abgedeckt", searchTerms.length >= 3),
@@ -180,10 +180,10 @@ export function evaluateListingCopy(content, item = {}) {
     checks,
     missingFacts,
     summary: status === "ready"
-      ? "Titel und Beschreibung sind aus Kaeufersicht klar und faktenbasiert."
+      ? "Titel und Beschreibung sind aus Käufersicht klar und faktenbasiert."
       : status === "needs_input"
-        ? `${blockingFacts.length} kaufkritische Angabe${blockingFacts.length === 1 ? "" : "n"} muss noch bestaetigt werden.`
-        : "Der Text ist verwendbar, sollte aber vor dem Einstellen noch geschaerft werden."
+        ? `${blockingFacts.length} kaufkritische Angabe${blockingFacts.length === 1 ? " muss" : "n müssen"} noch bestätigt werden.`
+        : "Der Text ist verwendbar, sollte aber vor dem Einstellen noch geschärft werden."
   };
 }
 

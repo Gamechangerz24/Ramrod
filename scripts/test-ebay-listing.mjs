@@ -117,6 +117,20 @@ const adultMediaQuestions = inferCriticalMissingFacts({
   category: "DVDs & Blu-rays"
 });
 assert.equal(adultMediaQuestions.some((entry) => entry.field === "Altersprüfung und Versand" && entry.severity === "blocking"), true);
+const mergedAdultMediaCopy = normalizeEbayListingContent({
+  ...content,
+  criticalMissingFacts: [{
+    field: "FSK-18-Verkaufs- und Versandabwicklung",
+    question: "Ist eine rechtskonforme Altersprüfung bei Verkauf und Versand sichergestellt?",
+    reason: "FSK 18 erfordert eine bestätigte Abwicklung.",
+    severity: "blocking"
+  }]
+}, {
+  ...item,
+  title: "Monkey Man Blu-ray FSK 18 eingeschweißt",
+  category: "DVDs & Blu-rays"
+});
+assert.equal(mergedAdultMediaCopy.criticalMissingFacts.filter((entry) => entry.severity === "blocking").length, 1);
 
 const defensiveCopy = evaluateListingCopy({
   ...content,

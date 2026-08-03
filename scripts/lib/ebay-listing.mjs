@@ -46,7 +46,7 @@ export function normalizeEbayListingContent(content, item) {
       severity: entry?.severity === "blocking" ? "blocking" : "warning"
     }))
     .filter((entry) => entry.field && entry.question)
-    .filter((entry, index, values) => values.findIndex((candidate) => candidate.field.toLowerCase() === entry.field.toLowerCase()) === index);
+    .filter((entry, index, values) => values.findIndex((candidate) => missingFactKey(candidate) === missingFactKey(entry)) === index);
   const conditionDescription = sanitizePublicText(content?.conditionDescription || fallback.conditionDescription)
     || confirmedConditionFallback(item.condition);
   return {
@@ -446,6 +446,15 @@ function confirmedConditionFallback(condition) {
   if (value === "unvollstaendig" || value === "unvollständig") return "Unvollständiger Artikel laut Lieferumfang.";
   if (value === "defekt") return "Defekter Artikel; bekannte Mängel bitte beachten.";
   return "Gebrauchter Zustand.";
+}
+
+function missingFactKey(entry) {
+  const text = `${entry?.field || ""} ${entry?.question || ""}`.toLowerCase();
+  if (/(alterspruefung|altersprüfung|fsk|usk).*(versand|verkauf)|(?:versand|verkauf).*(alterspruefung|altersprüfung|fsk|usk)/.test(text)) return "adult-age-check";
+  if (/(groesse|größe|gewicht)/.test(text)) return "size-weight";
+  if (/(sicherheitskennzeichnung|typenschild|normkennzeichnung)/.test(text)) return "safety-label";
+  if (/(funktionspruefung|funktionsprüfung|verschluss|naht)/.test(text)) return "function-check";
+  return cleanText(entry?.field).toLowerCase();
 }
 
 function capitalize(value) {
