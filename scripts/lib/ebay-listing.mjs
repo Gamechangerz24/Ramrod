@@ -128,7 +128,11 @@ export function buildEbayListingPreview({
   const ebayPlan = [channelPlan.primary, ...(channelPlan.parallel || []), channelPlan.fallback]
     .filter(Boolean)
     .find((entry) => String(entry.name || entry.id || "").toLowerCase() === "ebay");
-  const price = Math.max(0, Number(ebayPlan?.targetPrice || item.salesStrategy?.targetPrice || item.priceCheck?.fair || item.fair || 0));
+  const marketValue = Math.max(0, Number(ebayPlan?.targetPrice || item.salesStrategy?.targetPrice || item.priceCheck?.fair || item.fair || 0));
+  const salesFormat = item.ebaySaleMode === "auction_1_euro" ? "auction" : "fixed_price";
+  const startPrice = salesFormat === "auction" ? 1 : marketValue;
+  const price = startPrice;
+  const listingDuration = salesFormat === "auction" ? "DAYS_7" : "GTC";
   const sourceImages = uniqueStrings([
     ...(Array.isArray(item.images) ? item.images : []),
     item.image
@@ -152,7 +156,7 @@ export function buildEbayListingPreview({
     readinessStep("title", "Titel", Boolean(normalized.title), normalized.title || "Titel fehlt"),
     readinessStep("category", "eBay-Kategorie", Boolean(category?.id), category?.name || "Kategorie fehlt"),
     readinessStep("images", "Fotos", sourceImages.length > 0, sourceImages.length ? `${sourceImages.length} Foto${sourceImages.length === 1 ? "" : "s"}` : "Mindestens ein HTTPS-Foto fehlt"),
-    readinessStep("price", "Preis", price > 0, price > 0 ? `${price.toFixed(2)} EUR` : "Preis fehlt"),
+    readinessStep("price", salesFormat === "auction" ? "Auktionsstart" : "Preis", price > 0, price > 0 ? `${price.toFixed(2)} EUR` : "Preis fehlt"),
     readinessStep("policies", "Versand, Zahlung und Rueckgabe", policiesReady, policiesReady ? (privateTrading ? "Private Regeln pro Artikel" : "eBay-Regeln gefunden") : "eBay-Regeln fehlen"),
     readinessStep("location", "Versandort", Boolean(locationValue), locationValue || "Versandort fehlt"),
     readinessStep("aspects", "Pflichtmerkmale", missingAspects.length === 0, missingAspects.length ? `Fehlt: ${missingAspects.map((entry) => entry.name).join(", ")}` : "Vollstaendig")
@@ -169,6 +173,10 @@ export function buildEbayListingPreview({
     completeness: item.completeness || "siehe Fotos",
     title: normalized.title,
     price,
+    marketValue,
+    startPrice,
+    salesFormat,
+    listingDuration,
     category: category || null,
     content: normalized,
     descriptionHtml,
@@ -190,6 +198,7 @@ export function buildEbayListingPreview({
     readiness,
     warnings: [
       "Noch nicht bei eBay angelegt oder veroeffentlicht.",
+      ...(salesFormat === "auction" ? ["Auktion ab 1 EUR ohne Mindestpreis: Der Verkaufspreis kann deutlich unter dem geschaetzten Marktwert liegen."] : []),
       "Versandkosten und Rueckgabe folgen den im eBay-Konto ausgewaehlten Verkaufsregeln.",
       "Kategorieabhaengige Produkt- und Sicherheitsangaben koennen beim eBay-Check zusaetzlich erforderlich werden."
     ]
@@ -282,18 +291,19 @@ export async function createOrReplaceEbayInventoryItem(config, accessToken, prev
 }
 
 export async function createEbayOffer(config, accessToken, preview, fetchImpl = fetch) {
+  const auction = preview.salesFormat === "auction";
   const payload = {
     sku: preview.sku,
     marketplaceId: preview.marketplaceId,
-    format: "FIXED_PRICE",
+    format: auction ? "AUCTION" : "FIXED_PRICE",
     availableQuantity: 1,
     categoryId: preview.category.id,
     merchantLocationKey: preview.merchantLocationKey,
     listingDescription: preview.descriptionHtml,
-    listingDuration: "GTC",
-    pricingSummary: {
-      price: { value: Number(preview.price).toFixed(2), currency: "EUR" }
-    },
+    listingDuration: auction ? (preview.listingDuration || "DAYS_7") : "GTC",
+    pricingSummary: auction
+      ? { auctionStartPrice: { value: Number(preview.startPrice || preview.price || 1).toFixed(2), currency: "EUR" } }
+      : { price: { value: Number(preview.price).toFixed(2), currency: "EUR" } },
     listingPolicies: {
       paymentPolicyId: preview.payment.id,
       fulfillmentPolicyId: preview.shipping.id,

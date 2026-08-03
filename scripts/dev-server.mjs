@@ -2930,6 +2930,11 @@ async function handlePrepareEbayListing(request, response) {
     }
     const previous = await supabaseSelect(`/listings?select=*&item_id=eq.${encodeURIComponent(dbItem.id)}&channel_id=eq.ebay&status=eq.prepared&order=created_at.desc&limit=1`);
     if (previous[0]?.external_id) {
+      const preparedFormat = previous[0].payload?.preview?.salesFormat || "fixed_price";
+      const requestedFormat = preview.salesFormat || "fixed_price";
+      if (preparedFormat !== requestedFormat) {
+        throw httpError(409, "Für diesen Artikel existiert bereits ein vorbereiteter eBay-Entwurf mit einer anderen Verkaufsart.");
+      }
       sendJson(response, 200, {
         provider: "ebay-inventory-api",
         prepared: true,
@@ -3803,7 +3808,9 @@ function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing
     salesStrategy: completedDecision?.salesStrategy || ui.salesStrategy || null,
     salesDecision: completedDecision || ui.salesDecision || null,
     listingDraft: raw.listingDraft || ui.listingDraft || null,
-    ebayDraft: completedEbayDraft || raw.ebayDraft || ui.ebayDraft || null,
+    ebayDraft: Object.prototype.hasOwnProperty.call(ui, "ebayDraft")
+      ? ui.ebayDraft
+      : completedEbayDraft || raw.ebayDraft || null,
     priceCheck: completedPriceCheck || ui.priceCheck || null,
     automationJob: latestPriceJob ? mapWorkerJobToUi(latestPriceJob) : ui.automationJob || null
   };

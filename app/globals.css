@@ -2053,6 +2053,28 @@ img {
   padding: 6px 8px;
 }
 
+.ebay-auction-warning {
+  background: #fff4e9;
+  border: 1px solid #ffc99f;
+  border-left: 4px solid var(--orange);
+  border-radius: 7px;
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.ebay-auction-warning strong,
+.ebay-auction-warning span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.ebay-auction-warning span {
+  color: #914100;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .ebay-preview-copy {
   display: grid;
   gap: 8px;
@@ -2394,6 +2416,91 @@ img {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ebay-sale-mode {
+  background: #f7f8fa;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  min-width: 0;
+  padding: 12px;
+}
+
+.ebay-sale-mode legend {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  padding: 0 5px;
+}
+
+.ebay-sale-mode-options {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ebay-sale-mode-options button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  min-height: 58px;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.ebay-sale-mode-options button > span:first-child {
+  align-items: center;
+  background: #0d0d0d;
+  border-radius: 6px;
+  color: var(--orange);
+  display: flex;
+  font-size: 11px;
+  font-weight: 950;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.ebay-sale-mode-options button strong,
+.ebay-sale-mode-options button small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.ebay-sale-mode-options button small {
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.ebay-sale-mode-options button.selected {
+  border-color: var(--orange);
+  box-shadow: inset 3px 0 0 var(--orange);
+}
+
+.ebay-sale-mode-options button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.ebay-sale-mode > p,
+.ebay-sale-mode-lock {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.ebay-sale-mode-lock {
+  color: var(--gold);
+  font-weight: 850;
 }
 
 .repair-decision {
@@ -5617,6 +5724,10 @@ img {
   .strategy-metrics .suggestion strong {
     font-size: 13px;
     overflow-wrap: anywhere;
+  }
+
+  .ebay-sale-mode-options {
+    grid-template-columns: 1fr;
   }
 
   .workflow-progress {

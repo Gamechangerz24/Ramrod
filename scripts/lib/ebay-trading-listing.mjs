@@ -3,6 +3,7 @@ import { XMLBuilder, XMLParser } from "fast-xml-parser";
 const XML_NAMESPACE = "urn:ebay:apis:eBLBaseComponents";
 
 export function buildTradingItemRequest(preview) {
+  const auction = preview.salesFormat === "auction";
   const itemSpecifics = Object.entries(preview.itemSpecifics || {}).map(([name, values]) => ({
     Name: name,
     Value: Array.isArray(values) ? values : [values]
@@ -11,13 +12,13 @@ export function buildTradingItemRequest(preview) {
     Title: preview.title,
     Description: { "#cdata": preview.descriptionHtml },
     PrimaryCategory: { CategoryID: String(preview.category?.id || "") },
-    StartPrice: money(preview.price),
+    StartPrice: money(auction ? (preview.startPrice || preview.price || 1) : preview.price),
     CategoryMappingAllowed: true,
     Country: "DE",
     Currency: "EUR",
     DispatchTimeMax: Number(preview.handlingDays ?? 2),
-    ListingDuration: "GTC",
-    ListingType: "FixedPriceItem",
+    ListingDuration: auction ? tradingListingDuration(preview.listingDuration) : "GTC",
+    ListingType: auction ? "Chinese" : "FixedPriceItem",
     PostalCode: String(preview.merchantPostalCode || ""),
     Quantity: 1,
     SKU: preview.sku,
@@ -38,6 +39,11 @@ export function buildTradingItemRequest(preview) {
   };
   if (itemSpecifics.length) item.ItemSpecifics = { NameValueList: itemSpecifics };
   return item;
+}
+
+function tradingListingDuration(value) {
+  const days = String(value || "DAYS_7").match(/(1|3|5|7|10|21|30)/)?.[1] || "7";
+  return `Days_${days}`;
 }
 
 export async function getTradingEbayUser(config, accessToken, fetchImpl = fetch) {

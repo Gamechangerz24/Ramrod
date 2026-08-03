@@ -484,7 +484,9 @@ function normalizeSalesStrategy(item) {
       ? strategy.alternativeChannels
       : channelPlanAlternatives(channelPlan),
     channelPlan,
-    salesFormat: strategy.salesFormat || (item.channel === "Whatnot" ? "live_show" : item.channel === "Bundle" ? "bundle" : "fixed_price"),
+    salesFormat: item.channel === "eBay"
+      ? (ebaySaleModeFor(item) === "auction_1_euro" ? "auction" : "fixed_price")
+      : strategy.salesFormat || (item.channel === "Whatnot" ? "live_show" : item.channel === "Bundle" ? "bundle" : "fixed_price"),
     targetPrice: Number(channelPlan.primary?.targetPrice || strategy.targetPrice || fair),
     minimumAcceptablePrice: Number(strategy.minimumAcceptablePrice || low),
     expectedTimeToSell: strategy.expectedTimeToSell || "unknown",
@@ -1965,8 +1967,9 @@ function itemNextStepCard(item) {
   }
 
   if (item.channel === "eBay") {
+    const auction = ebaySaleModeFor(item) === "auction_1_euro";
     if (prepared) {
-      return `<section class="item-next-step ebay"><div><small>Nächster Schritt</small><strong>eBay-Angebot veröffentlichen</strong><span>Der Entwurf ist geprüft, aber noch nicht sichtbar.</span></div><button class="primary-action danger-confirm" data-ebay-publish="${item.id}" type="button" ${state.ebayPublishing ? "disabled" : ""}>${icon("GO")}${state.ebayPublishing === item.id ? "Wird veröffentlicht..." : "Jetzt bei eBay veröffentlichen"}</button></section>`;
+      return `<section class="item-next-step ebay"><div><small>Nächster Schritt</small><strong>${auction ? "eBay-Auktion ab 1 € veröffentlichen" : "eBay-Angebot veröffentlichen"}</strong><span>Der Entwurf ist geprüft, aber noch nicht sichtbar.</span></div><button class="primary-action danger-confirm" data-ebay-publish="${item.id}" type="button" ${state.ebayPublishing ? "disabled" : ""}>${icon("GO")}${state.ebayPublishing === item.id ? "Wird veröffentlicht..." : "Jetzt bei eBay veröffentlichen"}</button></section>`;
     }
     if (!item.ebayDraft) {
       return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>eBay-Angebot erstellen</strong><span>RAMROD erzeugt Titel, Beschreibung und Verkaufsregeln.</span></div><button class="primary-action" data-ebay-draft="${item.id}" type="button" ${state.ebayDrafting ? "disabled" : ""}>${icon("AI")}${state.ebayDrafting === item.id ? "Wird erstellt..." : "eBay-Vorschau erstellen"}</button></section>`;
@@ -1974,7 +1977,7 @@ function itemNextStepCard(item) {
     if (!draftReady) {
       return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>eBay-Angaben vervollständigen</strong><span>Die Vorschau zeigt dir, was noch fehlt.</span></div><button class="primary-action" data-focus-ebay-card type="button">${icon("EB")}eBay-Angaben öffnen</button></section>`;
     }
-    return `<section class="item-next-step ebay"><div><small>Nächster Schritt</small><strong>Unveröffentlichten eBay-Entwurf anlegen</strong><span>Fotos und Daten werden geprüft zu eBay übertragen. Noch kein Verkauf.</span></div><button class="primary-action" data-ebay-prepare="${item.id}" type="button" ${state.ebayPreparing ? "disabled" : ""}>${icon("EB")}${state.ebayPreparing === item.id ? "Wird vorbereitet..." : "Bei eBay vorbereiten"}</button></section>`;
+    return `<section class="item-next-step ebay"><div><small>Nächster Schritt</small><strong>${auction ? "Auktion ab 1 € bei eBay vorbereiten" : "Unveröffentlichten eBay-Entwurf anlegen"}</strong><span>Fotos und Daten werden geprüft zu eBay übertragen. Noch kein Verkauf.</span></div><button class="primary-action" data-ebay-prepare="${item.id}" type="button" ${state.ebayPreparing ? "disabled" : ""}>${icon("EB")}${state.ebayPreparing === item.id ? "Wird vorbereitet..." : "Bei eBay vorbereiten"}</button></section>`;
   }
 
   return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkaufsplan ausführen</strong><span>Öffne die Übersicht für ${escapeHtml(channelLabel(item.channel))}.</span></div><button class="primary-action" data-view="sell" type="button">${icon("VK")}Zu den Verkäufen</button></section>`;
@@ -2018,6 +2021,7 @@ function salesStrategyCard(item) {
       <div><small>RAMROD empfiehlt</small><h3>${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice)}</h3><p>${escapeHtml(strategy.routeReason)}</p></div>
       <span class="strategy-action">${escapeHtml(action)}</span>
     </div>
+    ${item.channel === "eBay" ? ebaySaleModeCard(item, strategy) : ""}
     ${channelPlanCard(strategy.channelPlan)}
     <div class="strategy-metrics">
       ${suggestion("Format", escapeHtml(salesFormatLabel(strategy.salesFormat)))}
@@ -2050,6 +2054,31 @@ function salesStrategyCard(item) {
       ${strategy.detectedDefects.length ? `<div class="defect-strip"><strong>Erkannte Punkte</strong><span>${strategy.detectedDefects.map(escapeHtml).join(" · ")}</span></div>` : ""}
     </details>
   </section>`;
+}
+
+function ebaySaleModeFor(item) {
+  return item.ebaySaleMode === "auction_1_euro" ? "auction_1_euro" : "fixed_price";
+}
+
+function ebaySaleModeCard(item, strategy) {
+  const mode = ebaySaleModeFor(item);
+  const locked = ["prepared", "active"].includes(item.ebayListing?.status);
+  const marketValue = Number(item.priceCheck?.fair || item.fair || strategy.targetPrice || 0);
+  return `<fieldset class="ebay-sale-mode" ${locked ? "disabled" : ""}>
+    <legend>Wie soll der Artikel angeboten werden?</legend>
+    <div class="ebay-sale-mode-options">
+      <button class="${mode === "fixed_price" ? "selected" : ""}" data-ebay-sale-mode="fixed_price" data-item-id="${item.id}" type="button" ${locked ? "disabled" : ""}>
+        ${icon("FP")}<span><strong>Festpreis</strong><small>${euro(strategy.targetPrice)}</small></span>
+      </button>
+      <button class="${mode === "auction_1_euro" ? "selected" : ""}" data-ebay-sale-mode="auction_1_euro" data-item-id="${item.id}" type="button" ${locked ? "disabled" : ""}>
+        ${icon("1€")}<span><strong>Auktion ab 1 €</strong><small>7 Tage · ohne Mindestpreis</small></span>
+      </button>
+    </div>
+    <p>${mode === "auction_1_euro"
+      ? `Geschätzter Marktwert: ${euro(marketValue)}. Der tatsächliche Verkaufspreis wird durch die Gebote bestimmt und kann deutlich darunter liegen.`
+      : `RAMROD setzt den berechneten Zielpreis an. Geschätzter Marktwert: ${euro(marketValue)}.`}</p>
+    ${locked ? `<small class="ebay-sale-mode-lock">Die Verkaufsart ist gesperrt, weil bereits ein eBay-Angebot vorbereitet wurde.</small>` : ""}
+  </fieldset>`;
 }
 
 function channelPlanCard(plan) {
@@ -2435,18 +2464,21 @@ function ebayDraftCard(item) {
   const active = item.ebayListing?.status === "active";
   const missing = draft.missingAspects || [];
   const content = draft.content || {};
+  const auction = draft.salesFormat === "auction";
   return `<section class="script-box ebay-draft-card ${ready ? "ready" : "needs-input"}">
     <div class="ebay-listing-head">
       <div><small>Käuferansicht vor Veröffentlichung</small><h3>eBay-Angebot</h3></div>
       <span class="status-pill ${active ? "live" : prepared ? "running" : ready ? "ready" : "muted"}">${active ? "Live" : prepared ? "Bei eBay vorbereitet" : ready ? "Bereit" : "Angaben fehlen"}</span>
     </div>
-    <div class="ebay-preview-title"><strong>${escapeHtml(draft.title || item.title)}</strong><em>${euro(Number(draft.price || item.fair))}</em></div>
+    <div class="ebay-preview-title"><strong>${escapeHtml(draft.title || item.title)}</strong><em>${auction ? `Start ${euro(Number(draft.startPrice || draft.price || 1))}` : euro(Number(draft.price || item.fair))}</em></div>
     <div class="ebay-preview-meta">
+      <span>${auction ? "Auktion · 7 Tage · ab 1 €" : "Festpreis"}</span>
       <span>${escapeHtml(draft.category?.name || "Kategorie offen")}</span>
       <span>${escapeHtml(draft.condition || item.condition)}</span>
       <span>${Number(draft.sourceImages?.length || 0)} Foto${Number(draft.sourceImages?.length || 0) === 1 ? "" : "s"}</span>
       <span>${escapeHtml(draft.sellerType === "private" ? "Privater Verkäufer" : draft.sellerType === "business" ? "Gewerblicher Verkäufer" : "Verkäuferprofil")}</span>
     </div>
+    ${auction ? `<div class="ebay-auction-warning"><strong>Geschätzter Marktwert: ${euro(Number(draft.marketValue || item.fair || 0))}</strong><span>Kein Mindestpreis: Der Artikel kann für 1 € zuzüglich Versand verkauft werden, wenn es nur ein Gebot gibt.</span></div>` : ""}
     <div class="ebay-preview-copy">
       <div><small>Beschreibung</small><p>${escapeHtml(content.shortDescription || "-")}</p></div>
       <div><small>Zustand</small><p>${escapeHtml(content.conditionDescription || item.condition || "-")}</p></div>
@@ -3711,6 +3743,30 @@ function bindEvents() {
       render();
     }
   }));
+  document.querySelectorAll("[data-ebay-sale-mode]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.itemId);
+    const mode = button.dataset.ebaySaleMode;
+    if (!item || !["fixed_price", "auction_1_euro"].includes(mode)) return;
+    if (["prepared", "active"].includes(item.ebayListing?.status)) {
+      state.importStatus = "Die Verkaufsart kann nach der eBay-Vorbereitung nicht mehr geändert werden.";
+      render();
+      return;
+    }
+    if (ebaySaleModeFor(item) === mode) return;
+    item.ebaySaleMode = mode;
+    item.salesStrategy = {
+      ...(item.salesStrategy || {}),
+      salesFormat: mode === "auction_1_euro" ? "auction" : "fixed_price"
+    };
+    item.ebayDraft = null;
+    item.ebayListing = null;
+    const message = mode === "auction_1_euro"
+      ? "Auktion ab 1 € gewählt. Erzeuge jetzt die eBay-Vorschau neu; der Marktwert bleibt als Orientierung erhalten."
+      : "Festpreis gewählt. Erzeuge jetzt die eBay-Vorschau neu.";
+    await persistItem(item, "eBay-Verkaufsart");
+    state.importStatus = message;
+    render();
+  }));
   document.querySelectorAll("[data-ebay-draft]").forEach((button) => button.addEventListener("click", async () => {
     const item = state.items.find((entry) => entry.id === button.dataset.ebayDraft);
     if (!item || state.ebayDrafting) return;
@@ -3780,7 +3836,11 @@ function bindEvents() {
     const item = state.items.find((entry) => entry.id === button.dataset.ebayPublish);
     if (!item?.ebayListing || state.ebayPublishing) return;
     const sellerAccount = item.ebayListing?.payload?.seller?.userId || item.ebayListing?.seller?.userId || "verbundenes eBay-Konto";
-    const confirmed = window.confirm(`Jetzt wirklich live auf eBay veröffentlichen?\n\n${item.ebayDraft?.title || item.title}\n${euro(item.ebayDraft?.price || item.fair)}\nVerkäufer: ${sellerAccount}\n\nDas Angebot ist danach öffentlich und kann gekauft werden.`);
+    const auction = item.ebayDraft?.salesFormat === "auction";
+    const priceLine = auction
+      ? `Auktion ab ${euro(item.ebayDraft?.startPrice || 1)} · 7 Tage · ohne Mindestpreis\nGeschätzter Marktwert: ${euro(item.ebayDraft?.marketValue || item.fair)}`
+      : `Festpreis: ${euro(item.ebayDraft?.price || item.fair)}`;
+    const confirmed = window.confirm(`Jetzt wirklich live auf eBay veröffentlichen?\n\n${item.ebayDraft?.title || item.title}\n${priceLine}\nVerkäufer: ${sellerAccount}\n\nDas Angebot ist danach öffentlich und kann gekauft werden.`);
     if (!confirmed) return;
     state.ebayPublishing = item.id;
     state.importStatus = "eBay veröffentlicht das Angebot...";

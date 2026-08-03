@@ -78,6 +78,20 @@ assert.equal(preview.shipping.selectionMode, "automatic");
 assert.equal(preview.warranty.mode, "not_stated");
 assert.deepEqual(preview.missingAspects, []);
 
+const auctionPreview = buildEbayListingPreview({
+  item: { ...item, ebaySaleMode: "auction_1_euro" },
+  content,
+  category,
+  categoryAspects,
+  sellerSetup,
+  sellerProfile: { seller_type: "business", config: {} }
+});
+assert.equal(auctionPreview.salesFormat, "auction");
+assert.equal(auctionPreview.startPrice, 1);
+assert.equal(auctionPreview.price, 1);
+assert.equal(auctionPreview.marketValue, 53);
+assert.equal(auctionPreview.listingDuration, "DAYS_7");
+
 const incomplete = buildEbayListingPreview({
   item,
   content: { ...content, itemSpecifics: content.itemSpecifics.filter((entry) => entry.name !== "Plattform") },
@@ -141,6 +155,10 @@ assert.equal(calls.find((entry) => entry.url.includes("create_image_from_file"))
 await createOrReplaceEbayInventoryItem(config, "user-token", preview, [image.imageUrl], fetchMock);
 const offer = await createEbayOffer(config, "user-token", preview, fetchMock);
 assert.equal(offer.offerId, "offer-1");
+const auctionOffer = await createEbayOffer(config, "user-token", auctionPreview, fetchMock);
+assert.equal(auctionOffer.payload.format, "AUCTION");
+assert.equal(auctionOffer.payload.listingDuration, "DAYS_7");
+assert.equal(auctionOffer.payload.pricingSummary.auctionStartPrice.value, "1.00");
 const published = await publishEbayOffer(config, "user-token", offer.offerId, "EBAY_DE", fetchMock);
 assert.equal(published.listingId, "123456789");
 assert.equal(calls.some((entry) => entry.options.method === "PUT"), true);

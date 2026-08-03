@@ -29,6 +29,17 @@ assert.equal(request.ConditionID, 3000);
 assert.equal(request.ShippingDetails.ShippingServiceOptions.ShippingServiceCost["#text"], "6.19");
 assert.equal(tradingConditionId("Defekt"), 7000);
 
+const auctionRequest = buildTradingItemRequest({
+  ...preview,
+  salesFormat: "auction",
+  startPrice: 1,
+  marketValue: 165,
+  listingDuration: "DAYS_7"
+});
+assert.equal(auctionRequest.ListingType, "Chinese");
+assert.equal(auctionRequest.ListingDuration, "Days_7");
+assert.equal(auctionRequest.StartPrice["#text"], "1.00");
+
 const calls = [];
 const fetchMock = async (_url, options) => {
   calls.push(options);
