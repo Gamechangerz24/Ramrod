@@ -453,9 +453,11 @@ img {
 }
 
 .workspace {
+  align-content: start;
   display: grid;
   gap: 14px;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-auto-rows: max-content;
+  grid-template-rows: none;
   min-width: 0;
   padding: 20px;
 }
