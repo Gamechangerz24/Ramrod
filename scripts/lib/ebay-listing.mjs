@@ -35,22 +35,29 @@ export function buildFallbackEbayContent(item) {
 export function normalizeEbayListingContent(content, item) {
   const fallback = buildFallbackEbayContent(item);
   const specifics = Array.isArray(content?.itemSpecifics) ? content.itemSpecifics : fallback.itemSpecifics;
+  const missingFacts = [
+    ...(Array.isArray(content?.criticalMissingFacts) ? content.criticalMissingFacts : []),
+    ...inferCriticalMissingFacts(item)
+  ]
+    .map((entry) => ({
+      field: cleanText(entry?.field),
+      question: cleanText(entry?.question),
+      reason: cleanText(entry?.reason),
+      severity: entry?.severity === "blocking" ? "blocking" : "warning"
+    }))
+    .filter((entry) => entry.field && entry.question)
+    .filter((entry, index, values) => values.findIndex((candidate) => candidate.field.toLowerCase() === entry.field.toLowerCase()) === index);
+  const conditionDescription = sanitizePublicText(content?.conditionDescription || fallback.conditionDescription)
+    || confirmedConditionFallback(item.condition);
   return {
     title: clampText(cleanText(content?.title || fallback.title), 80),
-    shortDescription: cleanText(content?.shortDescription || fallback.shortDescription),
-    conditionDescription: cleanText(content?.conditionDescription || fallback.conditionDescription),
+    shortDescription: sanitizePublicText(content?.shortDescription || fallback.shortDescription) || fallback.shortDescription,
+    conditionDescription,
     includedItems: cleanList(content?.includedItems || fallback.includedItems),
-    defects: cleanList(content?.defects || fallback.defects),
+    defects: cleanList(content?.defects || fallback.defects).filter((entry) => !containsUncertainty(entry)),
     sellingPoints: cleanList(content?.sellingPoints || fallback.sellingPoints),
     buyerSearchTerms: cleanList(content?.buyerSearchTerms || fallback.buyerSearchTerms),
-    criticalMissingFacts: (Array.isArray(content?.criticalMissingFacts) ? content.criticalMissingFacts : fallback.criticalMissingFacts)
-      .map((entry) => ({
-        field: cleanText(entry?.field),
-        question: cleanText(entry?.question),
-        reason: cleanText(entry?.reason),
-        severity: entry?.severity === "blocking" ? "blocking" : "warning"
-      }))
-      .filter((entry) => entry.field && entry.question),
+    criticalMissingFacts: missingFacts.length ? missingFacts : fallback.criticalMissingFacts,
     itemSpecifics: specifics
       .map((entry) => ({
         name: cleanText(entry?.name),
@@ -415,6 +422,34 @@ function cleanList(values) {
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function sanitizePublicText(value) {
+  const prepared = cleanText(value).replace(/\bneu wirkend(?:er|e|es|en)?\s*,?\s*/gi, "");
+  return prepared
+    .split(/(?<=[.!?])\s+/)
+    .map(cleanText)
+    .filter((sentence) => sentence && !containsUncertainty(sentence))
+    .map(capitalize)
+    .join(" ");
+}
+
+function containsUncertainty(value) {
+  return /\b(nicht sichtbar|nicht erkennbar|nicht pruefbar|nicht prüfbar|nicht geprueft|nicht geprüft|eingeschraenkt beurteilbar|eingeschränkt beurteilbar|unklar|unbekannt|vermutlich|wahrscheinlich)\b/i.test(String(value || ""));
+}
+
+function confirmedConditionFallback(condition) {
+  const value = cleanText(condition).toLowerCase();
+  if (value === "neu") return "Neuer Zustand.";
+  if (value === "sehr gut") return "Sehr guter gebrauchter Zustand.";
+  if (value === "gut") return "Guter gebrauchter Zustand.";
+  if (value === "unvollstaendig" || value === "unvollständig") return "Unvollständiger Artikel laut Lieferumfang.";
+  if (value === "defekt") return "Defekter Artikel; bekannte Mängel bitte beachten.";
+  return "Gebrauchter Zustand.";
+}
+
+function capitalize(value) {
+  return value ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : "";
 }
 
 function clampText(value, maxLength) {

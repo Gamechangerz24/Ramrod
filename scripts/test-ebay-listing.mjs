@@ -4,6 +4,7 @@ import {
   createEbayOffer,
   createOrReplaceEbayInventoryItem,
   getEbayCategoryAspects,
+  normalizeEbayListingContent,
   publishEbayOffer,
   suggestEbayCategory,
   uploadEbayImageFromDataUrl,
@@ -120,6 +121,13 @@ const defensiveCopy = evaluateListingCopy({
 });
 assert.equal(defensiveCopy.status, "needs_review");
 assert.equal(defensiveCopy.checks.find((entry) => entry.id === "facts")?.ready, false);
+const sanitizedDefensiveCopy = normalizeEbayListingContent({
+  ...content,
+  conditionDescription: "Neu wirkender, eingeschweißter Artikel. Details des Covers sind nur eingeschränkt beurteilbar.",
+  defects: ["Leichte Gebrauchsspuren", "Disc nicht geprüft"]
+}, { ...item, condition: "Gut" });
+assert.equal(sanitizedDefensiveCopy.conditionDescription, "Eingeschweißter Artikel.");
+assert.deepEqual(sanitizedDefensiveCopy.defects, ["Leichte Gebrauchsspuren"]);
 
 const auctionPreview = buildEbayListingPreview({
   item: { ...item, ebaySaleMode: "auction_1_euro" },
