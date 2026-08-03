@@ -37,7 +37,7 @@ const item = {
 };
 const content = {
   title: "Nintendo Switch Joy-Con Paar Neon Rot Blau Controller gebraucht",
-  shortDescription: "Originales Joy-Con-Paar fuer Nintendo Switch im gebrauchten Zustand.",
+  shortDescription: "Originales Joy-Con-Paar fuer Nintendo Switch im gebrauchten Zustand. Linker und rechter Controller sind enthalten.",
   conditionDescription: "Gebrauchsspuren sichtbar; Funktion vor Versand erneut pruefen.",
   includedItems: ["Linker Joy-Con", "Rechter Joy-Con"],
   defects: ["Leichte Gebrauchsspuren"],
@@ -110,6 +110,16 @@ const safetyCopy = evaluateListingCopy({
 }, safetyItem);
 assert.equal(safetyCopy.status, "needs_input");
 assert.equal(safetyCopy.checks.find((entry) => entry.id === "blocking")?.ready, false);
+
+const defensiveCopy = evaluateListingCopy({
+  ...content,
+  shortDescription: "Angeboten wird Monkey Man auf Blu-ray mit FSK-18-Freigabe. Enthalten ist eine einzelne Blu-ray im Case.",
+  conditionDescription: "Die Blu-ray ist eingeschweißt; Inhalt und Disc wurden deshalb nicht geprüft.",
+  buyerSearchTerms: ["Monkey Man", "Blu-ray", "FSK 18"],
+  criticalMissingFacts: []
+});
+assert.equal(defensiveCopy.status, "needs_review");
+assert.equal(defensiveCopy.checks.find((entry) => entry.id === "facts")?.ready, false);
 
 const auctionPreview = buildEbayListingPreview({
   item: { ...item, ebaySaleMode: "auction_1_euro" },

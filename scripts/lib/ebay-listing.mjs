@@ -106,7 +106,7 @@ export function buildEbayListingPreview({
   const locationValue = privateTrading ? sellerSetup.merchantPostalCode : sellerSetup.merchantLocationKey;
   const readiness = [
     readinessStep("title", "Titel", Boolean(normalized.title), normalized.title || "Titel fehlt"),
-    readinessStep("copy", "Verkaufstext", copyAgent.status !== "needs_input", copyAgent.summary),
+    readinessStep("copy", "Verkaufstext", copyAgent.status === "ready", copyAgent.summary),
     readinessStep("category", "eBay-Kategorie", Boolean(category?.id), category?.name || "Kategorie fehlt"),
     readinessStep("images", "Fotos", sourceImages.length > 0, sourceImages.length ? `${sourceImages.length} Foto${sourceImages.length === 1 ? "" : "s"}` : "Mindestens ein HTTPS-Foto fehlt"),
     readinessStep("price", salesFormat === "auction" ? "Auktionsstart" : "Preis", price > 0, price > 0 ? `${price.toFixed(2)} EUR` : "Preis fehlt"),

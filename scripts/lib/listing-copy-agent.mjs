@@ -92,6 +92,7 @@ export function buildListingCopyPrompt(item, categoryContext = {}) {
     "Der Titel hat maximal 80 Zeichen. Ordne Marke oder Franchise, exakten Produktnamen, Modell oder Variante, Plattform oder Format und einen kaufrelevanten Zusatz nach Suchwert. Keine Keyword-Wiederholung, Emojis, Sonderzeichen-Dekoration oder Grossbuchstaben-Spam.",
     "shortDescription besteht aus zwei bis vier kurzen Saetzen. Beginne mit der eindeutigen Produktidentitaet und dem Lieferumfang. Schreibe natuerlich, konkret und ohne Werbefloskeln wie Raritaet, Highlight, Must-have oder perfekt, sofern das nicht belegt ist.",
     "conditionDescription nennt nur bestaetigte Zustandsmerkmale und echte Funktionstests. Formuliere sachlich. Eine nicht fotografierte Rueckseite, eine unbekannte Groesse oder ein nicht sichtbares Etikett sind keine Maengel und gehoeren nicht in defects.",
+    "Schreibe im oeffentlichen Text keinen Satz ueber Informationen, die nicht vorliegen. Formulierungen wie nicht sichtbar, nicht erkennbar, nicht pruefbar, nicht geprueft, unbekannt oder nur eingeschraenkt beurteilbar sind interne Hinweise und gehoeren ausschliesslich in criticalMissingFacts.",
     "Unbestaetigte, aber kaufentscheidende Angaben kommen ausschliesslich in criticalMissingFacts. blocking bedeutet: Ohne diese Information darf der Artikel nicht veroeffentlicht werden. warning bedeutet: Die Angabe waere hilfreich, verhindert den Verkauf aber nicht.",
     "Erfinde niemals Edition, Alter, Funktion, Echtheit, Vollstaendigkeit, Groesse, Modellnummer, Seriennummer, Garantie, Sicherheit, Zubehoer oder Originalitaet.",
     "includedItems beschreibt exakt den sichtbaren oder bestaetigten Lieferumfang. defects enthaelt nur sichtbare oder bestaetigte Schaeden und Funktionsfehler. sellingPoints enthaelt zwei bis sechs bestaetigte, kaufrelevante Fakten und keine Meinung.",
@@ -149,7 +150,7 @@ export function evaluateListingCopy(content, item = {}) {
   const searchTerms = cleanList(content?.buyerSearchTerms);
   const missingFacts = normalizeMissingFacts(content?.criticalMissingFacts);
   const publicCopy = `${description} ${condition} ${cleanList(content?.defects).join(" ")}`;
-  const unknownDump = publicCopy.match(/\b(nicht sichtbar|nicht erkennbar|unklar|unbekannt|vermutlich|wahrscheinlich)\b/gi) || [];
+  const unknownDump = publicCopy.match(/\b(nicht sichtbar|nicht erkennbar|nicht pruefbar|nicht prüfbar|nicht geprueft|nicht geprüft|eingeschraenkt beurteilbar|eingeschränkt beurteilbar|unklar|unbekannt|vermutlich|wahrscheinlich)\b/gi) || [];
   const blockingFacts = missingFacts.filter((entry) => entry.severity === "blocking");
   const checks = [
     check("identity", "Produkt eindeutig benannt", title.length >= 20 && !/unbekannt|unknown/i.test(title)),
@@ -157,12 +158,12 @@ export function evaluateListingCopy(content, item = {}) {
     check("condition", "Zustand konkret beschrieben", condition.length >= 30),
     check("scope", "Lieferumfang klar", included.length > 0),
     check("search", "Suchbegriffe abgedeckt", searchTerms.length >= 3),
-    check("facts", "Keine Unsicherheiten im Verkaufstext", unknownDump.length <= 1),
+    check("facts", "Keine Unsicherheiten im Verkaufstext", unknownDump.length === 0),
     check("blocking", "Keine kaufkritischen Angaben offen", blockingFacts.length === 0)
   ];
   const failed = checks.filter((entry) => !entry.ready);
   const score = Math.max(0, 100 - failed.length * 12 - Math.min(24, blockingFacts.length * 8));
-  const status = blockingFacts.length ? "needs_input" : score >= 76 ? "ready" : "needs_review";
+  const status = blockingFacts.length ? "needs_input" : failed.length ? "needs_review" : "ready";
   return {
     id: listingCopyAgent.id,
     label: listingCopyAgent.label,
