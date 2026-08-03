@@ -3011,6 +3011,85 @@ img {
   padding: 14px;
 }
 
+.item-next-step {
+  align-items: center;
+  background: #0d0d0d;
+  border: 1px solid #292929;
+  border-left: 4px solid var(--orange);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(13, 13, 13, 0.16);
+  color: #fff;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  padding: 12px 14px;
+  position: sticky;
+  top: 0;
+  z-index: 12;
+}
+
+.item-next-step.complete {
+  border-left-color: var(--green);
+}
+
+.item-next-step > div {
+  min-width: 0;
+}
+
+.item-next-step small,
+.item-next-step strong,
+.item-next-step span {
+  display: block;
+}
+
+.item-next-step small {
+  color: var(--orange);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.item-next-step strong {
+  font-size: 17px;
+  line-height: 1.2;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.item-next-step span {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 3px;
+}
+
+.item-next-step .primary-action,
+.item-next-step .secondary-action {
+  justify-content: center;
+  max-width: 280px;
+  min-height: 44px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.item-next-step .danger-confirm {
+  background: var(--orange);
+  color: #0d0d0d;
+}
+
+@media (max-width: 1180px) {
+  .item-next-step {
+    grid-template-columns: 1fr;
+    position: static;
+  }
+
+  .item-next-step .primary-action,
+  .item-next-step .secondary-action {
+    max-width: none;
+    width: 100%;
+  }
+}
+
 .channel-plan-row strong,
 .channel-plan-row small {
   display: block;

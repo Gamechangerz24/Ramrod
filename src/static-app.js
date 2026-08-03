@@ -1915,6 +1915,7 @@ function inspector(item) {
     <div class="inspector-content">
       <div class="breadcrumb"><button data-view="today" type="button">Heute</button><span>›</span><button data-view="${state.view}" type="button">${escapeHtml(pageTitle())}</button><span>›</span><strong>${escapeHtml(item.sku)}</strong></div>
       <div class="inspector-title"><div><p>${item.sku} ${demoBadge(item)}</p><h2>${escapeHtml(item.title)}</h2></div><span class="channel-badge ${channelClass(item.channel)}">${channelLabel(item.channel)}</span></div>
+      ${itemNextStepCard(item)}
       <div class="source-strip">${sourceBadge(item)}</div>
       ${salesStrategyCard(item)}
       <button class="mobile-details-toggle" data-toggle-item-details="${item.id}" type="button">${state.mobileDetailsItem === item.id ? "Weniger Details" : "Preisquellen, Zustand und Alternativen"}<span aria-hidden="true">${state.mobileDetailsItem === item.id ? "−" : "+"}</span></button>
@@ -1936,6 +1937,47 @@ function inspector(item) {
       ${itemLifecycleActions(item)}
     </div>
   </div>`;
+}
+
+function itemNextStepCard(item) {
+  const approved = item.approval?.status === "approved";
+  const blocker = releaseRequirements(item).find((entry) => !entry.ready);
+  const prepared = item.ebayListing?.status === "prepared";
+  const active = item.ebayListing?.status === "active" || item.stage === "Gelistet";
+  const draftReady = item.ebayDraft?.status === "ready_for_ebay"
+    && (item.ebayDraft.readiness || []).every((entry) => entry.ready);
+
+  if (active) {
+    return `<section class="item-next-step complete"><div><small>Aktueller Status</small><strong>Der Artikel ist bei eBay live</strong><span>RAMROD überwacht als Nächstes Verkauf und Versand.</span></div>${item.ebayListing?.url ? `<a class="primary-action" href="${escapeHtml(item.ebayListing.url)}" target="_blank" rel="noreferrer">${icon("EB")}Auf eBay ansehen</a>` : `<button class="secondary-action" data-view="sell" type="button">${icon("VK")}Verkaufsstatus</button>`}</section>`;
+  }
+
+  if (!approved) {
+    if (blocker?.id === "sources") {
+      return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Marktpreis prüfen</strong><span>Danach kann RAMROD den Verkauf freigeben.</span></div><button class="primary-action" data-price-check="${item.id}" type="button" ${state.priceChecking ? "disabled" : ""}>${icon("EU")}${state.priceChecking === item.id ? "Preise werden geprüft..." : "Preise jetzt prüfen"}</button></section>`;
+    }
+    if (blocker?.id === "required") {
+      return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Fehlende Artikelangaben ergänzen</strong><span>RAMROD markiert die Felder direkt für dich.</span></div><button class="primary-action" data-focus-release-fields type="button">${icon("OK")}Angaben öffnen</button></section>`;
+    }
+    if (blocker?.id === "channel") {
+      return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkaufskanal bestätigen</strong><span>Wähle den empfohlenen oder einen anderen Kanal.</span></div><button class="primary-action" data-focus-channel-picker type="button">${icon("RT")}Kanal auswählen</button></section>`;
+    }
+    return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkauf freigeben</strong><span>Danach bereitet RAMROD den gewählten Kanal vor.</span></div><button class="primary-action" data-approve-sale="${item.id}" type="button" ${blocker || state.approving || !can("sales:approve") ? "disabled" : ""}>${icon("GO")}${state.approving === item.id ? "Wird freigegeben..." : "Verkauf freigeben"}</button></section>`;
+  }
+
+  if (item.channel === "eBay") {
+    if (prepared) {
+      return `<section class="item-next-step ebay"><div><small>Nächster Schritt</small><strong>eBay-Angebot veröffentlichen</strong><span>Der Entwurf ist geprüft, aber noch nicht sichtbar.</span></div><button class="primary-action danger-confirm" data-ebay-publish="${item.id}" type="button" ${state.ebayPublishing ? "disabled" : ""}>${icon("GO")}${state.ebayPublishing === item.id ? "Wird veröffentlicht..." : "Jetzt bei eBay veröffentlichen"}</button></section>`;
+    }
+    if (!item.ebayDraft) {
+      return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>eBay-Angebot erstellen</strong><span>RAMROD erzeugt Titel, Beschreibung und Verkaufsregeln.</span></div><button class="primary-action" data-ebay-draft="${item.id}" type="button" ${state.ebayDrafting ? "disabled" : ""}>${icon("AI")}${state.ebayDrafting === item.id ? "Wird erstellt..." : "eBay-Vorschau erstellen"}</button></section>`;
+    }
+    if (!draftReady) {
+      return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>eBay-Angaben vervollständigen</strong><span>Die Vorschau zeigt dir, was noch fehlt.</span></div><button class="primary-action" data-focus-ebay-card type="button">${icon("EB")}eBay-Angaben öffnen</button></section>`;
+    }
+    return `<section class="item-next-step ebay"><div><small>Nächster Schritt</small><strong>Unveröffentlichten eBay-Entwurf anlegen</strong><span>Fotos und Daten werden geprüft zu eBay übertragen. Noch kein Verkauf.</span></div><button class="primary-action" data-ebay-prepare="${item.id}" type="button" ${state.ebayPreparing ? "disabled" : ""}>${icon("EB")}${state.ebayPreparing === item.id ? "Wird vorbereitet..." : "Bei eBay vorbereiten"}</button></section>`;
+  }
+
+  return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkaufsplan ausführen</strong><span>Öffne die Übersicht für ${escapeHtml(channelLabel(item.channel))}.</span></div><button class="primary-action" data-view="sell" type="button">${icon("VK")}Zu den Verkäufen</button></section>`;
 }
 
 function itemLifecycleActions(item) {
@@ -3536,11 +3578,18 @@ function bindEvents() {
     render();
   }));
   document.querySelectorAll("[data-focus-release-fields]").forEach((button) => button.addEventListener("click", () => {
-    const details = button.closest(".sales-strategy-card")?.querySelector(".release-fields");
+    const details = button.closest(".sales-strategy-card")?.querySelector(".release-fields")
+      || button.closest(".inspector-content")?.querySelector(".release-fields");
     if (!details) return;
     details.open = true;
     details.scrollIntoView({ behavior: "smooth", block: "center" });
     requestAnimationFrame(() => details.querySelector(".field.missing input, .field.missing select, input, select")?.focus());
+  }));
+  document.querySelectorAll("[data-focus-channel-picker]").forEach((button) => button.addEventListener("click", () => {
+    button.closest(".inspector-content")?.querySelector(".channel-picker")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }));
+  document.querySelectorAll("[data-focus-ebay-card]").forEach((button) => button.addEventListener("click", () => {
+    button.closest(".inspector-content")?.querySelector(".ebay-draft-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
   document.querySelectorAll("[data-release-fields]").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3746,7 +3795,14 @@ function bindEvents() {
       state.importStatus = result.message || "Der Artikel ist jetzt live bei eBay.";
       await persistItem(item, "eBay-Angebot veröffentlicht");
     } catch (error) {
-      state.importStatus = `eBay-Veröffentlichung fehlgeschlagen: ${error.message}`;
+      if (error.status === 409 && /unveröffentlichten eBay-Entwurf/i.test(error.message)) {
+        item.ebayListing = null;
+        item.stage = "Verkaufsbereit";
+        state.importStatus = "Der lokale eBay-Status war veraltet und wurde korrigiert. Nutze oben als Nächstes „Bei eBay vorbereiten“.";
+        await persistItem(item, "eBay-Status korrigiert").catch(() => {});
+      } else {
+        state.importStatus = `eBay-Veröffentlichung fehlgeschlagen: ${error.message}`;
+      }
     } finally {
       state.ebayPublishing = "";
       render();

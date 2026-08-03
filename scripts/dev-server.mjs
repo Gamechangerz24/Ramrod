@@ -533,6 +533,16 @@ async function handleAppState(request, response) {
         latestPriceJobByItem.set(job.item_id, job);
       }
     }
+    const itemIds = items.map((item) => item.id).filter(isUuid);
+    const ebayListings = itemIds.length
+      ? await supabaseSelect(`/listings?select=*&channel_id=eq.ebay&item_id=in.(${itemIds.map(encodeURIComponent).join(",")})&order=created_at.desc&limit=1000`)
+      : [];
+    const latestEbayListingByItem = new Map();
+    for (const listing of ebayListings) {
+      if (listing.item_id && !latestEbayListingByItem.has(listing.item_id)) {
+        latestEbayListingByItem.set(listing.item_id, listing);
+      }
+    }
 
     sendJson(response, 200, {
       persistence,
@@ -545,7 +555,12 @@ async function handleAppState(request, response) {
       adminOverview,
       tenantMode: tenant.tenantMode,
       boxes: boxes.map(mapDbBoxToUi),
-      items: items.map((item) => mapDbItemToUi(item, boxes, latestPriceJobByItem.get(item.id))),
+      items: items.map((item) => mapDbItemToUi(
+        item,
+        boxes,
+        latestPriceJobByItem.get(item.id),
+        latestEbayListingByItem.get(item.id) || null
+      )),
       agentControl
     });
   } catch (error) {
@@ -3732,7 +3747,7 @@ function mapUiItemToDb(item, customer, box) {
   return payload;
 }
 
-function mapDbItemToUi(row, boxes = [], latestPriceJob = null) {
+function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing = undefined) {
   const raw = row.raw_analysis || {};
   const ui = raw.uiItem || {};
   const box = boxes.find((entry) => entry.id === row.box_id || entry.dbId === row.box_id);
@@ -3749,6 +3764,7 @@ function mapDbItemToUi(row, boxes = [], latestPriceJob = null) {
 
   return {
     ...ui,
+    ...(latestEbayListing !== undefined ? { ebayListing: latestEbayListing ? publicListing(latestEbayListing) : null } : {}),
     id: ui.id || row.id,
     dbId: row.id,
     organizationId: row.customer_id,
