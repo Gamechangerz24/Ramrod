@@ -112,6 +112,12 @@ const safetyCopy = evaluateListingCopy({
 assert.equal(safetyCopy.status, "needs_input");
 assert.equal(safetyCopy.checks.find((entry) => entry.id === "blocking")?.ready, false);
 
+const adultMediaQuestions = inferCriticalMissingFacts({
+  title: "Monkey Man Blu-ray FSK 18 eingeschweißt",
+  category: "DVDs & Blu-rays"
+});
+assert.equal(adultMediaQuestions.some((entry) => entry.field === "Altersprüfung und Versand" && entry.severity === "blocking"), true);
+
 const defensiveCopy = evaluateListingCopy({
   ...content,
   shortDescription: "Angeboten wird Monkey Man auf Blu-ray mit FSK-18-Freigabe. Enthalten ist eine einzelne Blu-ray im Case.",

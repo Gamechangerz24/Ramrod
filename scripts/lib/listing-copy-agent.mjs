@@ -115,9 +115,16 @@ export function inferCriticalMissingFacts(item = {}) {
     item.aiConditionObservations,
     ...Object.values(item.listingCopyAnswers || {})
   ].map(clean).join(" ").toLowerCase();
-  if (!/kind|schwimm|schutz|helm|sicherheit/.test(identity)) return [];
-
   const missing = [];
+  if (/(fsk\s?18|ab\s?18|usk\s?18)/.test(identity) && !/(alterspruefung|altersprüfung|ident.?check|volljaehrig|volljährig|ueber\s?18|über\s?18)/.test(knownFacts)) {
+    missing.push(missingFact(
+      "Altersprüfung und Versand",
+      "Wie wird die Altersprüfung für Verkauf und Versand dieses FSK-/USK-18-Artikels sichergestellt?",
+      "Der Artikel darf erst angeboten werden, wenn die vorgesehene Altersprüfung bestätigt ist."
+    ));
+  }
+  if (!/kind|schwimm|schutz|helm|sicherheit/.test(identity)) return missing;
+
   if (!/(groesse|größe|gewicht|\bkg\b|\blbs?\b|alters?bereich)/.test(knownFacts)) {
     missing.push(missingFact(
       "Groesse oder Gewichtsbereich",
@@ -155,7 +162,7 @@ export function evaluateListingCopy(content, item = {}) {
   const checks = [
     check("identity", "Produkt eindeutig benannt", title.length >= 20 && !/unbekannt|unknown/i.test(title)),
     check("buyer_summary", "Kaeuferfragen kompakt beantwortet", description.length >= 70),
-    check("condition", "Zustand konkret beschrieben", condition.length >= 30),
+    check("condition", "Zustand konkret beschrieben", condition.length >= 20),
     check("scope", "Lieferumfang klar", included.length > 0),
     check("search", "Suchbegriffe abgedeckt", searchTerms.length >= 3),
     check("facts", "Keine Unsicherheiten im Verkaufstext", unknownDump.length === 0),
