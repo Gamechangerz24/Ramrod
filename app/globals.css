@@ -1010,6 +1010,10 @@ img {
   margin-bottom: 12px;
 }
 
+.workflow-progress.vault-progress {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .workflow-progress span {
   background: #f1f4f6;
   border: 1px solid var(--line);

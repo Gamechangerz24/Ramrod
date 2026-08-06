@@ -1138,7 +1138,8 @@ function render() {
   };
   const organization = activeOrganization();
   const systemView = ["admin", "agents", "settings"].includes(state.view);
-  const standaloneView = systemView || state.view === "vault";
+  const vaultScanView = state.view === "scan" && state.captureDestination === "vault";
+  const standaloneView = systemView || state.view === "vault" || vaultScanView;
 
   app.innerHTML = `
     ${organizationRail()}
@@ -1146,7 +1147,7 @@ function render() {
       <div class="brand tenant-brand"><span class="tenant-avatar" style="--organization-color:${escapeHtml(organization.brandColor || "#ff6a00")}">${escapeHtml(organization.shortCode || "RR")}</span><div><strong>${escapeHtml(organization.name)}</strong><small>${organization.type === "personal" ? "Privatverkauf" : organization.type === "internal" ? "CREATORS Bereich" : "Kundenbereich"}</small></div></div>
       <nav class="nav-list" aria-label="Arbeitsbereiche">
         ${navButton("today", "HE", "Heute")}
-        ${navButton("scan", "ER", "Erfassen")}
+        ${vaultScanView ? vaultScanNavButton() : navButton("scan", "ER", "Erfassen")}
         ${navButton("review", "PR", "Prüfen")}
         ${navButton("sell", "VK", "Verkaufen")}
         ${navButton("shipping", "VS", "Versand")}
@@ -1157,7 +1158,7 @@ function render() {
         ${can("team:manage") ? navButton("settings", "TM", "Team & Kanäle") : ""}
       </nav>
       <nav class="mobile-nav-list" aria-label="Mobiler Arbeitsablauf">
-        ${mobileNavButton("scan", "KA", "Scannen")}
+        ${vaultScanView ? vaultScanNavButton(true) : mobileNavButton("scan", "KA", "Scannen")}
         ${mobileNavButton("review", "OK", "Freigeben")}
         ${mobileNavButton("sell", "VK", "Verkäufe")}
         ${mobileNavButton("vault", "SA", "Sammlung")}
@@ -1441,6 +1442,7 @@ function bindAuthEvents() {
 }
 
 function pageTitle() {
+  if (state.view === "scan" && state.captureDestination === "vault") return "Sammlung scannen";
   return {
     today: "Heute",
     scan: "Scannen",
@@ -1463,6 +1465,11 @@ function navButton(id, iconLabel, label) {
 function mobileNavButton(id, iconLabel, label) {
   const groupedViews = id === "sell" ? ["sell", "inventory", "archive", "shipping", "campaigns", "routing", "agents"] : [id];
   return `<button class="nav-button ${groupedViews.includes(state.view) ? "active" : ""}" data-view="${id}" type="button" title="${label}">${icon(iconLabel)}<span>${label}</span></button>`;
+}
+
+function vaultScanNavButton(mobile = false) {
+  const label = mobile ? "Inventar" : "Sammlung erfassen";
+  return `<button class="nav-button active" data-vault-scan type="button" title="${label}">${icon(mobile ? "KA" : "SA")}<span>${label}</span></button>`;
 }
 
 function boxLabel(box) {
@@ -1573,11 +1580,14 @@ function collectionDefaults(item, overrides = {}) {
 }
 
 function moveItemToCollection(item, overrides = {}) {
-  item.collection = collectionDefaults(item, overrides);
+  const recognitionSource = item.collection?.recognitionSource || item.sourceType || "unknown";
+  item.collection = collectionDefaults(item, { recognitionSource, ...overrides });
   item.stage = "Sammlung";
   item.channel = "Sammlung";
-  item.sourceType = item.sourceType === "vault-handoff" ? "vault" : (item.sourceType || "vault");
+  item.sourceType = "vault";
   item.approval = { ...(item.approval || {}), status: "pending", strategyAccepted: false };
+  item.ebayDraft = null;
+  item.ebayListing = null;
   return enrichWorkflow(item);
 }
 
@@ -1595,15 +1605,16 @@ function scanView() {
   const recognitionStatus = state.recognition?.evidence?.status || "";
   const recognitionCanProceed = recognitionStatus === "ready_for_research" || recognitionStatus === "manual_review_ready";
   const vaultCapture = state.captureDestination === "vault";
+  const progressSteps = vaultCapture ? ["Foto", "Erkennen", "Inventar", "Speichern"] : ["Foto", "Erkennen", "Markt", "Strategie", "Freigeben"];
   const actionLabel = state.analyzing
-    ? "Analyse läuft..."
+    ? (vaultCapture ? "Wird gespeichert..." : "Analyse läuft...")
     : state.recognizing
       ? "Produkt wird erkannt..."
       : recognitionCanProceed
-        ? (vaultCapture ? "Wert schätzen und zur Sammlung hinzufügen" : "Preis, Kanal und Strategie ermitteln")
+        ? (vaultCapture ? "In Sammlung speichern" : "Preis, Kanal und Strategie ermitteln")
         : state.recognition
           ? "Fotosatz zuerst abschließen"
-          : (vaultCapture ? "Für Sammlung analysieren" : "Artikel analysieren");
+          : (vaultCapture ? "Für Sammlung erkennen" : "Artikel analysieren");
   const actionDisabled = state.analyzing || state.recognizing || (!photos.length && !devMode) || Boolean(state.recognition && !recognitionCanProceed);
   const needsPhotoEvidence = Boolean(state.recognition && !recognitionCanProceed);
   const manualFields = `<details class="capture-details">
@@ -1618,25 +1629,25 @@ function scanView() {
     </div>
   </details>`;
 
-  return `${vaultCapture ? `<section class="vault-capture-banner"><div>${icon("SA")}<span><strong>Für deine Sammlung erfassen</strong><small>Der Artikel wird inventarisiert und noch nicht zum Verkauf freigegeben.</small></span></div><button class="secondary-action" data-scan-sales type="button">Zum Verkaufs-Scan</button></section>` : ""}<section class="work-grid ${batchMode ? "batch-capture-workspace" : ""}">
+  return `${vaultCapture ? `<section class="vault-capture-banner"><div>${icon("SA")}<span><strong>Eigener Sammlungs-Scan</strong><small>Hier entsteht ausschließlich ein Inventareintrag. Ein Verkauf startet erst später über „Über RAMROD verkaufen“.</small></span></div><button class="secondary-action" data-vault-back type="button">Zurück zur Sammlung</button></section>` : ""}<section class="work-grid ${batchMode ? "batch-capture-workspace" : ""}">
     <div class="scan-panel">
-      <div class="panel-heading"><div><p>${batchMode ? `Serienaufnahme · Artikel ${currentBatchNumber}` : "Einzelaufnahme"}</p><h2>${batchMode ? "Viele Artikel nacheinander" : "Einen Artikel analysieren"}</h2></div><button class="icon-button" id="reset" title="Aufnahme zurücksetzen">${icon("NE")}</button></div>
+      <div class="panel-heading"><div><p>${batchMode ? `Serienaufnahme · Artikel ${currentBatchNumber}` : (vaultCapture ? "Sammlungsaufnahme" : "Einzelaufnahme")}</p><h2>${batchMode ? (vaultCapture ? "Sammlung nacheinander erfassen" : "Viele Artikel nacheinander") : (vaultCapture ? "Sammlungsstück erfassen" : "Einen Artikel analysieren")}</h2></div><button class="icon-button" id="reset" title="Aufnahme zurücksetzen">${icon("NE")}</button></div>
       <div class="capture-mode" role="group" aria-label="Aufnahmemodus">
         <button class="${batchMode ? "" : "selected"}" data-capture-mode="single" type="button">Ein Artikel</button>
         <button class="${batchMode ? "selected" : ""}" data-capture-mode="batch" type="button">Serienaufnahme</button>
       </div>
       ${batchMode
         ? `<div class="batch-instruction"><strong>${state.batchDrafts.length} Artikel gespeichert</strong><span>Fotografiere alle Seiten dieses Artikels. Danach „Nächster Artikel“.</span></div>`
-        : `<div class="workflow-progress" aria-label="Verkaufsworkflow">${["Foto", "Erkennen", "Markt", "Strategie", "Freigeben"].map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>`}
+        : `<div class="workflow-progress ${vaultCapture ? "vault-progress" : ""}" aria-label="${vaultCapture ? "Sammlungsworkflow" : "Verkaufsworkflow"}">${progressSteps.map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>`}
       <label class="photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
       <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder Mediathek"}</strong></div>
       ${photos.length ? `<div class="photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Bildqualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
-      ${quickValueCard(state.recognition)}
+      ${quickValueCard(state.recognition, vaultCapture)}
       ${manualFields}
       ${batchMode
         ? `<div class="batch-capture-actions">
             <button class="secondary-action" id="batch-next" type="button" ${!photos.length || state.batchAnalyzing ? "disabled" : ""}>${icon("NX")}Nächster Artikel</button>
-            <button class="primary-action" id="batch-finish" type="button" ${!capturedCount || state.batchAnalyzing ? "disabled" : ""}>${icon("AI")}${state.batchAnalyzing ? "Sammelanalyse läuft..." : `${capturedCount} Artikel analysieren`}</button>
+            <button class="primary-action" id="batch-finish" type="button" ${!capturedCount || state.batchAnalyzing ? "disabled" : ""}>${icon(vaultCapture ? "SA" : "AI")}${state.batchAnalyzing ? (vaultCapture ? "Inventar wird erstellt..." : "Sammelanalyse läuft...") : (vaultCapture ? `${capturedCount} in Sammlung speichern` : `${capturedCount} Artikel analysieren`)}</button>
           </div>`
         : `<button class="primary-action mobile-primary-action" id="add-item" type="button" ${actionDisabled ? "disabled" : ""}>${icon(vaultCapture ? "SA" : "AI")}${actionLabel}</button>`}
     </div>
@@ -1647,6 +1658,7 @@ function scanView() {
 }
 
 function batchCapturePanel() {
+  const vaultCapture = state.captureDestination === "vault";
   const progress = state.batchProgress;
   if (state.batchAnalyzing && progress) {
     const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
@@ -1656,7 +1668,7 @@ function batchCapturePanel() {
   }
 
   return `<div class="panel-heading"><div><p>Aufnahmesession</p><h2>${state.batchDrafts.length} Artikel bereit</h2></div>${icon("ST")}</div>
-    <div class="batch-explainer"><strong>Erst fotografieren, dann gemeinsam analysieren.</strong><p>Weitere Ansichten gehören zum aktuellen Artikel. Mit „Nächster Artikel“ beginnt das nächste Objekt.</p></div>
+    <div class="batch-explainer"><strong>${vaultCapture ? "Erst fotografieren, dann gemeinsam ins Inventar übernehmen." : "Erst fotografieren, dann gemeinsam analysieren."}</strong><p>Weitere Ansichten gehören zum aktuellen Artikel. Mit „Nächster Artikel“ beginnt das nächste Objekt.</p></div>
     ${batchDraftList()}`;
 }
 
@@ -1673,8 +1685,8 @@ function batchEntryStatus(status) {
   return {
     captured: "bereit",
     recognizing: "wird erkannt",
-    analyzing: "Strategie wird berechnet",
-    completed: "analysiert",
+    analyzing: state.captureDestination === "vault" ? "Inventar wird erstellt" : "Strategie wird berechnet",
+    completed: state.captureDestination === "vault" ? "gespeichert" : "analysiert",
     failed: "manuell prüfen"
   }[status] || "bereit";
 }
@@ -1708,8 +1720,11 @@ async function runBatchAnalysis() {
   if (!entries.length) return;
 
   state.batchAnalyzing = true;
-  state.batchProgress = { total: entries.length, completed: 0, failed: 0, label: "Sammelanalyse wird vorbereitet" };
-  state.importStatus = `${entries.length} Artikel werden gemeinsam analysiert. Du kannst das Smartphone liegen lassen.`;
+  const vaultCapture = state.captureDestination === "vault";
+  state.batchProgress = { total: entries.length, completed: 0, failed: 0, label: vaultCapture ? "Inventar wird vorbereitet" : "Sammelanalyse wird vorbereitet" };
+  state.importStatus = vaultCapture
+    ? `${entries.length} Sammlungsstücke werden gemeinsam ins Inventar übernommen.`
+    : `${entries.length} Artikel werden gemeinsam analysiert. Du kannst das Smartphone liegen lassen.`;
   render();
 
   const completedItemIds = [];
@@ -1727,7 +1742,9 @@ async function runBatchAnalysis() {
       if (!recognition) throw new Error("Produkt konnte nicht erkannt werden");
 
       entry.status = "analyzing";
-      state.batchProgress.label = `Artikel ${index + 1}: Preis, Kanal und Strategie`;
+      state.batchProgress.label = vaultCapture
+        ? `Artikel ${index + 1}: Inventareintrag erstellen`
+        : `Artikel ${index + 1}: Preis, Kanal und Strategie`;
       render();
       let item = enrichWorkflow(await analyzeWithApi());
       item.recognition = recognition;
@@ -1779,16 +1796,17 @@ async function runBatchAnalysis() {
 }
 
 function fastRecognitionPanel(photos) {
+  const vaultCapture = state.captureDestination === "vault";
   if (state.recognizing) {
     return `<div class="panel-heading"><div><p>Schnellerkennung</p><h2>Produkt wird gelesen</h2></div>${icon("AI")}</div>
-      <div class="recognition-running"><span class="activity-line"></span><strong>Text, Marke und Variante werden geprüft</strong><small>${photos.length} Foto${photos.length === 1 ? "" : "s"} · Preis und Strategie folgen separat</small></div>`;
+      <div class="recognition-running"><span class="activity-line"></span><strong>Text, Marke und Variante werden geprüft</strong><small>${photos.length} Foto${photos.length === 1 ? "" : "s"} · ${vaultCapture ? "Inventareintrag folgt" : "Preis und Strategie folgen separat"}</small></div>`;
   }
 
   const recognition = state.recognition;
   if (!recognition) {
     const qualityIssues = photos.flatMap((photo) => photo.quality?.issues || []);
     return `<div class="panel-heading"><div><p>Schnellerkennung</p><h2>Noch kein Produkt erkannt</h2></div>${icon("AI")}</div>
-      <div class="recognition-empty"><strong>${photos.length ? "Foto bereit" : "Fotografiere zuerst den Artikel"}</strong><p>${qualityIssues.length ? escapeHtml(qualityIssues.join(" · ")) : "RAMROD prüft zuerst Bildqualität und Identität. Marktpreis und Verkaufsstrategie werden erst danach berechnet."}</p></div>`;
+      <div class="recognition-empty"><strong>${photos.length ? "Foto bereit" : "Fotografiere zuerst den Artikel"}</strong><p>${qualityIssues.length ? escapeHtml(qualityIssues.join(" · ")) : (vaultCapture ? "RAMROD prüft Bildqualität und Identität und legt danach ein Sammlungsstück an. Ein Verkauf wird nicht gestartet." : "RAMROD prüft zuerst Bildqualität und Identität. Marktpreis und Verkaufsstrategie werden erst danach berechnet.")}</p></div>`;
   }
 
   const identity = recognition.identity || {};
@@ -1826,7 +1844,7 @@ function fastRecognitionPanel(photos) {
     ${scanReleaseGuide(recognition)}`;
 }
 
-function quickValueCard(recognition) {
+function quickValueCard(recognition, vaultCapture = false) {
   const estimate = recognition?.quickEstimate;
   const fair = Number(estimate?.fair || 0);
   if (!fair) return "";
@@ -1835,7 +1853,7 @@ function quickValueCard(recognition) {
   return `<section class="quick-value-card" aria-label="Erste Wertschätzung">
     <div class="quick-value-heading"><div><small>Erste Wertschätzung</small><strong>${euro(fair)}</strong></div><span>Vorläufig</span></div>
     <p>${euro(low)} bis ${euro(high)} · ${Number(estimate.confidence || 0)}% Sicherheit</p>
-    <small>${escapeHtml(estimate.basis || "Bildschätzung ohne aktuelle Marktquellen.")} Marktcheck und Plattformpreise folgen danach.</small>
+    <small>${escapeHtml(estimate.basis || "Bildschätzung ohne aktuelle Marktquellen.")} ${vaultCapture ? "Der Wert dient nur zur Orientierung im Inventar. Ein Verkauf wird nicht gestartet." : "Marktcheck und Plattformpreise folgen danach."}</small>
   </section>`;
 }
 
@@ -1848,6 +1866,26 @@ function scanReleaseGuide(recognition) {
   const request = recognition.requestedPhotos?.[0]?.instruction || "Zusätzliche Kennzeichnung oder Rückseite fotografieren";
   const photoCount = state.draft.photos?.length || 0;
   const photoLimit = state.captureMode === "batch" ? 6 : 4;
+  if (state.captureDestination === "vault") {
+    return `<section class="scan-release-guide ${identityReady ? "ready" : manualReviewReady ? "manual" : "blocked"}">
+      <div class="release-guide-head">
+        <div><small>Nächster Schritt</small><strong>${canProceed ? "Sammlungsstück speichern" : "Identität vervollständigen"}</strong></div>
+        <span>${canProceed ? "Inventar bereit" : "Foto prüfen"}</span>
+      </div>
+      <div class="release-guide-list">
+        ${releaseGuideRow(true, "Produkt erkannt", recognition.identity?.title || "Produktkandidat erkannt")}
+        ${releaseGuideRow(canProceed, identityReady ? "Bildbelege ausreichend" : manualReviewReady ? "Fotosatz abgeschlossen" : "Zusatzbeleg fehlt", canProceed ? "RAMROD kann den Inventareintrag jetzt speichern." : (missing.join(" · ") || request))}
+        ${releaseGuideRow(false, "In Sammlung speichern", "Erstellt nur den Inventareintrag. Preisrecherche und Verkauf bleiben ausgeschaltet.", true)}
+      </div>
+      ${canProceed
+        ? `<button class="primary-action release-guide-action" data-run-next-step type="button">${icon("SA")}In Sammlung speichern</button>`
+        : `<div class="release-guide-actions">
+            ${photoCount < photoLimit ? `<button class="secondary-action release-guide-action" data-capture-more type="button">${icon("KA")}Hilfreiches Foto aufnehmen</button>` : ""}
+            <button class="secondary-action quiet-action release-guide-action" data-complete-photo-set type="button">${icon("OK")}Alle sinnvollen Fotos vorhanden</button>
+          </div>
+          <p class="manual-review-note">Du bleibst nicht hängen: Unsichere Merkmale bleiben im Inventar sichtbar. Ein Verkauf startet nicht.</p>`}
+    </section>`;
+  }
   return `<section class="scan-release-guide ${identityReady ? "ready" : manualReviewReady ? "manual" : "blocked"}">
     <div class="release-guide-head">
       <div><small>Nächster Schritt</small><strong>${identityReady ? "Markt und Verkaufsstrategie berechnen" : manualReviewReady ? "Marktrecherche starten, Details später prüfen" : "Identität vervollständigen"}</strong></div>
@@ -1994,7 +2032,7 @@ function vaultView() {
       <div><p>RAMROD VAULT</p><h2>Deine Spiele- und Filmsammlung</h2><span>Inventar, Leihstatus und Wert an einem Ort. Verkauft wird erst nach deinem Klick.</span></div>
       <div class="vault-hero-actions">
         <button class="secondary-action" data-vault-new type="button">${icon("NE")}Manuell hinzufügen</button>
-        <button class="primary-action" data-vault-scan type="button">${icon("KA")}Mit Kamera erfassen</button>
+        <button class="primary-action" data-vault-scan type="button">${icon("KA")}Sammlung scannen</button>
       </div>
     </header>
     <section class="vault-metrics" aria-label="Sammlungsübersicht">
@@ -2050,7 +2088,7 @@ function vaultEntryForm() {
 function vaultEmptyState(importable) {
   return `<section class="vault-empty">
     <span>${icon("SA")}</span><div><p>Dein Vault ist bereit</p><h3>Beginne mit dem ersten Spiel oder Film</h3><small>Fotografiere den Artikel oder übernimm vorhandene RAMROD-Datensätze. Nichts wird automatisch angeboten.</small></div>
-    <div class="vault-empty-actions"><button class="primary-action" data-vault-scan type="button">${icon("KA")}Ersten Artikel fotografieren</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
+    <div class="vault-empty-actions"><button class="primary-action" data-vault-scan type="button">${icon("KA")}Für Sammlung fotografieren</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
   </section>${importable.length ? vaultImportStrip(importable) : ""}`;
 }
 
@@ -3620,6 +3658,14 @@ function bindEvents() {
     state.view = "scan";
     render();
   }));
+  document.querySelector("[data-vault-back]")?.addEventListener("click", () => {
+    state.recognitionRequestId += 1;
+    state.draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
+    state.recognition = null;
+    state.recognitionMeta = null;
+    state.view = "vault";
+    render();
+  });
   document.querySelector("[data-scan-sales]")?.addEventListener("click", () => {
     state.captureDestination = "sales";
     state.view = "scan";
@@ -4168,7 +4214,9 @@ function bindEvents() {
       releaseGate: "blocked_until_manual_confirmation",
       autoApprovalEligible: false
     };
-    state.importStatus = "Fotosatz abgeschlossen. RAMROD recherchiert jetzt Preis und Kanal; offene Merkmale bestätigst du vor der Freigabe.";
+    state.importStatus = state.captureDestination === "vault"
+      ? "Fotosatz abgeschlossen. RAMROD kann das Stück jetzt ins Inventar übernehmen. Ein Verkauf wird nicht gestartet."
+      : "Fotosatz abgeschlossen. RAMROD recherchiert jetzt Preis und Kanal; offene Merkmale bestätigst du vor der Freigabe.";
     render();
   }));
   document.querySelectorAll("[data-run-next-step]").forEach((button) => button.addEventListener("click", () => {
@@ -4473,9 +4521,11 @@ function bindEvents() {
         throw new Error("Die Bildqualität reicht nicht aus. Bitte das angeforderte Foto neu aufnehmen.");
       }
       state.analyzing = true;
-      state.importStatus = usedLiveAi
-        ? "Identität wird mit Markt, Zustand und Verkaufsstrategie angereichert..."
-        : "Kein Foto vorhanden, nutze lokalen Demo-Vorschlag.";
+      state.importStatus = state.captureDestination === "vault"
+        ? (usedLiveAi ? "Identität und Zustand werden für dein Inventar aufbereitet..." : "Sammlungsstück wird vorbereitet...")
+        : usedLiveAi
+          ? "Identität wird mit Markt, Zustand und Verkaufsstrategie angereichert..."
+          : "Kein Foto vorhanden, nutze lokalen Demo-Vorschlag.";
       render();
       let item = enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
       item.recognition = state.recognition;
