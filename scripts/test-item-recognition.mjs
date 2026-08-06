@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { scoreItemRecognition } from "./lib/item-recognition.mjs";
+import { buildItemRecognitionPrompt, normalizeVisualSearchMatches, scoreItemRecognition } from "./lib/item-recognition.mjs";
 
 const clearGame = scoreItemRecognition({
   image: { rotation: 0, usable: true, issues: [] },
@@ -167,5 +167,17 @@ const confirmedSteelbook = scoreItemRecognition({
 assert.equal(confirmedSteelbook.evidence.status, "ready_for_research");
 assert.equal(confirmedSteelbook.evidence.categoryConflict, false);
 assert.equal(confirmedSteelbook.evidence.mediaFormatMissing, false);
+
+const visualMatches = normalizeVisualSearchMatches([
+  { title: "Spider-Man: Far From Home 4K Ultra HD Limited Edition Steelbook", source: "Amazon", exact_matches: true },
+  { title: "Spider-Man: Far From Home 4K Ultra HD Limited Edition Steelbook", source: "Duplicate" },
+  { title: "Spider-Man Far From Home Zavvi Exclusive Lenticular Steelbook", source: "Zavvi", link: "https://example.com/item" }
+]);
+assert.equal(visualMatches.length, 2);
+assert.equal(visualMatches[0].exact, true);
+const visualPrompt = buildItemRecognitionPrompt({ captureIntent: "media_library", visualMatches });
+assert.match(visualPrompt, /Bildsuchkandidaten/);
+assert.match(visualPrompt, /mindestens zwei unabhaengige Treffer/);
+assert.match(visualPrompt, /Far From Home/);
 
 console.log("Item recognition evidence tests passed.");

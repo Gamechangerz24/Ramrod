@@ -11,6 +11,7 @@ import {
 import {
   buildItemRecognitionPrompt,
   itemRecognitionSchema,
+  normalizeVisualSearchMatches,
   scoreItemRecognition
 } from "./lib/item-recognition.mjs";
 import { channelRegistryVersion, publicChannelRegistry } from "./lib/channel-registry.mjs";
@@ -180,6 +181,7 @@ const server = createServer(async (request, response) => {
           strategyModel: model,
           ebay: Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET),
           serpApi: Boolean(process.env.SERPAPI_API_KEY),
+          googleLens: Boolean(process.env.SERPAPI_API_KEY),
           telegramApprovals: Boolean(telegramBotToken && telegramWebhookSecret && telegramApprovalChatId),
           agentControl: Boolean(agentApiToken)
         },
@@ -358,6 +360,11 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && pathname === "/api/recognize-image") {
       await handleRecognizeImage(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/visual-match") {
+      await handleVisualMatch(request, response);
       return;
     }
 
@@ -2479,6 +2486,50 @@ async function handleRecognizeImage(request, response) {
   }
 }
 
+async function handleVisualMatch(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
+  if (!process.env.SERPAPI_API_KEY) {
+    sendJson(response, 503, {
+      error: "visual_search_not_configured",
+      message: "Die externe Bildsuche ist noch nicht konfiguriert."
+    });
+    return;
+  }
+  if (!supabasePersistenceStatus().writable) {
+    sendJson(response, 503, {
+      error: "visual_search_storage_unavailable",
+      message: "Die Bildsuche benötigt den geschützten RAMROD-Bildspeicher."
+    });
+    return;
+  }
+
+  const body = JSON.parse(await readRequestBody(request, 18 * 1024 * 1024));
+  const image = normalizeImageDataUrls(body)[0];
+  if (!image) {
+    sendJson(response, 400, { error: "missing_image", message: "Ein Bild wird benötigt." });
+    return;
+  }
+
+  let storedImage;
+  try {
+    storedImage = await uploadWorkerImage(image);
+    const matches = await fetchSerpApiGoogleLensMatches(storedImage.signedUrl, body.query);
+    sendJson(response, 200, {
+      provider: "serpapi-google-lens",
+      matches,
+      notice: "Das Foto wurde für diese Identitätsprüfung an Google Lens über SerpApi übermittelt."
+    });
+  } catch (error) {
+    sendJson(response, error.status || 502, {
+      error: error.code || "visual_search_failed",
+      message: redactSecret(error.message)
+    });
+  } finally {
+    if (storedImage?.path) await deleteWorkerImage(storedImage.path).catch(() => {});
+  }
+}
+
 async function recognizeImageWithOpenAI(body, images, apiKey) {
   const startedAt = Date.now();
   const candidates = [...new Set([recognitionModel, recognitionFallbackModel].filter(Boolean))];
@@ -2502,7 +2553,7 @@ async function requestOpenAiRecognition(body, images, apiKey, candidateModel, st
     input: [{
       role: "user",
       content: [
-        { type: "input_text", text: buildItemRecognitionPrompt({ captureIntent: body.captureIntent }) },
+        { type: "input_text", text: buildItemRecognitionPrompt({ captureIntent: body.captureIntent, visualMatches: body.visualMatches }) },
         ...images.map((imageUrl) => ({
           type: "input_image",
           image_url: imageUrl,
@@ -2547,6 +2598,7 @@ async function requestOpenAiRecognition(body, images, apiKey, candidateModel, st
     captureIntent: body.captureIntent,
     clientImageQualities: body.clientImageQualities
   });
+  recognition.externalVisualEvidence = buildExternalVisualEvidence(body.visualMatches);
   return {
     provider: "openai-fast",
     model: result.model || candidateModel,
@@ -2584,7 +2636,8 @@ async function queueImageRecognition(response, body, images, metadata = {}) {
         barcode: body.barcode || "",
         query: body.query || "",
         captureIntent: body.captureIntent || "sales",
-        clientImageQualities: body.clientImageQualities || []
+        clientImageQualities: body.clientImageQualities || [],
+        visualMatches: normalizeVisualSearchMatches(body.visualMatches)
       },
       priority: 100,
       maxAttempts: 2,
@@ -2820,6 +2873,45 @@ async function uploadWorkerImage(imageDataUrl) {
       ? signedPath
       : `${supabaseUrl}/storage/v1${signedPath.startsWith("/") ? "" : "/"}${signedPath}`
   };
+}
+
+async function deleteWorkerImage(path) {
+  if (!path) return;
+  const objectUrl = `${supabaseUrl}/storage/v1/object/${encodeURIComponent(storageBucket)}/${String(path).split("/").map(encodeURIComponent).join("/")}`;
+  await fetch(objectUrl, {
+    method: "DELETE",
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`
+    }
+  });
+}
+
+async function fetchSerpApiGoogleLensMatches(imageUrl, query = "") {
+  const url = new URL("https://serpapi.com/search.json");
+  url.searchParams.set("engine", "google_lens");
+  url.searchParams.set("type", "visual_matches");
+  url.searchParams.set("url", imageUrl);
+  url.searchParams.set("country", "de");
+  url.searchParams.set("hl", "de");
+  url.searchParams.set("safe", "active");
+  url.searchParams.set("api_key", process.env.SERPAPI_API_KEY);
+  if (String(query || "").trim()) url.searchParams.set("q", String(query).trim().slice(0, 180));
+
+  const serpResponse = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  const body = await serpResponse.json();
+  if (!serpResponse.ok || body.error) {
+    const error = new Error(body.error || `Google Lens HTTP ${serpResponse.status}`);
+    error.status = serpResponse.status;
+    error.code = "google_lens_error";
+    throw error;
+  }
+  return normalizeVisualSearchMatches(body.visual_matches);
+}
+
+function buildExternalVisualEvidence(entries = []) {
+  const matches = normalizeVisualSearchMatches(entries);
+  return matches.length ? { provider: "serpapi-google-lens", matches } : null;
 }
 
 function imageExtension(contentType) {

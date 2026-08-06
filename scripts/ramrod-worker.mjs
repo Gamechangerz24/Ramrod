@@ -317,7 +317,7 @@ async function recognizeImageWithOllama(payload) {
         format: itemRecognitionSchema(),
         messages: [{
           role: "user",
-          content: buildItemRecognitionPrompt({ captureIntent: payload.captureIntent }),
+          content: buildItemRecognitionPrompt({ captureIntent: payload.captureIntent, visualMatches: payload.visualMatches }),
           images: images.map((image) => image.base64)
         }],
         options: {
@@ -356,6 +356,10 @@ async function recognizeImageWithOllama(payload) {
     error.retryable = true;
     throw error;
   }
+  const visualMatches = Array.isArray(payload.visualMatches) ? payload.visualMatches : [];
+  recognition.externalVisualEvidence = visualMatches.length
+    ? { provider: "serpapi-google-lens", matches: visualMatches.slice(0, 6) }
+    : null;
 
   return {
     provider: "local-qwen-fast",

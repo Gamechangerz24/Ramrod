@@ -1,5 +1,6 @@
 export function buildItemRecognitionPrompt(context = {}) {
   const mediaLibrary = context.captureIntent === "media_library";
+  const visualMatches = normalizeVisualSearchMatches(context.visualMatches);
   const instructions = [
     "Erkenne schnell und konservativ den dominanten Verkaufsartikel.",
     "Lies das Bild in allen vier 90-Grad-Ausrichtungen. image.rotation ist die nötige Drehung im Uhrzeigersinn, damit der längste Produkttitel horizontal von links nach rechts steht.",
@@ -18,7 +19,33 @@ export function buildItemRecognitionPrompt(context = {}) {
       "Sammelkarte oder Promo-Card ist nur zulaessig, wenn Kartenformat oder entsprechender Text sichtbar belegt sind. Fehlt Titel oder Medienformat, verwende einen neutralen physischen Medienkandidaten und rate keine Karte."
     );
   }
+  if (visualMatches.length) {
+    instructions.push(
+      "Externe Bildsuchtreffer sind nur Kandidaten und kein Beweis. Uebernimm Titel, Format oder Edition nur, wenn der sichtbare Artikel dazu passt und mindestens zwei unabhaengige Treffer dasselbe Produkt nennen oder sichtbarer Text/Barcode die Zuordnung stuetzt.",
+      `Bildsuchkandidaten: ${visualMatches.map((entry, index) => `${index + 1}. ${entry.title} (${entry.source}${entry.exact ? ", exakte Bilduebereinstimmung" : ""})`).join(" | ")}`
+    );
+  }
   return instructions.join(" ");
+}
+
+export function normalizeVisualSearchMatches(entries = []) {
+  const normalized = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const title = String(entry?.title || "").replace(/\s+/g, " ").trim();
+    if (!title) continue;
+    const key = title.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      title: title.slice(0, 220),
+      source: String(entry?.source || "Web").replace(/\s+/g, " ").trim().slice(0, 80),
+      link: /^https?:\/\//i.test(String(entry?.link || "")) ? String(entry.link) : "",
+      exact: entry?.exact === true || entry?.exact_matches === true
+    });
+    if (normalized.length >= 6) break;
+  }
+  return normalized;
 }
 
 export function itemRecognitionSchema() {
