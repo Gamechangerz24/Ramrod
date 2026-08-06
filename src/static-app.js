@@ -262,6 +262,7 @@ const state = {
   vaultFilter: "all",
   vaultFormOpen: false,
   vaultLoanItem: "",
+  vaultConfirmSaleItem: "",
   vaultBusy: "",
   draft: createEmptyDraft("SV-001"),
   items: normalizeItems(loadStoredItems(initialOrganizationId))
@@ -2049,9 +2050,8 @@ function vaultEntryForm() {
 function vaultEmptyState(importable) {
   return `<section class="vault-empty">
     <span>${icon("SA")}</span><div><p>Dein Vault ist bereit</p><h3>Beginne mit dem ersten Spiel oder Film</h3><small>Fotografiere den Artikel oder übernimm vorhandene RAMROD-Datensätze. Nichts wird automatisch angeboten.</small></div>
-    <div><button class="primary-action" data-vault-scan type="button">${icon("KA")}Ersten Artikel fotografieren</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
-    ${importable.length ? vaultImportStrip(importable) : ""}
-  </section>`;
+    <div class="vault-empty-actions"><button class="primary-action" data-vault-scan type="button">${icon("KA")}Ersten Artikel fotografieren</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
+  </section>${importable.length ? vaultImportStrip(importable) : ""}`;
 }
 
 function vaultImportStrip(items) {
@@ -2100,7 +2100,13 @@ function vaultActions(item) {
     return `<button class="primary-action" data-vault-open-sale="${item.id}" type="button">${icon("VK")}Verkaufsstatus öffnen</button>${status === "selling" ? `<button class="secondary-action" data-vault-cancel-sale="${item.id}" type="button" ${state.vaultBusy ? "disabled" : ""}>Im Vault behalten</button>` : ""}`;
   }
   if (status === "sold") return `<button class="secondary-action" data-view="shipping" type="button">${icon("VS")}Verkauf ansehen</button>`;
-  return `<button class="secondary-action" data-vault-loan="${item.id}" type="button">${icon("VL")}Verleihen</button><button class="primary-action" data-vault-sell="${item.id}" type="button" ${state.vaultBusy || !can("inventory:write") ? "disabled" : ""}>${icon("VK")}Über RAMROD verkaufen</button>`;
+  if (state.vaultLoanItem === item.id) {
+    return `<button class="secondary-action" data-vault-loan="${item.id}" type="button">Ausleihe abbrechen</button>`;
+  }
+  if (state.vaultConfirmSaleItem === item.id) {
+    return `<section class="vault-sale-confirm"><div><strong>An RAMROD übergeben?</strong><span>Preis, Kanal und Strategie werden neu geprüft. Es wird noch nichts veröffentlicht.</span></div><div><button class="secondary-action" data-vault-sale-abort="${item.id}" type="button">Abbrechen</button><button class="primary-action" data-vault-sale-confirm="${item.id}" type="button">Jetzt übergeben</button></div></section>`;
+  }
+  return `<button class="secondary-action" data-vault-loan="${item.id}" type="button">${icon("VL")}Verleihen</button><button class="secondary-action" data-archive-item="${item.id}" type="button">${icon("AR")}Archivieren</button><button class="primary-action" data-vault-sell="${item.id}" type="button" ${state.vaultBusy || !can("inventory:write") ? "disabled" : ""}>${icon("VK")}Über RAMROD verkaufen</button>`;
 }
 
 function vaultLoanForm(item) {
@@ -3739,10 +3745,21 @@ function bindEvents() {
     state.importStatus = `${item.title} ist wieder zurück in deiner Sammlung.`;
     render();
   }));
-  document.querySelectorAll("[data-vault-sell]").forEach((button) => button.addEventListener("click", async () => {
+  document.querySelectorAll("[data-vault-sell]").forEach((button) => button.addEventListener("click", () => {
     const item = state.items.find((entry) => entry.id === button.dataset.vaultSell);
     if (!item || state.vaultBusy || collectionStatus(item) !== "owned") return;
-    if (!window.confirm(`${item.title} an RAMROD zum Verkauf übergeben?\n\nRAMROD prüft Preis, Strategie und Verkaufskanal neu. Es wird noch nichts veröffentlicht.`)) return;
+    state.vaultConfirmSaleItem = item.id;
+    state.vaultLoanItem = "";
+    render();
+  }));
+  document.querySelectorAll("[data-vault-sale-abort]").forEach((button) => button.addEventListener("click", () => {
+    if (state.vaultConfirmSaleItem !== button.dataset.vaultSaleAbort) return;
+    state.vaultConfirmSaleItem = "";
+    render();
+  }));
+  document.querySelectorAll("[data-vault-sale-confirm]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.vaultSaleConfirm);
+    if (!item || state.vaultBusy || collectionStatus(item) !== "owned") return;
     const now = new Date().toISOString();
     item.collection = collectionDefaults(item, { status: "selling", saleRequestedAt: now });
     item.collection.history.push({ type: "sale_requested", at: now });
@@ -3755,6 +3772,7 @@ function bindEvents() {
     state.vaultBusy = item.id;
     await persistItem(item, "Verkaufsübergabe");
     state.vaultBusy = "";
+    state.vaultConfirmSaleItem = "";
     state.selected = item.id;
     state.view = "review";
     state.importStatus = "Sammlungsstück übergeben. RAMROD prüft jetzt Marktwert, Kanal und Verkaufsstrategie.";

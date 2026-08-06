@@ -7143,6 +7143,55 @@ img {
   gap: 8px;
 }
 
+.vault-hero-actions {
+  justify-content: flex-end;
+}
+
+.vault-hero-actions .primary-action,
+.vault-form-actions .primary-action,
+.vault-actions .primary-action,
+.vault-empty-actions .primary-action,
+.vault-loan-form .primary-action,
+.vault-sale-confirm .primary-action {
+  margin-top: 0;
+  width: auto;
+}
+
+.vault-sale-confirm {
+  align-items: center;
+  background: #fff3e9;
+  border: 1px solid #ffb980;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 12px;
+  width: 100%;
+}
+
+.vault-sale-confirm strong,
+.vault-sale-confirm span {
+  display: block;
+}
+
+.vault-sale-confirm span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.vault-sale-confirm > div:last-child {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.vault-sale-confirm .primary-action,
+.vault-sale-confirm .secondary-action {
+  justify-content: center;
+  width: 100%;
+}
+
 .vault-metrics {
   display: grid;
   gap: 10px;
@@ -7496,9 +7545,15 @@ img {
   margin: 0;
 }
 
-.vault-empty > div:last-child {
+.vault-empty-actions {
   display: grid;
   gap: 7px;
+  min-width: 260px;
+}
+
+.vault-empty-actions .primary-action,
+.vault-empty-actions .secondary-action {
+  width: 100%;
 }
 
 .vault-empty.compact {
@@ -7676,6 +7731,24 @@ img {
     align-items: stretch;
     grid-template-columns: 1fr;
     padding: 20px;
+  }
+
+  .vault-empty-actions {
+    min-width: 0;
+  }
+
+  .vault-sale-confirm {
+    grid-template-columns: 1fr;
+  }
+
+  .vault-sale-confirm > div:last-child {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .vault-sale-confirm .primary-action,
+  .vault-sale-confirm .secondary-action {
+    width: 100%;
   }
 
   .vault-import-strip article {

@@ -47,6 +47,8 @@ for (const token of [
   "Agenten sicher steuern",
   "Deine Spiele- und Filmsammlung",
   "Über RAMROD verkaufen",
+  "An RAMROD übergeben?",
+  "Ausleihe abbrechen",
   "Rückgabe bestätigen",
   "Anmelden"
 ]) {
