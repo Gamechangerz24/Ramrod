@@ -5661,12 +5661,23 @@ img {
   .topbar {
     align-items: stretch;
     display: grid;
+    position: relative;
+  }
+
+  .topbar > div:first-child {
+    padding-right: 48px;
   }
 
   .topbar-actions {
     align-items: stretch;
     display: grid;
     flex-basis: auto;
+  }
+
+  .topbar-actions #sign-out {
+    position: absolute;
+    right: 0;
+    top: 0;
   }
 
   .search-box {
