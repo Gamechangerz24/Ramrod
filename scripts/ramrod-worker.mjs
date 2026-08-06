@@ -231,7 +231,7 @@ async function analyzeImageWithOllama(payload) {
         format: itemAnalysisSchema(),
         messages: [{
           role: "user",
-          content: buildItemAnalysisPrompt(payload.recognition),
+          content: buildItemAnalysisPrompt(payload.recognition, { captureIntent: payload.captureIntent, operatorHint: payload.query }),
           images: images.map((image) => image.base64)
         }],
         options: {
@@ -317,7 +317,7 @@ async function recognizeImageWithOllama(payload) {
         format: itemRecognitionSchema(),
         messages: [{
           role: "user",
-          content: buildItemRecognitionPrompt(),
+          content: buildItemRecognitionPrompt({ captureIntent: payload.captureIntent }),
           images: images.map((image) => image.base64)
         }],
         options: {
@@ -347,6 +347,7 @@ async function recognizeImageWithOllama(payload) {
     recognition = scoreItemRecognition(JSON.parse(String(body?.message?.content || "")), {
       imageCount: images.length,
       barcode: payload.barcode,
+      captureIntent: payload.captureIntent,
       clientImageQualities: payload.clientImageQualities
     });
   } catch {
@@ -384,7 +385,7 @@ function parseImageDataUrls(payload) {
   const values = Array.isArray(payload.imageDataUrls) && payload.imageDataUrls.length
     ? payload.imageDataUrls
     : [payload.imageDataUrl];
-  return values.slice(0, 4).map(parseImageDataUrl);
+  return values.slice(0, 6).map(parseImageDataUrl);
 }
 
 function nanosecondsToMilliseconds(value) {
@@ -396,7 +397,7 @@ async function hydrateImagePayload(payload) {
   const urls = Array.isArray(payload?.imageUrls) && payload.imageUrls.length
     ? payload.imageUrls
     : [payload?.imageUrl];
-  const images = await Promise.all(urls.slice(0, 4).map(downloadWorkerImage));
+  const images = await Promise.all(urls.slice(0, 6).map(downloadWorkerImage));
   const { imageUrl: _imageUrl, imageUrls: _imageUrls, ...rest } = payload;
   return {
     ...rest,

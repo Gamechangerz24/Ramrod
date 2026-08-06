@@ -2502,7 +2502,7 @@ async function requestOpenAiRecognition(body, images, apiKey, candidateModel, st
     input: [{
       role: "user",
       content: [
-        { type: "input_text", text: buildItemRecognitionPrompt() },
+        { type: "input_text", text: buildItemRecognitionPrompt({ captureIntent: body.captureIntent }) },
         ...images.map((imageUrl) => ({
           type: "input_image",
           image_url: imageUrl,
@@ -2544,6 +2544,7 @@ async function requestOpenAiRecognition(body, images, apiKey, candidateModel, st
   const recognition = scoreItemRecognition(extractJson(result), {
     imageCount: images.length,
     barcode: body.barcode,
+    captureIntent: body.captureIntent,
     clientImageQualities: body.clientImageQualities
   });
   return {
@@ -2582,6 +2583,7 @@ async function queueImageRecognition(response, body, images, metadata = {}) {
         imageStoragePaths: storedImages.map((image) => image.path),
         barcode: body.barcode || "",
         query: body.query || "",
+        captureIntent: body.captureIntent || "sales",
         clientImageQualities: body.clientImageQualities || []
       },
       priority: 100,
@@ -2631,7 +2633,7 @@ async function handleAnalyzeImage(request, response) {
     input: [{
       role: "user",
       content: [
-        { type: "input_text", text: buildItemAnalysisPrompt(body.recognition) },
+        { type: "input_text", text: buildItemAnalysisPrompt(body.recognition, { captureIntent: body.captureIntent, operatorHint: body.query }) },
         ...images.map((imageUrl) => ({
           type: "input_image",
           image_url: imageUrl,
@@ -2729,6 +2731,8 @@ async function queueImageAnalysis(response, body, images = normalizeImageDataUrl
         condition: body.condition || "Gebraucht",
         completeness: body.completeness || "Ungeprueft",
         barcode: body.barcode || "",
+        query: body.query || "",
+        captureIntent: body.captureIntent || "sales",
         weight: numberOrNull(body.weight),
         recognition: body.recognition || null
       },
@@ -2755,7 +2759,7 @@ function normalizeImageDataUrls(body) {
     ...(Array.isArray(body.imageDataUrls) ? body.imageDataUrls : []),
     body.imageDataUrl
   ].filter(Boolean);
-  const unique = [...new Set(candidates)].slice(0, 4);
+  const unique = [...new Set(candidates)].slice(0, 6);
   return unique.filter((value) => /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(String(value)));
 }
 

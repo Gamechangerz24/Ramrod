@@ -200,7 +200,7 @@ window.addEventListener("error", (event) => {
 
 const state = {
   booting: true,
-  view: ["agents", "today", "scan", "review", "sell", "shipping", "inventory", "archive", "vault", "settings", "admin"].includes(initialView) ? initialView : "today",
+  view: ["agents", "today", "scan", "vault-scan", "review", "sell", "shipping", "inventory", "archive", "vault", "settings", "admin"].includes(initialView) ? initialView : "today",
   organizations: [],
   activeOrganizationId: initialOrganizationId,
   activeOrganization: null,
@@ -246,7 +246,7 @@ const state = {
   recognitionRequestId: 0,
   analyzing: false,
   captureMode: "single",
-  captureDestination: "sales",
+  captureDestination: initialView === "vault-scan" ? "vault" : "sales",
   batchDrafts: [],
   batchAnalyzing: false,
   batchProgress: null,
@@ -343,6 +343,7 @@ function createEmptyDraft(boxId = "SV-001") {
     photo: "",
     photos: [],
     photoSetComplete: false,
+    manualIdentityConfirmed: false,
     weight: "0.25"
   };
 }
@@ -1138,12 +1139,12 @@ function render() {
   };
   const organization = activeOrganization();
   const systemView = ["admin", "agents", "settings"].includes(state.view);
-  const vaultScanView = state.view === "scan" && state.captureDestination === "vault";
+  const vaultScanView = state.view === "vault-scan";
   const standaloneView = systemView || state.view === "vault" || vaultScanView;
 
   app.innerHTML = `
     ${organizationRail()}
-    <aside class="sidebar">
+    <aside class="sidebar ${vaultScanView ? "vault-flow" : ""}">
       <div class="brand tenant-brand"><span class="tenant-avatar" style="--organization-color:${escapeHtml(organization.brandColor || "#ff6a00")}">${escapeHtml(organization.shortCode || "RR")}</span><div><strong>${escapeHtml(organization.name)}</strong><small>${organization.type === "personal" ? "Privatverkauf" : organization.type === "internal" ? "CREATORS Bereich" : "Kundenbereich"}</small></div></div>
       <nav class="nav-list" aria-label="Arbeitsbereiche">
         ${navButton("today", "HE", "Heute")}
@@ -1157,11 +1158,10 @@ function render() {
         ${navButton("agents", "AG", "Agenten")}
         ${can("team:manage") ? navButton("settings", "TM", "Team & Kanäle") : ""}
       </nav>
-      <nav class="mobile-nav-list" aria-label="Mobiler Arbeitsablauf">
-        ${vaultScanView ? vaultScanNavButton(true) : mobileNavButton("scan", "KA", "Scannen")}
-        ${mobileNavButton("review", "OK", "Freigeben")}
-        ${mobileNavButton("sell", "VK", "Verkäufe")}
-        ${mobileNavButton("vault", "SA", "Sammlung")}
+      <nav class="mobile-nav-list ${vaultScanView ? "vault-mobile-nav" : ""}" aria-label="Mobiler Arbeitsablauf">
+        ${vaultScanView
+          ? `${mobileNavButton("vault", "SA", "Sammlung")}${vaultScanNavButton(true)}`
+          : `${mobileNavButton("scan", "KA", "Scannen")}${mobileNavButton("review", "OK", "Freigeben")}${mobileNavButton("sell", "VK", "Verkäufe")}${mobileNavButton("vault", "SA", "Sammlung")}`}
       </nav>
     </aside>
     <section class="workspace view-${state.view}">
@@ -1442,7 +1442,6 @@ function bindAuthEvents() {
 }
 
 function pageTitle() {
-  if (state.view === "scan" && state.captureDestination === "vault") return "Sammlung scannen";
   return {
     today: "Heute",
     scan: "Scannen",
@@ -1451,6 +1450,7 @@ function pageTitle() {
     shipping: "Versand",
     inventory: "Bestand",
     vault: "Sammlung",
+    "vault-scan": "Sammlung scannen",
     archive: "Archiv",
     agents: "Agenten",
     settings: "Team & Kanäle",
@@ -1468,8 +1468,8 @@ function mobileNavButton(id, iconLabel, label) {
 }
 
 function vaultScanNavButton(mobile = false) {
-  const label = mobile ? "Inventar" : "Sammlung erfassen";
-  return `<button class="nav-button active" data-vault-scan type="button" title="${label}">${icon(mobile ? "KA" : "SA")}<span>${label}</span></button>`;
+  const label = mobile ? "Kamera" : "Sammlung scannen";
+  return `<button class="nav-button active" data-view="vault-scan" type="button" title="${label}">${icon("KA")}<span>${label}</span></button>`;
 }
 
 function boxLabel(box) {
@@ -1492,6 +1492,7 @@ function boxFilterBar() {
 
 function viewMarkup(selected) {
   if (state.view === "today") return todayView();
+  if (state.view === "vault-scan") return vaultScanView();
   if (state.view === "scan") return scanView();
   if (state.view === "review") return reviewView(selected);
   if (state.view === "sell") return sellView();
@@ -1573,6 +1574,19 @@ function collectionDefaults(item, overrides = {}) {
     dueAt: previous.dueAt || "",
     returnedAt: previous.returnedAt || "",
     notes: previous.notes || "",
+    canonicalIds: previous.canonicalIds || { imdb: "", tmdb: "", igdb: "" },
+    genres: Array.isArray(previous.genres) ? previous.genres : [],
+    themes: Array.isArray(previous.themes) ? previous.themes : [],
+    moods: Array.isArray(previous.moods) ? previous.moods : [],
+    people: Array.isArray(previous.people) ? previous.people : [],
+    keywords: Array.isArray(previous.keywords) ? previous.keywords : [],
+    releaseYear: previous.releaseYear || "",
+    runtimeMinutes: Number(previous.runtimeMinutes || 0),
+    ageRating: previous.ageRating || "",
+    summary: previous.summary || "",
+    reviewLinks: Array.isArray(previous.reviewLinks) ? previous.reviewLinks : [],
+    enrichment: previous.enrichment || { status: "pending", sources: [], enrichedAt: "" },
+    capturedViews: Number(previous.capturedViews || 0),
     history: Array.isArray(previous.history) ? previous.history : [],
     addedAt: previous.addedAt || new Date().toISOString(),
     ...overrides
@@ -1591,6 +1605,80 @@ function moveItemToCollection(item, overrides = {}) {
   return enrichWorkflow(item);
 }
 
+function capturePhotoLimit() {
+  return state.view === "vault-scan" || state.captureMode === "batch" ? 6 : 4;
+}
+
+function captureIntent() {
+  return state.view === "vault-scan" || state.captureDestination === "vault" ? "media_library" : "sales";
+}
+
+function vaultScanView() {
+  const photos = state.draft.photos?.length
+    ? state.draft.photos
+    : state.draft.photo
+      ? [{ dataUrl: state.draft.photo, quality: null }]
+      : [];
+  const photoLimit = capturePhotoLimit();
+  const recognitionStatus = state.recognition?.evidence?.status || "";
+  const evidence = state.recognition?.evidence || {};
+  const identityNeedsConfirmation = recognitionStatus === "manual_review_ready"
+    && (Boolean(evidence.manualIdentityRequired) || Boolean(evidence.categoryConflict) || Number(evidence.score || 0) < 55);
+  const recognitionCanProceed = recognitionStatus === "ready_for_research"
+    || (recognitionStatus === "manual_review_ready" && (!identityNeedsConfirmation || state.draft.manualIdentityConfirmed));
+  const activeStep = state.analyzing ? 4 : state.recognition ? 3 : state.recognizing ? 2 : 1;
+  const actionLabel = state.analyzing
+    ? "Wird gespeichert..."
+    : state.recognizing
+      ? "Medium wird erkannt..."
+      : recognitionCanProceed
+        ? "In Sammlung speichern"
+        : state.recognition
+          ? identityNeedsConfirmation
+            ? "Titel und Medienformat bestätigen"
+            : "Fotosatz zuerst abschließen"
+          : "Medium erkennen";
+  const actionDisabled = state.analyzing || state.recognizing || (!photos.length && !devMode) || Boolean(state.recognition && !recognitionCanProceed);
+  const needsPhotoEvidence = Boolean(state.recognition && !recognitionCanProceed);
+
+  return `<section class="vault-scan-shell">
+    <header class="vault-scan-header">
+      <button class="secondary-action" data-vault-back type="button">${icon("BK")}Sammlung</button>
+      <div><p>Nur Inventar · kein Verkauf</p><h2>Ein Spiel oder einen Film erfassen</h2><span>Bis zu sechs Ansichten gehören zu demselben Exemplar. RAMROD erkennt sie gemeinsam und legt ausschließlich einen Sammlungseintrag an.</span></div>
+    </header>
+    <div class="vault-scan-grid">
+      <section class="vault-scan-capture">
+        <div class="workflow-progress vault-progress" aria-label="Sammlungsworkflow">${["Foto", "Erkennen", "Inventar", "Speichern"].map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>
+        <div class="vault-photo-guide" aria-label="Empfohlene Ansichten">
+          <span>${icon("01")}Cover / Vorderseite</span><span>${icon("02")}Rückseite und Barcode</span><span>${icon("03")}Rücken oder Plattform</span><span>${icon("04")}Datenträger und Zustand</span>
+        </div>
+        <label class="photo-drop vault-photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Vorschau des Sammlungsstücks" />` : `<span>${icon("KA")}<strong>Erstes Foto aufnehmen</strong><small>Beginne mit dem vollständigen Cover oder der Vorderseite</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
+        <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weitere Seite desselben Exemplars" : "Kamera oder Mediathek"}</strong></div>
+        ${photos.length ? `<div class="photo-thumbnails vault-photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Qualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
+        ${photos.length < photoLimit ? `<button class="secondary-action vault-add-photo" data-capture-more type="button">${icon("PL")}Weitere Ansicht aufnehmen</button>` : ""}
+        ${quickValueCard(state.recognition, true)}
+        ${identityNeedsConfirmation ? `<section class="vault-identity-confirmation">
+          <strong>Treffer unsicher: Titel kurz korrigieren</strong>
+          <p>RAMROD konnte Medienformat oder Edition nicht sicher belegen. Trage den sichtbaren Titel inklusive Format ein, zum Beispiel „Spider-Man: Far From Home · 4K UHD Limited Edition Steelbook“.</p>
+          ${field("Titel und Medienformat", `<input id="query" value="${escapeHtml(state.draft.query)}" placeholder="Titel · Format · Edition" />`)}
+        </section>` : ""}
+        <details class="capture-details vault-capture-details">
+          <summary>Inventarangaben ergänzen</summary>
+          <div class="form-grid">
+            ${identityNeedsConfirmation ? "" : field("Titelhinweis", `<input id="query" value="${escapeHtml(state.draft.query)}" placeholder="z. B. Titel oder Edition" />`)}
+            ${field("Barcode", `<div class="input-with-icon">${icon("BC")}<input id="barcode" value="${escapeHtml(state.draft.barcode)}" inputmode="numeric" placeholder="EAN / UPC" /></div>`)}
+            ${field("Standort", `<select id="boxId">${boxes.map((box) => `<option ${box.id === state.draft.boxId ? "selected" : ""}>${box.id}</option>`).join("")}</select>`)}
+            ${field("Zustand", `<select id="condition">${["Neu", "Sehr gut", "Gut", "Gebraucht", "Unvollständig", "Defekt"].map((value) => `<option ${value === state.draft.condition ? "selected" : ""}>${value}</option>`).join("")}</select>`)}
+            ${field("Vollständigkeit", `<input id="completeness" value="${escapeHtml(state.draft.completeness)}" />`)}
+          </div>
+        </details>
+        <button class="primary-action mobile-primary-action" id="add-item" type="button" ${actionDisabled ? "disabled" : ""}>${icon("SA")}${actionLabel}</button>
+      </section>
+      <aside class="vault-scan-recognition">${fastRecognitionPanel(photos)}</aside>
+    </div>
+  </section>`;
+}
+
 function scanView() {
   const photos = state.draft.photos?.length
     ? state.draft.photos
@@ -1598,7 +1686,7 @@ function scanView() {
       ? [{ dataUrl: state.draft.photo, quality: null }]
       : [];
   const batchMode = state.captureMode === "batch";
-  const photoLimit = batchMode ? 6 : 4;
+  const photoLimit = capturePhotoLimit();
   const currentBatchNumber = state.batchDrafts.length + 1;
   const capturedCount = state.batchDrafts.length + (photos.length ? 1 : 0);
   const activeStep = state.analyzing ? 4 : state.recognition ? 3 : state.recognizing ? 2 : 1;
@@ -1751,7 +1839,10 @@ async function runBatchAnalysis() {
       item.recognitionEvidence = recognition.evidence || null;
       if (state.captureDestination === "vault") {
         item.sku = nextVaultSku();
-        item = moveItemToCollection(item);
+        item = moveItemToCollection(item, {
+          barcode: state.draft.barcode || item.barcode || "",
+          capturedViews: state.draft.photos?.length || 1
+        });
       } else if (recognition.evidence?.status !== "ready_for_research") {
         item.channel = "Pruefen";
         item.stage = "Gescannt";
@@ -1865,7 +1956,7 @@ function scanReleaseGuide(recognition) {
   const missing = Array.isArray(recognition.missingEvidence) ? recognition.missingEvidence.filter(Boolean) : [];
   const request = recognition.requestedPhotos?.[0]?.instruction || "Zusätzliche Kennzeichnung oder Rückseite fotografieren";
   const photoCount = state.draft.photos?.length || 0;
-  const photoLimit = state.captureMode === "batch" ? 6 : 4;
+  const photoLimit = capturePhotoLimit();
   if (state.captureDestination === "vault") {
     return `<section class="scan-release-guide ${identityReady ? "ready" : manualReviewReady ? "manual" : "blocked"}">
       <div class="release-guide-head">
@@ -1878,7 +1969,7 @@ function scanReleaseGuide(recognition) {
         ${releaseGuideRow(false, "In Sammlung speichern", "Erstellt nur den Inventareintrag. Preisrecherche und Verkauf bleiben ausgeschaltet.", true)}
       </div>
       ${canProceed
-        ? `<button class="primary-action release-guide-action" data-run-next-step type="button">${icon("SA")}In Sammlung speichern</button>`
+        ? ""
         : `<div class="release-guide-actions">
             ${photoCount < photoLimit ? `<button class="secondary-action release-guide-action" data-capture-more type="button">${icon("KA")}Hilfreiches Foto aufnehmen</button>` : ""}
             <button class="secondary-action quiet-action release-guide-action" data-complete-photo-set type="button">${icon("OK")}Alle sinnvollen Fotos vorhanden</button>
@@ -3645,6 +3736,7 @@ function bindEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => {
     state.view = button.dataset.view;
     if (state.view === "scan") state.captureDestination = "sales";
+    if (state.view === "vault-scan") state.captureDestination = "vault";
     render();
     if (state.view === "settings" && !state.team) loadTeamSettings();
   }));
@@ -3655,7 +3747,7 @@ function bindEvents() {
     state.draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
     state.recognition = null;
     state.recognitionMeta = null;
-    state.view = "scan";
+    state.view = "vault-scan";
     render();
   }));
   document.querySelector("[data-vault-back]")?.addEventListener("click", () => {
@@ -4206,16 +4298,23 @@ function bindEvents() {
   document.querySelectorAll("[data-complete-photo-set]").forEach((button) => button.addEventListener("click", () => {
     if (!state.recognition) return;
     state.draft.photoSetComplete = true;
+    const currentEvidence = state.recognition.evidence || {};
+    const manualIdentityRequired = state.captureDestination === "vault"
+      && (Boolean(currentEvidence.categoryConflict) || Boolean(currentEvidence.mediaFormatMissing) || Number(currentEvidence.score || 0) < 55);
+    state.draft.manualIdentityConfirmed = false;
     state.recognition.evidence = {
-      ...(state.recognition.evidence || {}),
+      ...currentEvidence,
       originalStatus: state.recognition.evidence?.originalStatus || state.recognition.evidence?.status || "needs_more_evidence",
       status: "manual_review_ready",
       operatorPhotoComplete: true,
+      manualIdentityRequired,
       releaseGate: "blocked_until_manual_confirmation",
       autoApprovalEligible: false
     };
     state.importStatus = state.captureDestination === "vault"
-      ? "Fotosatz abgeschlossen. RAMROD kann das Stück jetzt ins Inventar übernehmen. Ein Verkauf wird nicht gestartet."
+      ? manualIdentityRequired
+        ? "Fotosatz abgeschlossen. Bitte den sichtbaren Titel und das Medienformat einmal korrigieren oder bestätigen."
+        : "Fotosatz abgeschlossen. RAMROD kann das Stück jetzt ins Inventar übernehmen. Ein Verkauf wird nicht gestartet."
       : "Fotosatz abgeschlossen. RAMROD recherchiert jetzt Preis und Kanal; offene Merkmale bestätigst du vor der Freigabe.";
     render();
   }));
@@ -4439,7 +4538,15 @@ function bindEvents() {
     const input = document.querySelector(`#${id}`);
     if (input) input.addEventListener("input", (event) => {
       state.draft[id] = event.target.value;
+      if (id === "query" && state.recognition?.evidence?.manualIdentityRequired) {
+        const suggestion = String(state.recognition?.identity?.title || "").trim().toLowerCase();
+        const correction = String(event.target.value || "").trim().toLowerCase();
+        state.draft.manualIdentityConfirmed = correction.length >= 3 && correction !== suggestion;
+        const addButton = document.querySelector("#add-item");
+        if (addButton) addButton.disabled = !state.draft.manualIdentityConfirmed;
+      }
     });
+    if (input && id === "query") input.addEventListener("change", render);
   });
 
   ["boxId", "condition"].forEach((id) => {
@@ -4452,7 +4559,7 @@ function bindEvents() {
 
   const photo = document.querySelector("#photo");
   if (photo) photo.addEventListener("change", async (event) => {
-    const photoLimit = state.captureMode === "batch" ? 6 : 4;
+    const photoLimit = capturePhotoLimit();
     const remaining = Math.max(0, photoLimit - (state.draft.photos?.length || 0));
     const files = [...(event.target.files || [])].slice(0, remaining);
     if (!files.length) return;
@@ -4475,7 +4582,7 @@ function bindEvents() {
       state.importStatus = `Bildvorbereitung fehlgeschlagen: ${error.message}.`;
     }
     render();
-    if (state.captureMode === "single" && state.draft.photos.length) await runFastRecognition();
+    if ((state.captureMode === "single" || state.view === "vault-scan") && state.draft.photos.length) await runFastRecognition();
   });
 
   document.querySelectorAll("[data-remove-photo]").forEach((button) => button.addEventListener("click", async () => {
@@ -4488,7 +4595,7 @@ function bindEvents() {
     state.recognitionMeta = null;
     state.importStatus = state.draft.photos.length ? "Foto entfernt. Identität wird neu geprüft." : "Alle Fotos entfernt.";
     render();
-    if (state.captureMode === "single" && state.draft.photos.length) await runFastRecognition();
+    if ((state.captureMode === "single" || state.view === "vault-scan") && state.draft.photos.length) await runFastRecognition();
   }));
 
   document.querySelectorAll("[data-remove-batch]").forEach((button) => button.addEventListener("click", () => {
@@ -4532,7 +4639,10 @@ function bindEvents() {
       item.recognitionEvidence = state.recognition?.evidence || null;
       if (state.captureDestination === "vault") {
         item.sku = nextVaultSku();
-        item = moveItemToCollection(item);
+        item = moveItemToCollection(item, {
+          barcode: state.draft.barcode || item.barcode || "",
+          capturedViews: state.draft.photos?.length || 1
+        });
       }
       state.items.unshift(item);
       state.selected = item.id;
@@ -4945,6 +5055,7 @@ async function runFastRecognition() {
         imageDataUrl: photos[0].dataUrl,
         imageDataUrls: photos.map((photo) => photo.dataUrl),
         clientImageQualities: photos.map((photo) => photo.quality || null),
+        captureIntent: captureIntent(),
         barcode: state.draft.barcode,
         query: state.draft.query
       })
@@ -4970,6 +5081,14 @@ async function runFastRecognition() {
     };
     if (!state.draft.query && result.recognition?.identity?.title) {
       state.draft.query = result.recognition.identity.title;
+    }
+    state.draft.manualIdentityConfirmed = false;
+    if (!state.draft.barcode) {
+      const barcodeIdentifier = (result.recognition?.identifiers || []).find((entry) =>
+        /barcode|ean|upc|gtin/i.test(String(entry?.type || ""))
+        || /^\d{8,14}$/.test(String(entry?.value || "").replace(/\s/g, ""))
+      );
+      if (barcodeIdentifier?.value) state.draft.barcode = String(barcodeIdentifier.value).replace(/\s/g, "");
     }
     const score = result.recognition?.evidence?.score || 0;
     const needsPhotos = result.recognition?.requestedPhotos?.length || 0;
@@ -5023,6 +5142,8 @@ async function analyzeWithApi() {
       completeness: state.draft.completeness,
       barcode: state.draft.barcode,
       weight: state.draft.weight,
+      query: state.draft.query,
+      captureIntent: captureIntent(),
       recognition: state.recognition
     })
   });

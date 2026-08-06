@@ -1,5 +1,6 @@
-export function buildItemRecognitionPrompt() {
-  return [
+export function buildItemRecognitionPrompt(context = {}) {
+  const mediaLibrary = context.captureIntent === "media_library";
+  const instructions = [
     "Erkenne schnell und konservativ den dominanten Verkaufsartikel.",
     "Lies das Bild in allen vier 90-Grad-Ausrichtungen. image.rotation ist die nötige Drehung im Uhrzeigersinn, damit der längste Produkttitel horizontal von links nach rechts steht.",
     "Wenn der Produkttitel vertikal oder kopfstehend ist, darf rotation nicht 0 sein.",
@@ -9,7 +10,15 @@ export function buildItemRecognitionPrompt() {
     "Gib quickEstimate als sehr grobe EUR-Vorbewertung aus Bild, sichtbarer Identitaet und allgemeinem Produktwissen aus, ohne aktuelle Marktrecherche vorzutäuschen.",
     "Wenn die Identitaet nicht belastbar genug ist, setze quickEstimate auf 0 und erklaere das knapp in basis.",
     "Keine Verkaufskanaele, Erklaerungen ausserhalb des Schemas, Alternativen oder Verkaufsstrategie. Nur JSON auf Deutsch."
-  ].join(" ");
+  ];
+  if (mediaLibrary) {
+    instructions.push(
+      "Dieser Scan stammt aus einer privaten Spiele- und Filmsammlung. Pruefe deshalb zuerst, ob ein physisches Medienformat wie 4K Ultra HD, Blu-ray, DVD, VHS, Steelbook oder eine Spielplattform erkennbar ist.",
+      "Eine flache motivbedruckte Steelbook- oder Mediabook-Vorderseite kann wie eine grosse Karte wirken. Klassifiziere sie nie allein wegen ihrer rechteckigen Form als Sammelkarte.",
+      "Sammelkarte oder Promo-Card ist nur zulaessig, wenn Kartenformat oder entsprechender Text sichtbar belegt sind. Fehlt Titel oder Medienformat, verwende einen neutralen physischen Medienkandidaten und rate keine Karte."
+    );
+  }
+  return instructions.join(" ");
 }
 
 export function itemRecognitionSchema() {
@@ -85,7 +94,8 @@ export function scoreItemRecognition(input, context = {}) {
   const identifiers = uniqueIdentifiers(recognition.identifiers);
   const imageIssues = normalizeImageIssues(recognition.image?.issues);
   const actionableImageIssues = imageIssues.filter((issue) => !isOrientationIssue(issue));
-  const imageCount = clampInteger(context.imageCount, 1, 4, 1);
+  const imageCount = clampInteger(context.imageCount, 1, 6, 1);
+  const mediaLibrary = context.captureIntent === "media_library";
   const barcode = String(context.barcode || "").trim();
   const clientQualityScores = (context.clientImageQualities || [])
     .map((entry) => Number(entry?.score))
@@ -111,8 +121,20 @@ export function scoreItemRecognition(input, context = {}) {
   const titleCoverage = tokenCoverage(identity.title, evidenceText);
   const supportedFields = ["brand", "franchise", "platform", "edition", "region", "modelNumber"]
     .filter((field) => identity[field] && tokenCoverage(identity[field], evidenceText) >= 0.5);
-  const criticalMissing = requiredIdentityFields(identity)
+  let criticalMissing = requiredIdentityFields(identity)
     .filter((field) => !String(identity[field] || "").trim());
+  const identityTypeText = `${identity.productType || ""} ${identity.category || ""}`.toLowerCase();
+  const declaredFormatText = `${identity.productType || ""} ${identity.category || ""} ${identity.platform || ""} ${identity.edition || ""}`;
+  const physicalMediaPattern = /4k|uhd|ultra\s*hd|blu.?ray|dvd|vhs|steelbook|mediabook|playstation|ps[1-5]\b|xbox|nintendo|switch|game\s*boy|dreamcast|videospiel|video\s*game/i;
+  const nonMediaPattern = /sammelkarte|trading\s*card|promo.?card|\btcg\b|actionfigur|figurine|spielzeug|\btoy\b/i;
+  const declaredMediaFormat = physicalMediaPattern.test(declaredFormatText);
+  const observedMediaFormat = physicalMediaPattern.test(evidenceText);
+  const mediaFormatSupported = observedMediaFormat || (declaredMediaFormat && (imageCount > 1 || Boolean(barcode)));
+  const categoryConflict = mediaLibrary && nonMediaPattern.test(identityTypeText);
+  const mediaFormatMissing = mediaLibrary && !mediaFormatSupported;
+  if (categoryConflict) criticalMissing.push("mediaCategory");
+  if (mediaFormatMissing) criticalMissing.push("mediaFormat");
+  criticalMissing = [...new Set(criticalMissing)];
 
   let qualityScore = recognition.image?.usable === false ? 20 : 100;
   qualityScore -= Math.min(60, actionableImageIssues.length * 15);
@@ -129,6 +151,8 @@ export function scoreItemRecognition(input, context = {}) {
   identityScore += Math.min(10, Math.max(0, imageCount - 1) * 5);
   identityScore -= Math.min(30, criticalMissing.length * 8);
   identityScore -= Math.min(20, uniqueStrings(recognition.missingEvidence).length * 4);
+  if (categoryConflict) identityScore = Math.min(identityScore, 25);
+  else if (mediaFormatMissing) identityScore = Math.min(identityScore, 45);
   identityScore = clampInteger(identityScore, 0, 90, 0);
 
   const score = clampInteger(Math.round(identityScore * (qualityScore / 100)), 0, 90, 0);
@@ -139,8 +163,18 @@ export function scoreItemRecognition(input, context = {}) {
       : "ready_for_research";
   const requestedPhotos = mergeRequestedPhotos(
     recognition.requestedPhotos,
-    deterministicPhotoRequests(identity, criticalMissing, actionableImageIssues)
+    deterministicPhotoRequests(identity, criticalMissing, actionableImageIssues, { mediaLibrary, categoryConflict, mediaFormatMissing })
   );
+
+  if (categoryConflict) {
+    recognition.quickEstimate = {
+      low: 0,
+      fair: 0,
+      high: 0,
+      confidence: 0,
+      basis: "Medienformat und Kategorie widersprechen sich. Erst Rueckseite, Barcode oder Ruecken bestaetigen."
+    };
+  }
 
   recognition.visibleText = visibleText;
   recognition.identifiers = identifiers;
@@ -157,8 +191,10 @@ export function scoreItemRecognition(input, context = {}) {
     titleCoverage: Math.round(titleCoverage * 100),
     supportedFields,
     criticalMissing,
+    categoryConflict,
+    mediaFormatMissing,
     status,
-    releaseGate: "blocked_until_source_match",
+    releaseGate: categoryConflict || mediaFormatMissing ? "blocked_until_media_confirmation" : "blocked_until_source_match",
     autoApprovalEligible: false
   };
 
@@ -177,13 +213,16 @@ function requiredIdentityFields(identity) {
   return [...new Set(fields)];
 }
 
-function deterministicPhotoRequests(identity, missingFields, issues) {
+function deterministicPhotoRequests(identity, missingFields, issues, context = {}) {
   const requests = [];
   if (issues.length) {
     requests.push({ type: "retake", instruction: "Artikel gerade, vollständig, scharf und ohne Spiegelung fotografieren." });
   }
   if (missingFields.includes("platform") || missingFields.includes("edition") || missingFields.includes("region")) {
     requests.push({ type: "back", instruction: "Rückseite mit Plattform-, Regions- und Editionsangaben fotografieren." });
+  }
+  if (context.mediaLibrary && (context.categoryConflict || context.mediaFormatMissing)) {
+    requests.push({ type: "media_back", instruction: "Rückseite oder Rücken mit Filmtitel, Medienformat und Barcode vollständig fotografieren." });
   }
   if (missingFields.includes("brand") || missingFields.includes("modelNumber")) {
     requests.push({ type: "label", instruction: "Typenschild, Unterseite oder Herstellerprägung formatfüllend fotografieren." });
@@ -256,7 +295,9 @@ function identityFieldLabel(field) {
     brand: "Hersteller oder Marke",
     modelNumber: "Modellnummer",
     edition: "Edition",
-    region: "Region"
+    region: "Region",
+    mediaCategory: "Medienart statt Sammelkarte bestätigen",
+    mediaFormat: "Physisches Medienformat"
   }[field] || field;
 }
 

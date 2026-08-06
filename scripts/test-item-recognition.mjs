@@ -112,4 +112,60 @@ assert.equal(joyConPhotoSet.evidence.status, "ready_for_research");
 assert.ok(!joyConPhotoSet.evidence.criticalMissing.includes("modelNumber"));
 assert.equal(joyConPhotoSet.evidence.qualityScore, 91);
 
+const titlelessSteelbookMisreadAsCard = scoreItemRecognition({
+  image: { rotation: 0, usable: true, issues: ["Spiegelung auf der Oberfläche"] },
+  identity: {
+    title: "Spider-Man: No Way Home Sammelkarte/Promo-Card",
+    productType: "Sammelkarte",
+    category: "Film-Merchandise",
+    brand: "Marvel",
+    franchise: "Spider-Man",
+    platform: "",
+    edition: "",
+    region: "",
+    modelNumber: ""
+  },
+  visibleText: [],
+  identifiers: [],
+  alternatives: [],
+  missingEvidence: ["Kein Titel oder Format sichtbar"],
+  requestedPhotos: [],
+  quickEstimate: { low: 1, fair: 2, high: 5, confidence: 20, basis: "Motivvermutung" },
+  modelConfidence: 33
+}, { imageCount: 1, captureIntent: "media_library" });
+
+assert.equal(titlelessSteelbookMisreadAsCard.evidence.status, "needs_more_evidence");
+assert.equal(titlelessSteelbookMisreadAsCard.evidence.categoryConflict, true);
+assert.equal(titlelessSteelbookMisreadAsCard.evidence.mediaFormatMissing, true);
+assert.equal(titlelessSteelbookMisreadAsCard.evidence.releaseGate, "blocked_until_media_confirmation");
+assert.ok(titlelessSteelbookMisreadAsCard.evidence.score <= 25);
+assert.equal(titlelessSteelbookMisreadAsCard.quickEstimate.fair, 0);
+assert.ok(titlelessSteelbookMisreadAsCard.requestedPhotos.some((photo) => photo.type === "media_back"));
+
+const confirmedSteelbook = scoreItemRecognition({
+  image: { rotation: 0, usable: true, issues: [] },
+  identity: {
+    title: "Spider-Man: Far From Home",
+    productType: "4K Ultra HD und Blu-ray Steelbook",
+    category: "Film",
+    brand: "Sony Pictures",
+    franchise: "Spider-Man",
+    platform: "4K Ultra HD / Blu-ray",
+    edition: "Limited Edition Steelbook",
+    region: "",
+    modelNumber: ""
+  },
+  visibleText: ["SPIDER-MAN FAR FROM HOME", "4K ULTRA HD", "BLU-RAY", "LIMITED EDITION STEELBOOK"],
+  identifiers: [{ type: "ean", value: "5050630901234" }],
+  alternatives: [],
+  missingEvidence: [],
+  requestedPhotos: [],
+  quickEstimate: { low: 25, fair: 40, high: 55, confidence: 65, basis: "Exakte Edition sichtbar" },
+  modelConfidence: 94
+}, { imageCount: 2, captureIntent: "media_library", barcode: "5050630901234" });
+
+assert.equal(confirmedSteelbook.evidence.status, "ready_for_research");
+assert.equal(confirmedSteelbook.evidence.categoryConflict, false);
+assert.equal(confirmedSteelbook.evidence.mediaFormatMissing, false);
+
 console.log("Item recognition evidence tests passed.");

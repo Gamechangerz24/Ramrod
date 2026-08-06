@@ -1,5 +1,5 @@
-export function buildItemAnalysisPrompt(recognition = null) {
-  const prompt = [
+export function buildItemAnalysisPrompt(recognition = null, context = {}) {
+  const instructions = [
     "Du bist der AI-Scanner fuer CREATORS Projekt RAMROD.",
     "Analysiere ein frisch aufgenommenes Foto aus einem Kunden-, CREATORS- oder privaten Warenbestand.",
     "Ein Foto kann einen dominanten Artikel und Nebenartikel enthalten.",
@@ -16,7 +16,25 @@ export function buildItemAnalysisPrompt(recognition = null) {
     "Nenne erforderliche Funktions- und Echtheitspruefungen, eine kurze Fotoliste, Verkaufsformat, Zielpreis, Untergrenze und erwartete Verkaufsdauer.",
     "Alle Preise sind nur eine vorlaeufige EUR-Vorbewertung ohne aktuelle Marktrecherche. Formuliere passende Suchanfragen fuer die spaetere Preisrecherche.",
     "Antworte ausschliesslich im vorgegebenen JSON-Schema und auf Deutsch."
-  ].join(" ");
+  ];
+
+  if (context.captureIntent === "media_library") {
+    instructions.push(
+      "Dieser Artikel wird zuerst als privates Sammlungsstueck erfasst und noch nicht zum Verkauf angeboten. Bestimme deshalb die exakte physische Medienidentitaet: Titel, Film oder Spiel, Format und sichtbare Edition.",
+      "Eine motivbedruckte Steelbook-, FuturePak- oder Mediabook-Vorderseite kann ohne Titel wie eine grosse Karte wirken. Klassifiziere sie nicht als Sammelkarte, Promo-Card oder Film-Merchandise, solange Kartenformat oder entsprechender Text nicht sichtbar belegt sind.",
+      "Bei widerspruechlichen Bildern haben Rueckseite, Ruecken, Barcode und sichtbare Formatlogos wie 4K Ultra HD, Blu-ray, DVD oder Plattformlogos Vorrang vor einer Motivvermutung.",
+      "Wenn Medienformat oder Edition nicht belegt sind, verwende einen neutralen Titel und setze needsHumanReview auf true. Erfinde keine Special Edition."
+    );
+  }
+
+  const operatorHint = String(context.operatorHint || "").trim();
+  if (operatorHint) {
+    instructions.push(
+      `Der Operator hat nach Sichtpruefung folgenden Identitaetshinweis eingegeben: ${JSON.stringify(operatorHint)}. Dieser Hinweis hat Vorrang vor einer niedrig bewerteten Schnellerkennung, sofern das Bild ihn nicht klar widerlegt.`
+    );
+  }
+
+  const prompt = instructions.join(" ");
 
   if (!recognition?.identity) return prompt;
 
@@ -28,7 +46,7 @@ export function buildItemAnalysisPrompt(recognition = null) {
     evidence: recognition.evidence || null
   };
 
-  return `${prompt} Eine vorgeschaltete Schnellerkennung lieferte folgende, noch nicht als Wahrheit bestaetigte Evidenz: ${JSON.stringify(compactRecognition)}. Nutze sie als Hinweis, ueberstimme sie nur mit sichtbarem Gegenbeleg und erfinde keine fehlenden Details.`;
+  return `${prompt} Eine vorgeschaltete Schnellerkennung lieferte folgende, noch nicht als Wahrheit bestaetigte Evidenz: ${JSON.stringify(compactRecognition)}. Nutze sie nur als Hinweis. Bei niedriger Evidenz, einem Kategorie-Konflikt oder einem abweichenden Operatorhinweis darfst und sollst du sie korrigieren. Erfinde keine fehlenden Details.`;
 }
 
 export function applyAnalysisGuardrails(input) {
