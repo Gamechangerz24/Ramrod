@@ -129,7 +129,7 @@ const platformAdminEmails = new Set(
 const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "";
 const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 const workerJobTypes = new Set(["health_check", "price_check", "ebay_draft", "recognize_image", "analyze_image"]);
-const automaticPriceCheckSources = new Set(["live_openai", "batch_openai", "local_qwen"]);
+const automaticPriceCheckSources = new Set(["live_openai", "batch_openai", "local_qwen", "vault-handoff"]);
 const publicAppUrl = String(process.env.RAMROD_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "");
 const ebaySellerOAuthConfig = ebayOAuthConfig(process.env);
 const credentialStore = createEncryptedSecretStore();
@@ -4029,7 +4029,7 @@ function serveStatic(request, response) {
     ? (publicShopHost ? "/shop.html" : "/index.html")
     : (["/shop", "/shop/"].includes(url.pathname)
       ? "/shop.html"
-      : (["/admin", "/admin/"].includes(url.pathname) ? "/index.html" : url.pathname));
+      : (["/admin", "/admin/", "/vault", "/vault/"].includes(url.pathname) ? "/index.html" : url.pathname));
   const filePath = resolve(root, normalize(pathname).replace(/^\/+/, ""));
 
   if (!filePath.startsWith(root) || !existsSync(filePath) || !statSync(filePath).isFile()) {

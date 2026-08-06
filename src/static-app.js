@@ -173,7 +173,8 @@ const fallbackChannelCatalog = [
   { id: "bricklink", name: "BrickLink", status: "planned", statusLabel: "Connector geplant", selectable: false },
   { id: "discogs", name: "Discogs", status: "planned", statusLabel: "Connector geplant", selectable: false },
   { id: "reverb", name: "Reverb", status: "planned", statusLabel: "Connector geplant", selectable: false },
-  { id: "catawiki", name: "Catawiki", status: "assisted", statusLabel: "Einreichung assistiert", selectable: true }
+  { id: "catawiki", name: "Catawiki", status: "assisted", statusLabel: "Einreichung assistiert", selectable: true },
+  { id: "jtl_wawi", name: "JTL-Wawi", type: "erp", status: "planned", statusLabel: "Verbindung vorbereiten", selectable: false, integrationKind: "erp" }
 ];
 let runtimeChannelCatalog = fallbackChannelCatalog;
 
@@ -185,7 +186,9 @@ const authStorageKey = "ramrod-auth-session";
 const organizationStorageKey = "ramrod-active-organization";
 const initialOrganizationId = localStorage.getItem(organizationStorageKey) || "";
 const invitationToken = new URLSearchParams(window.location.search).get("invite") || "";
-const initialView = new URLSearchParams(window.location.search).get("view") || "";
+const initialView = window.location.pathname.replace(/^\/+|\/+$/g, "") === "vault"
+  ? "vault"
+  : new URLSearchParams(window.location.search).get("view") || "";
 const ebayCallbackState = new URLSearchParams(window.location.search).get("ebay") || "";
 
 window.addEventListener("error", (event) => {
@@ -197,7 +200,7 @@ window.addEventListener("error", (event) => {
 
 const state = {
   booting: true,
-  view: ["agents", "today", "capture", "review", "sell", "shipping", "inventory", "settings"].includes(initialView) ? initialView : "today",
+  view: ["agents", "today", "scan", "review", "sell", "shipping", "inventory", "archive", "vault", "settings", "admin"].includes(initialView) ? initialView : "today",
   organizations: [],
   activeOrganizationId: initialOrganizationId,
   activeOrganization: null,
@@ -243,6 +246,7 @@ const state = {
   recognitionRequestId: 0,
   analyzing: false,
   captureMode: "single",
+  captureDestination: "sales",
   batchDrafts: [],
   batchAnalyzing: false,
   batchProgress: null,
@@ -254,6 +258,11 @@ const state = {
   ebayPreparing: "",
   ebayPublishing: "",
   approving: "",
+  vaultSelected: "",
+  vaultFilter: "all",
+  vaultFormOpen: false,
+  vaultLoanItem: "",
+  vaultBusy: "",
   draft: createEmptyDraft("SV-001"),
   items: normalizeItems(loadStoredItems(initialOrganizationId))
 };
@@ -294,7 +303,8 @@ function minimalLocalItems(items = state.items) {
     weight: item.weight,
     image: typeof item.image === "string" && !/^data:image\//i.test(item.image) ? item.image : "",
     sourceType: item.sourceType,
-    archivedAt: item.archivedAt || null
+    archivedAt: item.archivedAt || null,
+    collection: item.collection || null
   }));
 }
 
@@ -921,8 +931,32 @@ function suggestion(label, value) {
 }
 
 function visibleItems(items = state.items) {
-  const active = items.filter((item) => !isArchived(item));
+  const active = items.filter((item) => !isArchived(item) && !isCollectionOnly(item));
   return state.boxFilter ? active.filter((item) => item.boxId === state.boxFilter) : active;
+}
+
+function collectionItems(items = state.items) {
+  return items.filter((item) => !isArchived(item) && Boolean(item.collection));
+}
+
+function isCollectionOnly(item) {
+  return Boolean(item.collection) && ["owned", "loaned"].includes(String(item.collection.status || "owned"));
+}
+
+function collectionStatus(item) {
+  if (item.stage === "Verkauft" || item.collection?.status === "sold") return "sold";
+  if (item.stage === "Gelistet" || item.ebayListing?.status === "active" || item.collection?.status === "listed") return "listed";
+  return item.collection?.status || "owned";
+}
+
+function collectionStatusLabel(item) {
+  return {
+    owned: "In Sammlung",
+    loaned: "Verliehen",
+    selling: "Verkauf wird vorbereitet",
+    listed: "Im Verkauf",
+    sold: "Verkauft"
+  }[collectionStatus(item)] || "In Sammlung";
 }
 
 function archivedItems(items = state.items) {
@@ -1103,6 +1137,7 @@ function render() {
   };
   const organization = activeOrganization();
   const systemView = ["admin", "agents", "settings"].includes(state.view);
+  const standaloneView = systemView || state.view === "vault";
 
   app.innerHTML = `
     ${organizationRail()}
@@ -1115,6 +1150,7 @@ function render() {
         ${navButton("sell", "VK", "Verkaufen")}
         ${navButton("shipping", "VS", "Versand")}
         ${navButton("inventory", "DB", "Bestand")}
+        ${navButton("vault", "SA", "Sammlung")}
         ${navButton("archive", "AR", "Archiv")}
         ${navButton("agents", "AG", "Agenten")}
         ${can("team:manage") ? navButton("settings", "TM", "Team & Kanäle") : ""}
@@ -1123,18 +1159,19 @@ function render() {
         ${mobileNavButton("scan", "KA", "Scannen")}
         ${mobileNavButton("review", "OK", "Freigeben")}
         ${mobileNavButton("sell", "VK", "Verkäufe")}
+        ${mobileNavButton("vault", "SA", "Sammlung")}
       </nav>
     </aside>
     <section class="workspace view-${state.view}">
       <header class="topbar">
         <div><p>${escapeHtml(organization.name)} · ${escapeHtml(roleLabel(organization.role))}</p><h1>${pageTitle()}</h1></div>
         <div class="topbar-actions">
-          ${systemView ? "" : `<div class="search-box">${icon("SU")}<input id="search" value="${escapeHtml(state.search)}" placeholder="SKU, Titel, Plattform..." /></div>`}
+          ${standaloneView ? "" : `<div class="search-box">${icon("SU")}<input id="search" value="${escapeHtml(state.search)}" placeholder="SKU, Titel, Plattform..." /></div>`}
           ${state.runtimeConfig.authRequired ? `<button class="icon-button" id="sign-out" type="button" title="Abmelden">${icon("AU")}</button>` : ""}
         </div>
       </header>
       ${state.importStatus ? `<div class="status-strip">${escapeHtml(state.importStatus)}</div>` : ""}
-      ${systemView ? "" : `<section class="metrics" aria-label="Kennzahlen">
+      ${standaloneView ? "" : `<section class="metrics" aria-label="Kennzahlen">
         ${metric("AR", "Artikel", stats.count)}
         ${metric("AI", "Automatisch", `${stats.count ? Math.round((stats.auto / stats.count) * 100) : 0}%`)}
         ${metric("PR", "Prüfen", stats.review)}
@@ -1410,6 +1447,7 @@ function pageTitle() {
     sell: "Verkäufe",
     shipping: "Versand",
     inventory: "Bestand",
+    vault: "Sammlung",
     archive: "Archiv",
     agents: "Agenten",
     settings: "Team & Kanäle",
@@ -1452,6 +1490,7 @@ function viewMarkup(selected) {
   if (state.view === "routing") return routingView();
   if (state.view === "campaigns") return campaignsView();
   if (state.view === "shipping") return shippingView();
+  if (state.view === "vault") return vaultView();
   if (state.view === "archive") return archiveView();
   if (state.view === "agents") return agentsView();
   if (state.view === "admin") return adminView();
@@ -1495,6 +1534,52 @@ function taskCard(title, description, view, iconLabel, count, body) {
   </article>`;
 }
 
+function nextVaultSku() {
+  const stamp = new Date().toISOString().slice(2, 10).replaceAll("-", "");
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `VLT-${stamp}-${suffix}`;
+}
+
+function inferMediaType(item) {
+  const text = [item.title, item.category, item.franchise].filter(Boolean).join(" ").toLowerCase();
+  if (["blu-ray", "bluray", "dvd", "film", "movie", "vhs"].some((token) => text.includes(token))) return "film";
+  if (["spiel", "game", "xbox", "playstation", "nintendo", "switch", "dreamcast", "atari"].some((token) => text.includes(token))) return "game";
+  return "other";
+}
+
+function collectionDefaults(item, overrides = {}) {
+  const previous = item.collection || {};
+  return {
+    status: previous.status || "owned",
+    mediaType: previous.mediaType || inferMediaType(item),
+    platform: previous.platform || item.franchise || "",
+    edition: previous.edition || "",
+    barcode: previous.barcode || item.barcode || "",
+    location: previous.location || item.boxId || "",
+    purchaseDate: previous.purchaseDate || "",
+    purchasePrice: Number(previous.purchasePrice || 0),
+    estimatedValue: Number(previous.estimatedValue || item.fair || 0),
+    borrowerName: previous.borrowerName || "",
+    borrowerContact: previous.borrowerContact || "",
+    loanedAt: previous.loanedAt || "",
+    dueAt: previous.dueAt || "",
+    returnedAt: previous.returnedAt || "",
+    notes: previous.notes || "",
+    history: Array.isArray(previous.history) ? previous.history : [],
+    addedAt: previous.addedAt || new Date().toISOString(),
+    ...overrides
+  };
+}
+
+function moveItemToCollection(item, overrides = {}) {
+  item.collection = collectionDefaults(item, overrides);
+  item.stage = "Sammlung";
+  item.channel = "Sammlung";
+  item.sourceType = item.sourceType === "vault-handoff" ? "vault" : (item.sourceType || "vault");
+  item.approval = { ...(item.approval || {}), status: "pending", strategyAccepted: false };
+  return enrichWorkflow(item);
+}
+
 function scanView() {
   const photos = state.draft.photos?.length
     ? state.draft.photos
@@ -1508,15 +1593,16 @@ function scanView() {
   const activeStep = state.analyzing ? 4 : state.recognition ? 3 : state.recognizing ? 2 : 1;
   const recognitionStatus = state.recognition?.evidence?.status || "";
   const recognitionCanProceed = recognitionStatus === "ready_for_research" || recognitionStatus === "manual_review_ready";
+  const vaultCapture = state.captureDestination === "vault";
   const actionLabel = state.analyzing
     ? "Analyse läuft..."
     : state.recognizing
       ? "Produkt wird erkannt..."
       : recognitionCanProceed
-        ? "Preis, Kanal und Strategie ermitteln"
+        ? (vaultCapture ? "Wert schätzen und zur Sammlung hinzufügen" : "Preis, Kanal und Strategie ermitteln")
         : state.recognition
           ? "Fotosatz zuerst abschließen"
-          : "Artikel analysieren";
+          : (vaultCapture ? "Für Sammlung analysieren" : "Artikel analysieren");
   const actionDisabled = state.analyzing || state.recognizing || (!photos.length && !devMode) || Boolean(state.recognition && !recognitionCanProceed);
   const needsPhotoEvidence = Boolean(state.recognition && !recognitionCanProceed);
   const manualFields = `<details class="capture-details">
@@ -1531,7 +1617,7 @@ function scanView() {
     </div>
   </details>`;
 
-  return `<section class="work-grid ${batchMode ? "batch-capture-workspace" : ""}">
+  return `${vaultCapture ? `<section class="vault-capture-banner"><div>${icon("SA")}<span><strong>Für deine Sammlung erfassen</strong><small>Der Artikel wird inventarisiert und noch nicht zum Verkauf freigegeben.</small></span></div><button class="secondary-action" data-scan-sales type="button">Zum Verkaufs-Scan</button></section>` : ""}<section class="work-grid ${batchMode ? "batch-capture-workspace" : ""}">
     <div class="scan-panel">
       <div class="panel-heading"><div><p>${batchMode ? `Serienaufnahme · Artikel ${currentBatchNumber}` : "Einzelaufnahme"}</p><h2>${batchMode ? "Viele Artikel nacheinander" : "Einen Artikel analysieren"}</h2></div><button class="icon-button" id="reset" title="Aufnahme zurücksetzen">${icon("NE")}</button></div>
       <div class="capture-mode" role="group" aria-label="Aufnahmemodus">
@@ -1551,7 +1637,7 @@ function scanView() {
             <button class="secondary-action" id="batch-next" type="button" ${!photos.length || state.batchAnalyzing ? "disabled" : ""}>${icon("NX")}Nächster Artikel</button>
             <button class="primary-action" id="batch-finish" type="button" ${!capturedCount || state.batchAnalyzing ? "disabled" : ""}>${icon("AI")}${state.batchAnalyzing ? "Sammelanalyse läuft..." : `${capturedCount} Artikel analysieren`}</button>
           </div>`
-        : `<button class="primary-action mobile-primary-action" id="add-item" type="button" ${actionDisabled ? "disabled" : ""}>${icon("AI")}${actionLabel}</button>`}
+        : `<button class="primary-action mobile-primary-action" id="add-item" type="button" ${actionDisabled ? "disabled" : ""}>${icon(vaultCapture ? "SA" : "AI")}${actionLabel}</button>`}
     </div>
     <div class="ai-panel">
       ${batchMode ? batchCapturePanel() : fastRecognitionPanel(photos)}
@@ -1642,10 +1728,13 @@ async function runBatchAnalysis() {
       entry.status = "analyzing";
       state.batchProgress.label = `Artikel ${index + 1}: Preis, Kanal und Strategie`;
       render();
-      const item = enrichWorkflow(await analyzeWithApi());
+      let item = enrichWorkflow(await analyzeWithApi());
       item.recognition = recognition;
       item.recognitionEvidence = recognition.evidence || null;
-      if (recognition.evidence?.status !== "ready_for_research") {
+      if (state.captureDestination === "vault") {
+        item.sku = nextVaultSku();
+        item = moveItemToCollection(item);
+      } else if (recognition.evidence?.status !== "ready_for_research") {
         item.channel = "Pruefen";
         item.stage = "Gescannt";
         Object.assign(item, enrichWorkflow(item));
@@ -1680,8 +1769,10 @@ async function runBatchAnalysis() {
   state.draft = createEmptyDraft(state.draft.boxId);
   state.recognition = null;
   state.recognitionMeta = null;
-  state.view = "review";
-  state.importStatus = `${completedItemIds.length} Artikel analysiert${failedEntries.length ? ` · ${failedEntries.length} Aufnahme${failedEntries.length === 1 ? "" : "n"} erneut prüfen` : ""}. Preischecks laufen im Hintergrund.`;
+  state.view = state.captureDestination === "vault" ? "vault" : "review";
+  state.importStatus = state.captureDestination === "vault"
+    ? `${completedItemIds.length} Artikel zur Sammlung hinzugefügt${failedEntries.length ? ` · ${failedEntries.length} Aufnahme${failedEntries.length === 1 ? "" : "n"} erneut prüfen` : ""}.`
+    : `${completedItemIds.length} Artikel analysiert${failedEntries.length ? ` · ${failedEntries.length} Aufnahme${failedEntries.length === 1 ? "" : "n"} erneut prüfen` : ""}. Preischecks laufen im Hintergrund.`;
   saveLocal();
   render();
 }
@@ -1872,6 +1963,158 @@ function inventoryView(selected) {
     <div class="inventory-list"><div class="panel-heading"><div><p>Bestand</p><h2>Artikelkarten</h2></div><div class="panel-actions"><button class="icon-button" data-view="archive" title="Archiv öffnen">${icon("AR")}</button><button class="icon-button" data-view="scan" title="Artikel hinzufügen">${icon("PL")}</button></div></div>${filtered.map(itemRow).join("")}</div>
     ${active ? inspector(active) : `<section class="empty-state compact-empty"><h2>Kein Treffer</h2><p>Ändere Suche oder Lagerfilter, um wieder Artikel zu sehen.</p></section>`}
   </section>`;
+}
+
+function vaultView() {
+  const allItems = collectionItems();
+  const query = state.search.trim().toLowerCase();
+  const filtered = allItems.filter((item) => {
+    const status = collectionStatus(item);
+    const matchesFilter = state.vaultFilter === "all"
+      || status === state.vaultFilter
+      || (state.vaultFilter === "selling" && status === "listed");
+    const matchesQuery = !query || [item.title, item.sku, item.category, item.franchise, item.collection?.platform, item.collection?.edition, item.collection?.location, item.collection?.borrowerName]
+      .filter(Boolean).join(" ").toLowerCase().includes(query);
+    return matchesFilter && matchesQuery;
+  });
+  const selected = filtered.find((item) => item.id === state.vaultSelected)
+    || allItems.find((item) => item.id === state.vaultSelected)
+    || filtered[0]
+    || allItems[0];
+  if (selected && selected.id !== state.vaultSelected) state.vaultSelected = selected.id;
+  const owned = allItems.filter((item) => collectionStatus(item) === "owned").length;
+  const loaned = allItems.filter((item) => collectionStatus(item) === "loaned").length;
+  const selling = allItems.filter((item) => ["selling", "listed"].includes(collectionStatus(item))).length;
+  const totalValue = allItems.filter((item) => collectionStatus(item) !== "sold").reduce((sum, item) => sum + Number(item.collection?.estimatedValue || item.fair || 0), 0);
+  const importable = state.items.filter((item) => !isArchived(item) && !item.collection).slice(0, 8);
+
+  return `<section class="vault-shell">
+    <header class="vault-hero">
+      <div><p>RAMROD VAULT</p><h2>Deine Spiele- und Filmsammlung</h2><span>Inventar, Leihstatus und Wert an einem Ort. Verkauft wird erst nach deinem Klick.</span></div>
+      <div class="vault-hero-actions">
+        <button class="secondary-action" data-vault-new type="button">${icon("NE")}Manuell hinzufügen</button>
+        <button class="primary-action" data-vault-scan type="button">${icon("KA")}Mit Kamera erfassen</button>
+      </div>
+    </header>
+    <section class="vault-metrics" aria-label="Sammlungsübersicht">
+      ${vaultMetric("SA", "In Sammlung", owned)}
+      ${vaultMetric("VL", "Verliehen", loaned)}
+      ${vaultMetric("VK", "Im Verkauf", selling)}
+      ${vaultMetric("EU", "Sammlungswert", euro(totalValue))}
+    </section>
+    ${state.vaultFormOpen ? vaultEntryForm() : ""}
+    <section class="vault-toolbar">
+      <label class="vault-search">${icon("SU")}<input id="vault-search" value="${escapeHtml(state.search)}" placeholder="Titel, Plattform, Person oder Lagerort" /></label>
+      <div class="vault-filters" role="group" aria-label="Sammlung filtern">
+        ${vaultFilterButton("all", "Alle", allItems.length)}
+        ${vaultFilterButton("owned", "Da", owned)}
+        ${vaultFilterButton("loaned", "Verliehen", loaned)}
+        ${vaultFilterButton("selling", "Verkauf", selling)}
+      </div>
+    </section>
+    ${allItems.length ? `<section class="vault-layout">
+      <div class="vault-list">${filtered.length ? filtered.map(vaultItemRow).join("") : `<div class="vault-empty compact"><strong>Kein Treffer</strong><span>Ändere Suche oder Filter.</span></div>`}</div>
+      ${selected ? vaultInspector(selected) : ""}
+    </section>` : vaultEmptyState(importable)}
+    ${allItems.length && importable.length ? vaultImportStrip(importable) : ""}
+  </section>`;
+}
+
+function vaultMetric(iconLabel, label, value) {
+  return `<div class="vault-metric">${icon(iconLabel)}<span><strong>${value}</strong><small>${label}</small></span></div>`;
+}
+
+function vaultFilterButton(id, label, count) {
+  return `<button class="${state.vaultFilter === id ? "active" : ""}" data-vault-filter="${id}" type="button">${escapeHtml(label)} <span>${count}</span></button>`;
+}
+
+function vaultEntryForm() {
+  const defaultLocation = boxes[0]?.location || boxes[0]?.id || "";
+  return `<form class="vault-entry-form" id="vault-entry-form">
+    <div class="panel-heading"><div><p>Neues Exemplar</p><h3>Zur Sammlung hinzufügen</h3></div><button class="icon-button" data-vault-close-form type="button" title="Schließen">×</button></div>
+    <div class="vault-form-grid">
+      ${field("Titel", `<input name="title" required placeholder="z. B. The Legend of Zelda: Wind Waker" />`)}
+      ${field("Art", `<select name="mediaType"><option value="game">Spiel</option><option value="film">Film</option><option value="other">Sonstiges</option></select>`)}
+      ${field("Plattform / Format", `<input name="platform" placeholder="z. B. GameCube, PS3, Blu-ray" />`)}
+      ${field("Edition", `<input name="edition" placeholder="Standard, Steelbook, Collector's Edition" />`)}
+      ${field("Barcode", `<input name="barcode" inputmode="numeric" placeholder="EAN / UPC" />`)}
+      ${field("Standort", `<input name="location" value="${escapeHtml(defaultLocation)}" placeholder="Regal, Raum oder Kiste" />`)}
+      ${field("Zustand", `<select name="condition">${["Neu", "Sehr gut", "Gut", "Gebraucht", "Unvollständig", "Defekt"].map((value) => `<option>${value}</option>`).join("")}</select>`)}
+      ${field("Geschätzter Wert", `<div class="input-with-icon">${icon("EU")}<input name="estimatedValue" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" /></div>`)}
+    </div>
+    <div class="vault-form-actions"><button class="secondary-action" data-vault-close-form type="button">Abbrechen</button><button class="primary-action" type="submit" ${state.vaultBusy ? "disabled" : ""}>${icon("SA")}${state.vaultBusy === "create" ? "Wird gespeichert..." : "Exemplar speichern"}</button></div>
+  </form>`;
+}
+
+function vaultEmptyState(importable) {
+  return `<section class="vault-empty">
+    <span>${icon("SA")}</span><div><p>Dein Vault ist bereit</p><h3>Beginne mit dem ersten Spiel oder Film</h3><small>Fotografiere den Artikel oder übernimm vorhandene RAMROD-Datensätze. Nichts wird automatisch angeboten.</small></div>
+    <div><button class="primary-action" data-vault-scan type="button">${icon("KA")}Ersten Artikel fotografieren</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
+    ${importable.length ? vaultImportStrip(importable) : ""}
+  </section>`;
+}
+
+function vaultImportStrip(items) {
+  return `<details class="vault-import-strip"><summary>Vorhandene RAMROD-Artikel in die Sammlung übernehmen <span>${items.length}</span></summary><div>${items.map((item) => `<article><img src="${escapeHtml(item.image)}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.sku)} · ${euro(item.fair)}</small></span><button class="secondary-action" data-vault-import="${item.id}" type="button">Übernehmen</button></article>`).join("")}</div></details>`;
+}
+
+function vaultItemRow(item) {
+  const collection = collectionDefaults(item);
+  const status = collectionStatus(item);
+  const subtitle = status === "loaned"
+    ? `Bei ${collection.borrowerName || "unbekannt"}${collection.dueAt ? ` · bis ${formatShortDate(collection.dueAt)}` : ""}`
+    : `${collection.platform || item.category || "Ohne Plattform"}${collection.location ? ` · ${collection.location}` : ""}`;
+  return `<button class="vault-item-row ${state.vaultSelected === item.id ? "active" : ""}" data-vault-select="${item.id}" type="button">
+    <img src="${escapeHtml(item.image)}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(subtitle)}</small></span>
+    <span class="vault-row-meta"><em class="vault-status ${status}">${escapeHtml(collectionStatusLabel(item))}</em><strong>${euro(collection.estimatedValue || item.fair || 0)}</strong></span>
+  </button>`;
+}
+
+function vaultInspector(item) {
+  const collection = collectionDefaults(item);
+  const status = collectionStatus(item);
+  return `<article class="vault-inspector">
+    <div class="vault-inspector-media"><img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.title)}" /><span class="vault-status ${status}">${escapeHtml(collectionStatusLabel(item))}</span></div>
+    <div class="vault-inspector-content">
+      <div><p>${escapeHtml(item.sku)}</p><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml([collection.platform, collection.edition].filter(Boolean).join(" · ") || item.category || "Sammlungsstück")}</span></div>
+      <dl class="vault-facts">
+        <div><dt>Wert</dt><dd>${euro(collection.estimatedValue || item.fair || 0)}</dd></div>
+        <div><dt>Zustand</dt><dd>${escapeHtml(item.condition || "Nicht erfasst")}</dd></div>
+        <div><dt>Standort</dt><dd>${escapeHtml(collection.location || "Nicht zugeordnet")}</dd></div>
+        <div><dt>Barcode</dt><dd>${escapeHtml(collection.barcode || "Nicht erfasst")}</dd></div>
+      </dl>
+      ${status === "loaned" ? `<section class="vault-loan-summary"><span>${icon("VL")}</span><div><small>Verliehen an</small><strong>${escapeHtml(collection.borrowerName || "Unbekannt")}</strong><p>${collection.loanedAt ? `Seit ${formatShortDate(collection.loanedAt)}` : ""}${collection.dueAt ? ` · Rückgabe ${formatShortDate(collection.dueAt)}` : ""}</p></div></section>` : ""}
+      ${state.vaultLoanItem === item.id ? vaultLoanForm(item) : ""}
+      <div class="vault-actions">${vaultActions(item)}</div>
+      <p class="vault-safety-note">${status === "owned" ? "Dieses Exemplar ist nur inventarisiert und auf keinem Verkaufskanal sichtbar." : status === "loaned" ? "Verliehene Exemplare sind für den Verkauf gesperrt." : "RAMROD führt dieses Exemplar weiter im Verkaufsprozess; sein Sammlungsstatus bleibt sichtbar."}</p>
+    </div>
+  </article>`;
+}
+
+function vaultActions(item) {
+  const status = collectionStatus(item);
+  if (status === "loaned") {
+    return `<button class="primary-action" data-vault-return="${item.id}" type="button" ${state.vaultBusy ? "disabled" : ""}>${icon("RS")}Rückgabe bestätigen</button>`;
+  }
+  if (["selling", "listed"].includes(status)) {
+    return `<button class="primary-action" data-vault-open-sale="${item.id}" type="button">${icon("VK")}Verkaufsstatus öffnen</button>${status === "selling" ? `<button class="secondary-action" data-vault-cancel-sale="${item.id}" type="button" ${state.vaultBusy ? "disabled" : ""}>Im Vault behalten</button>` : ""}`;
+  }
+  if (status === "sold") return `<button class="secondary-action" data-view="shipping" type="button">${icon("VS")}Verkauf ansehen</button>`;
+  return `<button class="secondary-action" data-vault-loan="${item.id}" type="button">${icon("VL")}Verleihen</button><button class="primary-action" data-vault-sell="${item.id}" type="button" ${state.vaultBusy || !can("inventory:write") ? "disabled" : ""}>${icon("VK")}Über RAMROD verkaufen</button>`;
+}
+
+function vaultLoanForm(item) {
+  return `<form class="vault-loan-form" data-vault-loan-form="${item.id}">
+    ${field("Verliehen an", `<input name="borrowerName" required placeholder="Name" />`)}
+    ${field("Kontakt", `<input name="borrowerContact" placeholder="Telefon oder E-Mail, optional" />`)}
+    ${field("Rückgabe geplant", `<input name="dueAt" type="date" />`)}
+    <button class="primary-action" type="submit" ${state.vaultBusy ? "disabled" : ""}>Ausleihe speichern</button>
+  </form>`;
+}
+
+function formatShortDate(value) {
+  const date = new Date(value || 0);
+  return Number.isNaN(date.getTime()) || !value ? "unbekannt" : new Intl.DateTimeFormat("de-DE", { dateStyle: "medium" }).format(date);
 }
 
 function archiveView() {
@@ -2910,7 +3153,7 @@ function agentTeamOverview(activeRuns, runners) {
 }
 
 function channelConnectorPanel(accounts) {
-  const connectableChannels = runtimeChannelCatalog.filter((entry) => !["spezialforum", "ramrod_shop"].includes(entry.id));
+  const connectableChannels = runtimeChannelCatalog.filter((entry) => entry.type !== "erp" && !["spezialforum", "ramrod_shop"].includes(entry.id));
   const connected = accounts.filter((account) => account.status === "connected");
   const defaultEmail = state.authSession?.user?.email || "";
   const disabled = !can("channels:manage") || Boolean(state.startingAgent);
@@ -3186,9 +3429,10 @@ function settingsView() {
   const members = state.team.members || [];
   const invitations = state.team.invitations || [];
   const connectedIds = new Set((state.team.channels || []).map((entry) => entry.channel_id));
-  const availableChannels = channelCatalog().filter((entry) => !connectedIds.has(entry.id) && (entry.selectable || ["instagram", "ramrod_shop"].includes(entry.id))).slice(0, 10);
+  const availableChannels = channelCatalog().filter((entry) => entry.type !== "erp" && !connectedIds.has(entry.id) && (entry.selectable || ["instagram", "ramrod_shop"].includes(entry.id))).slice(0, 10);
+  const jtlAccount = (state.team.channels || []).find((entry) => entry.channel_id === "jtl_wawi");
   return `<section class="settings-layout">
-    <header class="settings-intro"><div><p>${escapeHtml(organization.name)}</p><h2>Menschen und Verkaufskanäle</h2><span>Ein Login pro Person. Rechte gelten nur in diesem Kundenbereich.</span></div><div class="role-legend"><span><b>Inhaber</b> alles</span><span><b>Admin</b> Team + Freigaben</span><span><b>Operator</b> Artikel + KI</span><span><b>Leser</b> nur ansehen</span></div></header>
+    <header class="settings-intro"><div><p>${escapeHtml(organization.name)}</p><h2>Team, Verkaufskanäle und Systeme</h2><span>Ein Login pro Person. Rechte und Verbindungen gelten nur in diesem Kundenbereich.</span></div><div class="role-legend"><span><b>Inhaber</b> alles</span><span><b>Admin</b> Team + Freigaben</span><span><b>Operator</b> Artikel + KI</span><span><b>Leser</b> nur ansehen</span></div></header>
     <div class="settings-columns">
       <section class="team-section"><div class="panel-heading"><div><p>Zugänge</p><h2>${members.length} Teammitglieder</h2></div></div>
         <div class="team-list">${members.map(teamMemberRow).join("") || `<p class="muted-copy">Noch keine Mitglieder.</p>`}</div>
@@ -3199,6 +3443,7 @@ function settingsView() {
       <section class="channel-section"><div class="panel-heading"><div><p>Verkauf</p><h2>Kanäle dieses Bereichs</h2></div></div>
         <div class="configured-channels">${(state.team.channels || []).map((account) => `<div class="configured-channel"><span>${icon(channelAbbreviation(account.channel_id))}</span><div><strong>${escapeHtml(channelLabel(account.channel_id))}</strong><small>${escapeHtml(agentAccountStatusLabel(account.status))}</small></div><em class="status-pill ${agentStatusTone(account.status)}">${escapeHtml(agentAccountStatusLabel(account.status))}</em></div>`).join("") || `<p class="muted-copy">Noch keine Kanäle ausgewählt.</p>`}</div>
         ${availableChannels.length ? `<form id="channel-settings-form" class="channel-settings-form"><fieldset><legend>Weitere Kanäle vormerken</legend>${availableChannels.map((channel) => `<label><input type="checkbox" name="channels" value="${escapeHtml(channel.id)}" /><span><strong>${escapeHtml(channel.name)}</strong><small>${escapeHtml(channel.statusLabel || "Geplant")}</small></span></label>`).join("")}</fieldset><button class="secondary-action" type="submit">${icon("PL")}Auswahl hinzufügen</button></form>` : `<p class="settings-note">Alle verfügbaren Kanäle sind bereits ausgewählt.</p>`}
+        ${organization.slug === "strongvision" ? `<div class="configured-channel"><span>${icon("JT")}</span><div><strong>JTL-Wawi</strong><small>${escapeHtml(jtlAccount ? agentAccountStatusLabel(jtlAccount.status) : "Lesenden Pilot vorbereiten")}</small></div><em class="status-pill ${jtlAccount ? agentStatusTone(jtlAccount.status) : "waiting"}">${escapeHtml(jtlAccount ? agentAccountStatusLabel(jtlAccount.status) : "Offen")}</em></div><p class="settings-note">JTL führt Artikelstamm, Bestand, Lager und Aufträge. RAMROD ergänzt Fotos, KI-Analyse, Preise und Verkaufskanäle.</p>` : ""}
       </section>
     </div>
   </section>`;
@@ -3215,7 +3460,7 @@ function invitationRow(invitation) {
 }
 
 function channelAbbreviation(channelId) {
-  return { ebay: "EB", whatnot: "WN", kleinanzeigen: "KA", instagram: "IG", ramrod_shop: "RS", vinted: "VI", facebook_marketplace: "FB" }[channelId] || String(channelId || "CH").slice(0, 2).toUpperCase();
+  return { ebay: "EB", whatnot: "WN", kleinanzeigen: "KA", instagram: "IG", ramrod_shop: "RS", vinted: "VI", facebook_marketplace: "FB", jtl_wawi: "JT" }[channelId] || String(channelId || "CH").slice(0, 2).toUpperCase();
 }
 
 function formatDate(value) {
@@ -3355,8 +3600,183 @@ function bindEvents() {
 
   document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => {
     state.view = button.dataset.view;
+    if (state.view === "scan") state.captureDestination = "sales";
     render();
     if (state.view === "settings" && !state.team) loadTeamSettings();
+  }));
+
+  document.querySelectorAll("[data-vault-scan]").forEach((button) => button.addEventListener("click", () => {
+    state.captureDestination = "vault";
+    state.captureMode = "single";
+    state.draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
+    state.recognition = null;
+    state.recognitionMeta = null;
+    state.view = "scan";
+    render();
+  }));
+  document.querySelector("[data-scan-sales]")?.addEventListener("click", () => {
+    state.captureDestination = "sales";
+    state.view = "scan";
+    render();
+  });
+  document.querySelectorAll("[data-vault-new]").forEach((button) => button.addEventListener("click", () => {
+    state.vaultFormOpen = true;
+    render();
+    requestAnimationFrame(() => document.querySelector("#vault-entry-form input[name='title']")?.focus());
+  }));
+  document.querySelectorAll("[data-vault-close-form]").forEach((button) => button.addEventListener("click", () => {
+    state.vaultFormOpen = false;
+    render();
+  }));
+  document.querySelectorAll("[data-vault-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.vaultFilter = button.dataset.vaultFilter || "all";
+    render();
+  }));
+  document.querySelectorAll("[data-vault-select]").forEach((button) => button.addEventListener("click", () => {
+    state.vaultSelected = button.dataset.vaultSelect;
+    state.vaultLoanItem = "";
+    render();
+  }));
+  const vaultSearch = document.querySelector("#vault-search");
+  vaultSearch?.addEventListener("input", (event) => {
+    state.search = event.currentTarget.value;
+  });
+  vaultSearch?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") render();
+  });
+  document.querySelector("#vault-entry-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.vaultBusy) return;
+    const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const value = Math.max(0, Number(values.estimatedValue || 0));
+    const mediaType = String(values.mediaType || "other");
+    const item = moveItemToCollection(enrichWorkflow({
+      id: makeId(),
+      sku: nextVaultSku(),
+      boxId: boxes[0]?.id || `${activeOrganization().shortCode || "VLT"}-001`,
+      title: String(values.title || "Unbenanntes Sammlungsstück").trim(),
+      category: mediaType === "game" ? "Games" : mediaType === "film" ? "Filme" : "Sammlung",
+      franchise: String(values.platform || "").trim(),
+      condition: String(values.condition || "Gut"),
+      completeness: "Noch nicht im Detail erfasst",
+      confidence: 100,
+      low: value ? Math.round(value * 0.75) : 0,
+      fair: value,
+      aggressive: value ? Math.round(value * 1.2) : 0,
+      channel: "Sammlung",
+      stage: "Sammlung",
+      weight: 0,
+      image: "/app/assets/ramrod-icon-512.png",
+      notes: "Privates Sammlungsinventar. Nicht zum Verkauf freigegeben.",
+      sourceType: "vault-manual",
+      research: []
+    }), {
+      mediaType,
+      platform: String(values.platform || "").trim(),
+      edition: String(values.edition || "").trim(),
+      barcode: String(values.barcode || "").trim(),
+      location: String(values.location || "").trim(),
+      estimatedValue: value
+    });
+    state.vaultBusy = "create";
+    state.items.unshift(item);
+    state.vaultSelected = item.id;
+    state.vaultFormOpen = false;
+    state.importStatus = "Sammlungsstück wird gespeichert...";
+    render();
+    await persistItem(item, "Sammlungsstück");
+    state.vaultBusy = "";
+    state.importStatus = `${item.title} ist jetzt in deiner Sammlung.`;
+    render();
+  });
+  document.querySelectorAll("[data-vault-import]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.vaultImport);
+    if (!item || item.collection || state.vaultBusy) return;
+    const activeSale = item.stage === "Gelistet" || item.ebayListing?.status === "active";
+    item.collection = collectionDefaults(item, { status: activeSale ? "listed" : "selling" });
+    item.collection.history.push({ type: "imported", at: new Date().toISOString(), note: "Aus RAMROD-Bestand übernommen" });
+    state.vaultBusy = item.id;
+    state.vaultSelected = item.id;
+    await persistItem(item, "Sammlungszuordnung");
+    state.vaultBusy = "";
+    state.importStatus = `${item.title} wurde in den Vault übernommen.`;
+    render();
+  }));
+  document.querySelectorAll("[data-vault-loan]").forEach((button) => button.addEventListener("click", () => {
+    state.vaultLoanItem = state.vaultLoanItem === button.dataset.vaultLoan ? "" : button.dataset.vaultLoan;
+    render();
+  }));
+  document.querySelectorAll("[data-vault-loan-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const item = state.items.find((entry) => entry.id === event.currentTarget.dataset.vaultLoanForm);
+    if (!item || state.vaultBusy) return;
+    const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const now = new Date().toISOString();
+    item.collection = collectionDefaults(item, {
+      status: "loaned",
+      borrowerName: String(values.borrowerName || "").trim(),
+      borrowerContact: String(values.borrowerContact || "").trim(),
+      loanedAt: now,
+      dueAt: String(values.dueAt || "")
+    });
+    item.collection.history.push({ type: "loaned", at: now, borrowerName: item.collection.borrowerName, dueAt: item.collection.dueAt });
+    state.vaultBusy = item.id;
+    state.vaultLoanItem = "";
+    await persistItem(item, "Ausleihe");
+    state.vaultBusy = "";
+    state.importStatus = `${item.title} ist als verliehen markiert.`;
+    render();
+  }));
+  document.querySelectorAll("[data-vault-return]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.vaultReturn);
+    if (!item || state.vaultBusy) return;
+    const now = new Date().toISOString();
+    item.collection = collectionDefaults(item, { status: "owned", returnedAt: now, borrowerName: "", borrowerContact: "", loanedAt: "", dueAt: "" });
+    item.collection.history.push({ type: "returned", at: now });
+    state.vaultBusy = item.id;
+    await persistItem(item, "Rückgabe");
+    state.vaultBusy = "";
+    state.importStatus = `${item.title} ist wieder zurück in deiner Sammlung.`;
+    render();
+  }));
+  document.querySelectorAll("[data-vault-sell]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.vaultSell);
+    if (!item || state.vaultBusy || collectionStatus(item) !== "owned") return;
+    if (!window.confirm(`${item.title} an RAMROD zum Verkauf übergeben?\n\nRAMROD prüft Preis, Strategie und Verkaufskanal neu. Es wird noch nichts veröffentlicht.`)) return;
+    const now = new Date().toISOString();
+    item.collection = collectionDefaults(item, { status: "selling", saleRequestedAt: now });
+    item.collection.history.push({ type: "sale_requested", at: now });
+    item.stage = "Freigabe";
+    item.channel = "Pruefen";
+    item.sourceType = "vault-handoff";
+    item.approval = { status: "pending", approvedAt: "", strategyAccepted: false, summary: "" };
+    item.ebayDraft = null;
+    item.ebayListing = null;
+    state.vaultBusy = item.id;
+    await persistItem(item, "Verkaufsübergabe");
+    state.vaultBusy = "";
+    state.selected = item.id;
+    state.view = "review";
+    state.importStatus = "Sammlungsstück übergeben. RAMROD prüft jetzt Marktwert, Kanal und Verkaufsstrategie.";
+    render();
+  }));
+  document.querySelectorAll("[data-vault-cancel-sale]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.vaultCancelSale);
+    if (!item || state.vaultBusy || item.ebayListing?.status === "active") return;
+    const now = new Date().toISOString();
+    item.collection = collectionDefaults(item, { status: "owned", saleRequestedAt: "" });
+    item.collection.history.push({ type: "sale_cancelled", at: now });
+    moveItemToCollection(item);
+    state.vaultBusy = item.id;
+    await persistItem(item, "Verkaufsübergabe");
+    state.vaultBusy = "";
+    state.importStatus = `${item.title} bleibt in deiner Sammlung.`;
+    render();
+  }));
+  document.querySelectorAll("[data-vault-open-sale]").forEach((button) => button.addEventListener("click", () => {
+    state.selected = button.dataset.vaultOpenSale;
+    state.view = "review";
+    render();
   }));
 
   document.querySelector("#invite-member-form")?.addEventListener("submit", async (event) => {
@@ -4039,18 +4459,25 @@ function bindEvents() {
         ? "Identität wird mit Markt, Zustand und Verkaufsstrategie angereichert..."
         : "Kein Foto vorhanden, nutze lokalen Demo-Vorschlag.";
       render();
-      const item = enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
+      let item = enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
       item.recognition = state.recognition;
       item.recognitionEvidence = state.recognition?.evidence || null;
+      if (state.captureDestination === "vault") {
+        item.sku = nextVaultSku();
+        item = moveItemToCollection(item);
+      }
       state.items.unshift(item);
       state.selected = item.id;
+      if (state.captureDestination === "vault") state.vaultSelected = item.id;
       state.draft = createEmptyDraft(state.draft.boxId);
       state.recognition = null;
       state.recognitionMeta = null;
-      state.view = "review";
-      state.importStatus = usedLiveAi
-        ? "Artikel erkannt und Verkaufsstrategie erstellt. Der Marktcheck läuft automatisch; danach kannst du freigeben."
-        : "Demo-Artikelkarte und Verkaufsstrategie erzeugt.";
+      state.view = state.captureDestination === "vault" ? "vault" : "review";
+      state.importStatus = state.captureDestination === "vault"
+        ? "Artikel erkannt und in deiner Sammlung gespeichert. Er wird erst nach deiner ausdrücklichen Übergabe verkauft."
+        : usedLiveAi
+          ? "Artikel erkannt und Verkaufsstrategie erstellt. Der Marktcheck läuft automatisch; danach kannst du freigeben."
+          : "Demo-Artikelkarte und Verkaufsstrategie erzeugt.";
       await persistItem(item, "Artikel");
     } catch (error) {
       state.importStatus = liveAnalysisErrorMessage(error);

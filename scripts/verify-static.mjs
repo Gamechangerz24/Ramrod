@@ -45,6 +45,9 @@ for (const token of [
   "Whatnot Skript",
   "Autonomie-Zentrale",
   "Agenten sicher steuern",
+  "Deine Spiele- und Filmsammlung",
+  "Über RAMROD verkaufen",
+  "Rückgabe bestätigen",
   "Anmelden"
 ]) {
   if (!js.includes(token)) {
