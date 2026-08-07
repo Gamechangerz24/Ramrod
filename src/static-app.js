@@ -440,6 +440,40 @@ function analyze(draft = state.draft) {
   });
 }
 
+function inventoryItemFromRecognition(draft = state.draft, recognition = state.recognition) {
+  const identity = recognition?.identity || {};
+  const estimate = recognition?.quickEstimate || {};
+  const evidence = recognition?.evidence || {};
+  const fair = Math.max(0, Number(estimate.fair || 0));
+  const low = Math.max(0, Number(estimate.low || fair));
+  const high = Math.max(fair, Number(estimate.high || fair));
+  const confidence = Math.max(0, Math.min(100, Number(evidence.score || recognition?.modelConfidence || estimate.confidence || 0)));
+  const title = String(identity.title || draft.query || "Unbekanntes Medium").trim();
+
+  return enrichWorkflow({
+    id: makeId(),
+    sku: nextVaultSku(),
+    boxId: draft.boxId,
+    title,
+    category: identity.category || identity.productType || "Medium",
+    franchise: identity.franchise || identity.brand || identity.platform || "",
+    condition: draft.condition,
+    completeness: draft.completeness,
+    confidence,
+    low,
+    fair,
+    aggressive: high,
+    channel: "Sammlung",
+    stage: "Sammlung",
+    weight: Number(draft.weight) || 0,
+    barcode: draft.barcode || "",
+    image: draft.photos?.[0]?.dataUrl || draft.photo || "",
+    notes: estimate.basis || "Schneller Inventareintrag. Medieninformationen werden im Hintergrund ergänzt.",
+    sourceType: "vault-recognition",
+    research: []
+  });
+}
+
 function normalizeItems(items) {
   return (items || []).map((item) => enrichWorkflow(item));
 }
@@ -1839,17 +1873,19 @@ async function runBatchAnalysis() {
 
       entry.status = "analyzing";
       state.batchProgress.label = vaultCapture
-        ? `Artikel ${index + 1}: Inventareintrag erstellen`
+        ? `Artikel ${index + 1}: Inventareintrag speichern`
         : `Artikel ${index + 1}: Preis, Kanal und Strategie`;
       render();
-      let item = enrichWorkflow(await analyzeWithApi());
+      let item = vaultCapture
+        ? inventoryItemFromRecognition(state.draft, recognition)
+        : enrichWorkflow(await analyzeWithApi());
       item.recognition = recognition;
       item.recognitionEvidence = recognition.evidence || null;
-      if (state.captureDestination === "vault") {
-        item.sku = nextVaultSku();
+      if (vaultCapture) {
         item = moveItemToCollection(item, {
           barcode: state.draft.barcode || item.barcode || "",
-          capturedViews: state.draft.photos?.length || 1
+          capturedViews: state.draft.photos?.length || 1,
+          enrichment: { status: "pending", sources: [], enrichedAt: "" }
         });
       } else if (recognition.evidence?.status !== "ready_for_research") {
         item.channel = "Pruefen";
@@ -2209,6 +2245,19 @@ function vaultItemRow(item) {
   </button>`;
 }
 
+function vaultEnrichmentStatus(collection) {
+  const status = collection.enrichment?.status || "pending";
+  const labels = {
+    pending: ["Metadaten ausstehend", "Genres, Stimmung, Mitwirkende und Reviews werden später ergänzt."],
+    queued: ["Anreicherung eingeplant", "Der Hintergrunddienst übernimmt diesen Titel als Nächstes."],
+    running: ["Metadaten werden ergänzt", "Du kannst RAMROD währenddessen weiter benutzen."],
+    complete: ["Medienwissen vollständig", "Der Titel kann für Suche, Empfehlungen und Zusammenstellungen verwendet werden."],
+    failed: ["Anreicherung prüfen", "Der Inventareintrag bleibt erhalten; nur die Zusatzinformationen fehlen."]
+  };
+  const [label, description] = labels[status] || labels.pending;
+  return `<section class="vault-enrichment ${escapeHtml(status)}"><span>${icon(status === "complete" ? "OK" : "AI")}</span><div><small>Medienwissen</small><strong>${escapeHtml(label)}</strong><p>${escapeHtml(description)}</p></div></section>`;
+}
+
 function vaultInspector(item) {
   const collection = collectionDefaults(item);
   const status = collectionStatus(item);
@@ -2222,6 +2271,7 @@ function vaultInspector(item) {
         <div><dt>Standort</dt><dd>${escapeHtml(collection.location || "Nicht zugeordnet")}</dd></div>
         <div><dt>Barcode</dt><dd>${escapeHtml(collection.barcode || "Nicht erfasst")}</dd></div>
       </dl>`}
+      ${vaultEnrichmentStatus(collection)}
       ${status === "loaned" ? `<section class="vault-loan-summary"><span>${icon("VL")}</span><div><small>Verliehen an</small><strong>${escapeHtml(collection.borrowerName || "Unbekannt")}</strong><p>${collection.loanedAt ? `Seit ${formatShortDate(collection.loanedAt)}` : ""}${collection.dueAt ? ` · Rückgabe ${formatShortDate(collection.dueAt)}` : ""}</p></div></section>` : ""}
       ${state.vaultLoanItem === item.id ? vaultLoanForm(item) : ""}
       <div class="vault-actions">${vaultActions(item)}</div>
@@ -4733,10 +4783,13 @@ function bindEvents() {
           ? "Identität wird mit Markt, Zustand und Verkaufsstrategie angereichert..."
           : "Kein Foto vorhanden, nutze lokalen Demo-Vorschlag.";
       render();
-      let item = enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
+      const vaultCapture = state.captureDestination === "vault";
+      let item = usedLiveAi && vaultCapture
+        ? inventoryItemFromRecognition(state.draft, state.recognition)
+        : enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
       item.recognition = state.recognition;
       item.recognitionEvidence = state.recognition?.evidence || null;
-      if (state.captureDestination === "vault") {
+      if (vaultCapture) {
         const existingIndex = state.items.findIndex((entry) => entry.id === state.vaultReidentifyItem);
         if (existingIndex >= 0) {
           const previous = state.items[existingIndex];
@@ -4768,10 +4821,10 @@ function bindEvents() {
           });
           state.items[existingIndex] = item;
         } else {
-          item.sku = nextVaultSku();
           item = moveItemToCollection(item, {
             barcode: state.draft.barcode || item.barcode || "",
-            capturedViews: state.draft.photos?.length || 1
+            capturedViews: state.draft.photos?.length || 1,
+            enrichment: { status: "pending", sources: [], enrichedAt: "" }
           });
           state.items.unshift(item);
         }

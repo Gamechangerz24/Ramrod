@@ -7481,6 +7481,57 @@ img {
   padding: 10px;
 }
 
+.vault-enrichment {
+  align-items: center;
+  background: #f3f6f8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  padding: 10px;
+}
+
+.vault-enrichment > span {
+  align-items: center;
+  background: #111;
+  border-radius: 7px;
+  color: var(--orange);
+  display: flex;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.vault-enrichment small,
+.vault-enrichment strong {
+  display: block;
+}
+
+.vault-enrichment small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.vault-enrichment p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 3px 0 0;
+}
+
+.vault-enrichment.complete {
+  background: #edf8f1;
+  border-color: #b8dec6;
+}
+
+.vault-enrichment.failed {
+  background: #fff1e8;
+  border-color: #ffc7a5;
+}
+
 .vault-loan-summary small,
 .vault-loan-summary strong {
   display: block;
