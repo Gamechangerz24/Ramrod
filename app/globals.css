@@ -955,6 +955,25 @@ img {
   font-weight: 900;
 }
 
+.photo-source-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0 0 16px;
+}
+
+.photo-source-actions > button {
+  justify-content: center;
+  margin: 0;
+  min-height: 46px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.photo-source-input {
+  display: none;
+}
+
 .photo-thumbnails {
   display: grid;
   gap: 8px;
@@ -6033,6 +6052,10 @@ img {
 
   .photo-thumbnails {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .photo-source-actions {
+    grid-template-columns: 1fr;
   }
 
   .evidence-hero {

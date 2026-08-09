@@ -1653,6 +1653,15 @@ function captureIntent() {
   return state.view === "vault-scan" || state.captureDestination === "vault" ? "media_library" : "sales";
 }
 
+function photoSourceActions(photoCount, photoLimit) {
+  if (photoCount >= photoLimit) return "";
+  return `<div class="photo-source-actions" aria-label="Bilder hinzufügen">
+    <button class="secondary-action" data-photo-camera type="button">${icon("KA")}${photoCount ? "Weiteres Foto aufnehmen" : "Foto aufnehmen"}</button>
+    <button class="secondary-action" data-photo-upload type="button">${icon("UP")}${photoCount ? "Weitere Bilder hochladen" : "Bilder hochladen"}</button>
+    <input class="photo-source-input" id="photo-upload" accept="image/*" type="file" multiple />
+  </div>`;
+}
+
 function vaultScanView() {
   const reidentifyItem = state.items.find((item) => item.id === state.vaultReidentifyItem);
   const photos = state.draft.photos?.length
@@ -1695,9 +1704,9 @@ function vaultScanView() {
           <span>${icon("01")}Cover / Vorderseite</span><span>${icon("02")}Rückseite und Barcode</span><span>${icon("03")}Rücken oder Plattform</span><span>${icon("04")}Datenträger und Zustand</span>
         </div>
         <label class="photo-drop vault-photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Vorschau des Sammlungsstücks" />` : `<span>${icon("KA")}<strong>Erstes Foto aufnehmen</strong><small>Beginne mit dem vollständigen Cover oder der Vorderseite</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
-        <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weitere Seite desselben Exemplars" : "Kamera oder Mediathek"}</strong></div>
+        <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weitere Seite desselben Exemplars" : "Kamera oder vorhandene Bilder"}</strong></div>
+        ${photoSourceActions(photos.length, photoLimit)}
         ${photos.length ? `<div class="photo-thumbnails vault-photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Qualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
-        ${photos.length < photoLimit ? `<button class="secondary-action vault-add-photo" data-capture-more type="button">${icon("PL")}Weitere Ansicht aufnehmen</button>` : ""}
         ${quickValueCard(state.recognition, true)}
         ${identityNeedsConfirmation ? `<section class="vault-identity-confirmation">
           <strong>Treffer unsicher: Titel kurz korrigieren</strong>
@@ -1770,7 +1779,8 @@ function scanView() {
         ? `<div class="batch-instruction"><strong>${state.batchDrafts.length} Artikel gespeichert</strong><span>Fotografiere alle Seiten dieses Artikels. Danach „Nächster Artikel“.</span></div>`
         : `<div class="workflow-progress ${vaultCapture ? "vault-progress" : ""}" aria-label="${vaultCapture ? "Sammlungsworkflow" : "Verkaufsworkflow"}">${progressSteps.map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>`}
       <label class="photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
-      <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder Mediathek"}</strong></div>
+      <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder vorhandene Bilder"}</strong></div>
+      ${photoSourceActions(photos.length, photoLimit)}
       ${photos.length ? `<div class="photo-thumbnails">${photos.map((photo, index) => `<div><img src="${photo.dataUrl}" alt="Ansicht ${index + 1}" /><button data-remove-photo="${index}" type="button" title="Foto entfernen">×</button><small>${photo.quality ? `${photo.quality.score}% Bildqualität` : `Ansicht ${index + 1}`}</small></div>`).join("")}</div>` : ""}
       ${quickValueCard(state.recognition, vaultCapture)}
       ${manualFields}
@@ -4435,6 +4445,12 @@ function bindEvents() {
   document.querySelectorAll("[data-capture-more]").forEach((button) => button.addEventListener("click", () => {
     document.querySelector("#photo")?.click();
   }));
+  document.querySelectorAll("[data-photo-camera]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("#photo")?.click();
+  }));
+  document.querySelectorAll("[data-photo-upload]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("#photo-upload")?.click();
+  }));
   document.querySelectorAll("[data-complete-photo-set]").forEach((button) => button.addEventListener("click", () => {
     if (!state.recognition) return;
     state.draft.photoSetComplete = true;
@@ -4697,8 +4713,8 @@ function bindEvents() {
     });
   });
 
-  const photo = document.querySelector("#photo");
-  if (photo) photo.addEventListener("change", async (event) => {
+  const photoInputs = document.querySelectorAll("#photo, #photo-upload");
+  photoInputs.forEach((photoInput) => photoInput.addEventListener("change", async (event) => {
     const photoLimit = capturePhotoLimit();
     const remaining = Math.max(0, photoLimit - (state.draft.photos?.length || 0));
     const files = [...(event.target.files || [])].slice(0, remaining);
@@ -4725,10 +4741,12 @@ function bindEvents() {
       state.importStatus = `${state.draft.photos.length} Foto${state.draft.photos.length === 1 ? "" : "s"} bereit · schwächste Bildqualität ${weakest}%.`;
     } catch (error) {
       state.importStatus = `Bildvorbereitung fehlgeschlagen: ${error.message}.`;
+    } finally {
+      event.target.value = "";
     }
     render();
     if ((state.captureMode === "single" || state.view === "vault-scan") && state.draft.photos.length) await runFastRecognition();
-  });
+  }));
 
   document.querySelectorAll("[data-remove-photo]").forEach((button) => button.addEventListener("click", async () => {
     const index = Number(button.dataset.removePhoto);
