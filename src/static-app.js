@@ -474,6 +474,20 @@ function inventoryItemFromRecognition(draft = state.draft, recognition = state.r
   });
 }
 
+function salesItemFromRecognition(draft = state.draft, recognition = state.recognition, error = null) {
+  const item = inventoryItemFromRecognition(draft, recognition);
+  return enrichWorkflow({
+    ...item,
+    sku: nextSku(draft.boxId),
+    channel: "Pruefen",
+    stage: "Gescannt",
+    sourceType: "live_recognition",
+    analysisPending: true,
+    analysisWarning: error?.message || "Markt- und Strategieanalyse steht noch aus.",
+    notes: "Produkt erkannt. Der angezeigte Preis ist eine vorläufige Bildschätzung; Marktquellen, Verkaufskanal und Strategie werden noch geprüft."
+  });
+}
+
 function normalizeItems(items) {
   return (items || []).map((item) => enrichWorkflow(item));
 }
@@ -922,6 +936,10 @@ function applyAutomationResult(item, result) {
   }
   if (result.decision) applySalesDecision(item, result.decision);
   if (result.ebayDraft) item.ebayDraft = result.ebayDraft;
+  if (result.priceCheck || result.decision) {
+    item.analysisPending = false;
+    item.analysisWarning = "";
+  }
 }
 
 function applySalesDecision(item, decision) {
@@ -1886,9 +1904,17 @@ async function runBatchAnalysis() {
         ? `Artikel ${index + 1}: Inventareintrag speichern`
         : `Artikel ${index + 1}: Preis, Kanal und Strategie`;
       render();
-      let item = vaultCapture
-        ? inventoryItemFromRecognition(state.draft, recognition)
-        : enrichWorkflow(await analyzeWithApi());
+      let item;
+      if (vaultCapture) {
+        item = inventoryItemFromRecognition(state.draft, recognition);
+      } else {
+        try {
+          item = enrichWorkflow(await analyzeWithApi());
+        } catch (error) {
+          item = salesItemFromRecognition(state.draft, recognition, error);
+          entry.warning = "Produkt erkannt; Markt- und Strategieanalyse wird nachgeholt.";
+        }
+      }
       item.recognition = recognition;
       item.recognitionEvidence = recognition.evidence || null;
       if (vaultCapture) {
@@ -4802,9 +4828,20 @@ function bindEvents() {
           : "Kein Foto vorhanden, nutze lokalen Demo-Vorschlag.";
       render();
       const vaultCapture = state.captureDestination === "vault";
-      let item = usedLiveAi && vaultCapture
-        ? inventoryItemFromRecognition(state.draft, state.recognition)
-        : enrichWorkflow(usedLiveAi ? await analyzeWithApi() : analyze());
+      let deferredAnalysisError = null;
+      let item;
+      if (usedLiveAi && vaultCapture) {
+        item = inventoryItemFromRecognition(state.draft, state.recognition);
+      } else if (usedLiveAi) {
+        try {
+          item = enrichWorkflow(await analyzeWithApi());
+        } catch (error) {
+          deferredAnalysisError = error;
+          item = salesItemFromRecognition(state.draft, state.recognition, error);
+        }
+      } else {
+        item = enrichWorkflow(analyze());
+      }
       item.recognition = state.recognition;
       item.recognitionEvidence = state.recognition?.evidence || null;
       if (vaultCapture) {
@@ -4861,8 +4898,10 @@ function bindEvents() {
         ? reidentified
           ? "Identität aktualisiert. SKU, Besitzstatus und Historie des Sammlungsstücks wurden beibehalten."
           : "Artikel erkannt und in deiner Sammlung gespeichert. Er wird erst nach deiner ausdrücklichen Übergabe verkauft."
-        : usedLiveAi
-          ? "Artikel erkannt und Verkaufsstrategie erstellt. Der Marktcheck läuft automatisch; danach kannst du freigeben."
+        : deferredAnalysisError
+          ? "Artikel erkannt und mit vorläufigem Preis gespeichert. Marktquellen, Kanal und Verkaufsstrategie werden in der Prüfung nachgeholt."
+          : usedLiveAi
+            ? "Artikel erkannt und Verkaufsstrategie erstellt. Der Marktcheck läuft automatisch; danach kannst du freigeben."
           : "Demo-Artikelkarte und Verkaufsstrategie erzeugt.";
       await persistItem(item, "Artikel");
     } catch (error) {
@@ -5298,8 +5337,7 @@ async function runFastRecognition() {
         visualMatches: state.draft.visualMatches || []
       })
     });
-    const payload = await response.json();
-    if (!response.ok) throw apiError(response, payload);
+    const payload = await readJsonResponse(response);
     const result = response.status === 202 && payload.job?.id
       ? await waitForRecognition(payload.job.id)
       : payload;
@@ -5385,10 +5423,7 @@ async function analyzeWithApi() {
       recognition: state.recognition
     })
   });
-  const payload = await response.json();
-  if (!response.ok) {
-    throw apiError(response, payload);
-  }
+  const payload = await readJsonResponse(response);
   if (response.status === 202 && payload.job?.id) {
     const item = await waitForImageAnalysis(payload.job.id);
     item.image = photos[0].dataUrl;
@@ -5418,6 +5453,7 @@ function sourceBadge(item) {
   const source = item.sourceType || (item.sourceFile ? "batch_openai" : "unknown");
   const labels = {
     live_openai: "Quelle: Live-OpenAI",
+    live_recognition: "Quelle: Schnellerkennung · Marktcheck offen",
     batch_openai: "Quelle: Drive-Batch OpenAI",
     local_qwen: "Quelle: Lokales Qwen",
     mock: "Quelle: Mock/Simulation",

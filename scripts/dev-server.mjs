@@ -130,7 +130,7 @@ const platformAdminEmails = new Set(
 const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || "";
 const elevenLabsModelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 const workerJobTypes = new Set(["health_check", "price_check", "ebay_draft", "recognize_image", "analyze_image"]);
-const automaticPriceCheckSources = new Set(["live_openai", "batch_openai", "local_qwen", "vault-handoff"]);
+const automaticPriceCheckSources = new Set(["live_openai", "live_recognition", "batch_openai", "local_qwen", "vault-handoff"]);
 const publicAppUrl = String(process.env.RAMROD_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "");
 const ebaySellerOAuthConfig = ebayOAuthConfig(process.env);
 const credentialStore = createEncryptedSecretStore();
@@ -406,7 +406,10 @@ const server = createServer(async (request, response) => {
     serveStatic(request, response);
   } catch (error) {
     console.error(error);
-    sendJson(response, 500, { error: "internal_error", message: error.message });
+    sendJson(response, error.status || 500, {
+      error: error.code || "internal_error",
+      message: redactSecret(error.message)
+    });
   }
 });
 
@@ -2575,15 +2578,17 @@ async function requestOpenAiRecognition(body, images, apiKey, candidateModel, st
       ? { reasoning: { effort: recognitionReasoningEffort } }
       : {})
   };
-  const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
+  const { response: openAiResponse, body: result } = await fetchJsonUpstream("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(requestBody)
+  }, {
+    label: "OpenAI-Schnellerkennung",
+    retries: 1
   });
-  const result = await openAiResponse.json();
   if (!openAiResponse.ok) {
     const error = new Error(result.error?.message || "OpenAI recognition failed");
     error.status = openAiResponse.status;
@@ -2706,15 +2711,17 @@ async function handleAnalyzeImage(request, response) {
     },
     ...(isGpt56Model(model) ? { reasoning: { effort: strategyReasoningEffort } } : {})
   };
-  const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
+  const { response: openAiResponse, body: result } = await fetchJsonUpstream("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(requestBody)
+  }, {
+    label: "OpenAI-Markt- und Strategieanalyse",
+    retries: 1
   });
-  const result = await openAiResponse.json();
 
   if (!openAiResponse.ok) {
     sendJson(response, openAiResponse.status, {
@@ -4168,6 +4175,44 @@ function sendJson(response, status, payload) {
     "Cache-Control": "no-store"
   });
   response.end(JSON.stringify(payload));
+}
+
+async function fetchJsonUpstream(url, options = {}, { label = "Externer Dienst", retries = 0 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetch(url, options);
+      const text = await response.text();
+      let body;
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        const error = new Error(`${label} lieferte keine verwertbare Antwort (HTTP ${response.status}).`);
+        error.status = 502;
+        error.code = "invalid_upstream_response";
+        lastError = error;
+        if (attempt < retries) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+          continue;
+        }
+        throw error;
+      }
+
+      if (!response.ok && response.status >= 500 && attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+        continue;
+      }
+      return { response, body };
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries && !error.status) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError || new Error(`${label} ist momentan nicht erreichbar.`);
 }
 
 function extractJson(body) {
