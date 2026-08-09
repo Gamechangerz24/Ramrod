@@ -266,6 +266,19 @@ const state = {
   vaultLoanItem: "",
   vaultConfirmSaleItem: "",
   vaultBusy: "",
+  vaultScope: "mine",
+  vaultNetworkBusy: "",
+  collectionNetwork: {
+    available: false,
+    message: "",
+    ownedShares: [],
+    receivedShares: [],
+    sharedItems: [],
+    incomingAccessRequests: [],
+    outgoingAccessRequests: [],
+    ownerLoanRequests: [],
+    requesterLoanRequests: []
+  },
   draft: createEmptyDraft("SV-001"),
   items: normalizeItems(loadStoredItems(initialOrganizationId))
 };
@@ -346,6 +359,7 @@ function createEmptyDraft(boxId = "SV-001") {
     photos: [],
     photoSetComplete: false,
     manualIdentityConfirmed: false,
+    recognitionCorrection: null,
     useVisualSearch: false,
     visualMatchesSearched: false,
     visualMatches: [],
@@ -834,6 +848,7 @@ async function hydrateAppState() {
     } else if (!state.persistence.configured) {
       state.importStatus = "Lokaler Modus: Datenbank ist nicht verbunden.";
     }
+    await loadCollectionNetwork();
   } catch (error) {
     state.booting = false;
     if (error.status === 401) {
@@ -849,6 +864,25 @@ async function hydrateAppState() {
     }
   }
   render();
+}
+
+async function loadCollectionNetwork() {
+  try {
+    const payload = await fetchJson("/api/collection-network");
+    state.collectionNetwork = {
+      available: Boolean(payload.available),
+      message: payload.message || "",
+      ownedShares: payload.ownedShares || [],
+      receivedShares: payload.receivedShares || [],
+      sharedItems: normalizeItems(payload.sharedItems || []),
+      incomingAccessRequests: payload.incomingAccessRequests || [],
+      outgoingAccessRequests: payload.outgoingAccessRequests || [],
+      ownerLoanRequests: payload.ownerLoanRequests || [],
+      requesterLoanRequests: payload.requesterLoanRequests || []
+    };
+  } catch (error) {
+    state.collectionNetwork = { ...state.collectionNetwork, available: false, message: error.message };
+  }
 }
 
 async function persistItem(item, action = "Artikel") {
@@ -1651,6 +1685,51 @@ function collectionDefaults(item, overrides = {}) {
   };
 }
 
+function identityFromItem(item) {
+  const collection = collectionDefaults(item);
+  const recognized = item.recognition?.identity || {};
+  return {
+    title: item.title || recognized.title || "",
+    productType: collection.mediaType === "film" ? "Film" : collection.mediaType === "game" ? "Videospiel" : (recognized.productType || item.category || "Sammlungsstück"),
+    category: item.category || recognized.category || "",
+    brand: recognized.brand || item.franchise || "",
+    franchise: item.franchise || recognized.franchise || "",
+    platform: collection.platform || recognized.platform || "",
+    edition: collection.edition || recognized.edition || "",
+    region: recognized.region || recognized.language || ""
+  };
+}
+
+function identitiesDiffer(left, right) {
+  const keys = ["title", "productType", "category", "brand", "franchise", "platform", "edition", "region"];
+  return keys.some((key) => String(left?.[key] || "").trim().toLowerCase() !== String(right?.[key] || "").trim().toLowerCase());
+}
+
+async function submitRecognitionFeedback({ item, predictedIdentity, correctedIdentity, correctionNote = "", source = "manual_correction" }) {
+  if (!identitiesDiffer(predictedIdentity, correctedIdentity)) return null;
+  try {
+    const result = await postJson("/api/recognition-feedback", {
+      itemId: item.dbId || item.id,
+      predictedIdentity,
+      correctedIdentity,
+      correctionNote,
+      comparisonContext: {
+        barcode: collectionDefaults(item).barcode || item.barcode || "",
+        captureIntent: "media_library",
+        source
+      }
+    });
+    const comparison = result.comparison || {};
+    state.importStatus = comparison.status === "active"
+      ? "Korrektur gespeichert. Mehrere passende Fälle bestätigen dieses Vergleichsmuster; neue Scans werden damit gegengeprüft."
+      : "Korrektur gespeichert. Sie wird mit weiteren passenden Fällen verglichen, aber nicht ungeprüft übernommen.";
+    return result;
+  } catch (error) {
+    state.importStatus = `Artikel gespeichert. Lernhinweis konnte noch nicht abgeglichen werden: ${error.message}`;
+    return null;
+  }
+}
+
 function moveItemToCollection(item, overrides = {}) {
   const recognitionSource = item.collection?.recognitionSource || item.sourceType || "unknown";
   item.collection = collectionDefaults(item, { recognitionSource, ...overrides });
@@ -1691,6 +1770,7 @@ function vaultScanView() {
   const recognitionStatus = state.recognition?.evidence?.status || "";
   const evidence = state.recognition?.evidence || {};
   const identityNeedsConfirmation = recognitionStatus === "manual_review_ready"
+    && !evidence.operatorCorrected
     && (Boolean(evidence.manualIdentityRequired) || Boolean(evidence.categoryConflict) || Number(evidence.score || 0) < 55);
   const recognitionCanProceed = recognitionStatus === "ready_for_research"
     || (recognitionStatus === "manual_review_ready" && (!identityNeedsConfirmation || state.draft.manualIdentityConfirmed));
@@ -1987,6 +2067,7 @@ function fastRecognitionPanel(photos) {
   const requests = recognition.requestedPhotos || [];
   const visibleText = recognition.visibleText || [];
   const visualEvidence = recognition.externalVisualEvidence;
+  const learning = recognition.learningComparison;
   const statusLabel = {
     ready_for_research: "Bereit für Quellenabgleich",
     manual_review_ready: "Weiter mit manueller Prüfung",
@@ -2010,11 +2091,35 @@ function fastRecognitionPanel(photos) {
       ${suggestion("Marke", escapeHtml(identity.brand || "Nicht belegt"))}
       ${suggestion("Plattform / Modell", escapeHtml(identity.platform || identity.modelNumber || "Nicht belegt"))}
     </div>
+    ${learning?.comparedCases ? `<section class="recognition-learning ${learning.conflicts ? "conflict" : ""}"><div><strong>Erfahrungsabgleich</strong><small>${learning.comparedCases} vergleichbare Korrektur${learning.comparedCases === 1 ? "" : "en"} · ${learning.distinctOrganizations || 0} Kundenbereiche</small></div>${learning.recommendation ? `<p>${learning.conflicts ? "Abweichender Hinweis" : "Bestätigt"}: <strong>${escapeHtml(learning.recommendation.title || "Produktvariante")}</strong>${learning.recommendation.edition ? ` · ${escapeHtml(learning.recommendation.edition)}` : ""}</p>` : ""}<span>${escapeHtml(learning.notice || "Wird nur zur Gegenprüfung genutzt und nicht automatisch übernommen.")}</span></section>` : ""}
+    ${recognitionCorrectionPanel(identity)}
     ${visualEvidence?.matches?.length ? `<section class="recognition-visual-matches"><strong>Visuelle Produktsuche</strong><small>${escapeHtml(visualEvidence.provider === "serpapi-google-lens" ? "Google Lens über SerpApi" : visualEvidence.provider || "Bildsuche")} · ${visualEvidence.matches.length} Kandidaten</small><div>${visualEvidence.matches.slice(0, 3).map((entry) => `<span>${entry.exact ? "Exakt · " : ""}${escapeHtml(entry.title)}</span>`).join("")}</div></section>` : ""}
     ${visibleText.length ? `<section class="recognition-evidence"><strong>Sichtbar gelesen</strong><div>${visibleText.slice(0, 8).map((entry) => `<span>${escapeHtml(entry)}</span>`).join("")}</div></section>` : ""}
     ${missing.length ? `<section class="recognition-missing"><strong>Noch nicht belegt</strong><p>${missing.slice(0, 5).map(escapeHtml).join(" · ")}</p></section>` : ""}
     ${requests.length && evidence.status !== "manual_review_ready" ? `<section class="requested-photos"><strong>Nächstes hilfreiches Foto</strong>${requests.slice(0, 3).map((entry) => `<div>${icon("KA")}<span>${escapeHtml(entry.instruction)}</span></div>`).join("")}</section>` : ""}
     ${scanReleaseGuide(recognition)}`;
+}
+
+function recognitionCorrectionPanel(identity = {}) {
+  const savedCorrection = state.draft.recognitionCorrection || {};
+  const productType = String(identity.productType || identity.category || "").toLowerCase();
+  const mediaType = productType.includes("film") || productType.includes("blu") || productType.includes("dvd")
+    ? "film"
+    : productType.includes("spiel") || productType.includes("game")
+      ? "game"
+      : "other";
+  return `<details class="recognition-correction" ${state.draft.recognitionCorrection ? "open" : ""}>
+    <summary><span><strong>Erkennung korrigieren</strong><small>Falls Titel, Format oder Edition nicht stimmen</small></span>${state.draft.recognitionCorrection ? `<em>Korrigiert</em>` : ""}</summary>
+    <form data-recognition-correction-form>
+      ${field("Richtiger Titel", `<input name="title" required value="${escapeHtml(identity.title || state.draft.query || "")}" />`)}
+      ${field("Art", `<select name="mediaType"><option value="game" ${mediaType === "game" ? "selected" : ""}>Spiel</option><option value="film" ${mediaType === "film" ? "selected" : ""}>Film</option><option value="other" ${mediaType === "other" ? "selected" : ""}>Sonstiges</option></select>`)}
+      ${field("Plattform / Format", `<input name="platform" value="${escapeHtml(identity.platform || "")}" placeholder="z. B. Switch 2, 4K UHD" />`)}
+      ${field("Edition", `<input name="edition" value="${escapeHtml(identity.edition || "")}" placeholder="z. B. Download-Code, Steelbook" />`)}
+      ${field("Woran erkannt?", `<textarea name="correctionNote" rows="2" placeholder="Nur sichtbare Merkmale nennen, niemals Download- oder Aktivierungscodes">${escapeHtml(savedCorrection.correctionNote || "")}</textarea>`)}
+      <p>Der Hinweis wird ohne Fotos und Besitzerdaten mit ähnlichen Korrekturen verglichen. Er verändert andere Erkennungen nicht sofort.</p>
+      <button class="secondary-action" type="submit">Korrektur übernehmen</button>
+    </form>
+  </details>`;
 }
 
 function quickValueCard(recognition, vaultCapture = false) {
@@ -2178,14 +2283,17 @@ function inventoryView(selected) {
 }
 
 function vaultView() {
-  const allItems = collectionItems();
+  const ownItems = collectionItems();
+  const sharedItems = state.collectionNetwork.sharedItems || [];
+  const sharedScope = state.vaultScope === "shared";
+  const allItems = sharedScope ? sharedItems : ownItems;
   const query = state.search.trim().toLowerCase();
   const filtered = allItems.filter((item) => {
     const status = collectionStatus(item);
     const matchesFilter = state.vaultFilter === "all"
       || status === state.vaultFilter
       || (state.vaultFilter === "selling" && status === "listed");
-    const matchesQuery = !query || [item.title, item.sku, item.category, item.franchise, item.collection?.platform, item.collection?.edition, item.collection?.location, item.collection?.borrowerName]
+    const matchesQuery = !query || [item.title, item.sku, item.category, item.franchise, item.collection?.platform, item.collection?.edition, item.collection?.location, item.collection?.borrowerName, item.sharedAccess?.ownerName]
       .filter(Boolean).join(" ").toLowerCase().includes(query);
     return matchesFilter && matchesQuery;
   });
@@ -2202,19 +2310,24 @@ function vaultView() {
 
   return `<section class="vault-shell">
     <header class="vault-hero">
-      <div><p>RAMROD VAULT</p><h2>Deine Spiele- und Filmsammlung</h2><span>Inventar, Leihstatus und Wert an einem Ort. Verkauft wird erst nach deinem Klick.</span></div>
-      <div class="vault-hero-actions">
+      <div><p>RAMROD VAULT</p><h2>${sharedScope ? "Freigegebene Sammlungen" : "Deine Spiele- und Filmsammlung"}</h2><span>${sharedScope ? "Du siehst nur die Bereiche, die andere Personen ausdrücklich mit dir geteilt haben." : "Inventar, Leihstatus und Wert an einem Ort. Verkauft wird erst nach deinem Klick."}</span></div>
+      ${sharedScope ? "" : `<div class="vault-hero-actions">
         <button class="secondary-action" data-vault-new type="button">${icon("NE")}Manuell hinzufügen</button>
         <button class="primary-action" data-vault-scan type="button">${icon("KA")}Sammlung scannen</button>
-      </div>
+      </div>`}
     </header>
+    <nav class="vault-scope-tabs" aria-label="Sammlungsbereich">
+      <button class="${sharedScope ? "" : "active"}" data-vault-scope="mine" type="button">${icon("SA")}Meine Sammlung <span>${ownItems.length}</span></button>
+      <button class="${sharedScope ? "active" : ""}" data-vault-scope="shared" type="button">${icon("FR")}Mit mir geteilt <span>${sharedItems.length}</span></button>
+    </nav>
     <section class="vault-metrics" aria-label="Sammlungsübersicht">
       ${vaultMetric("SA", "In Sammlung", owned)}
       ${vaultMetric("VL", "Verliehen", loaned)}
       ${vaultMetric("VK", "Im Verkauf", selling)}
       ${vaultMetric("EU", "Sammlungswert", euro(totalValue))}
     </section>
-    ${state.vaultFormOpen ? vaultEntryForm() : ""}
+    ${sharedScope ? "" : (state.vaultFormOpen ? vaultEntryForm() : "")}
+    ${collectionNetworkPanel()}
     <section class="vault-toolbar">
       <label class="vault-search">${icon("SU")}<input id="vault-search" value="${escapeHtml(state.search)}" placeholder="Titel, Plattform, Person oder Lagerort" /></label>
       <div class="vault-filters" role="group" aria-label="Sammlung filtern">
@@ -2225,11 +2338,99 @@ function vaultView() {
       </div>
     </section>
     ${allItems.length ? `<section class="vault-layout">
-      <div class="vault-list">${filtered.length ? filtered.map(vaultItemRow).join("") : `<div class="vault-empty compact"><strong>Kein Treffer</strong><span>Ändere Suche oder Filter.</span></div>`}</div>
-      ${selected ? vaultInspector(selected) : ""}
-    </section>` : vaultEmptyState(importable)}
-    ${allItems.length && importable.length ? vaultImportStrip(importable) : ""}
+      <div class="vault-list">${filtered.length ? filtered.map((item) => sharedScope ? sharedVaultItemRow(item) : vaultItemRow(item)).join("") : `<div class="vault-empty compact"><strong>Kein Treffer</strong><span>Ändere Suche oder Filter.</span></div>`}</div>
+      ${selected ? (sharedScope ? sharedVaultInspector(selected) : vaultInspector(selected)) : ""}
+    </section>` : (sharedScope ? sharedVaultEmptyState() : vaultEmptyState(importable))}
+    ${!sharedScope && allItems.length && importable.length ? vaultImportStrip(importable) : ""}
   </section>`;
+}
+
+function collectionNetworkPanel() {
+  const network = state.collectionNetwork;
+  if (!network.available) {
+    return network.message ? `<p class="vault-network-note">${escapeHtml(network.message)}</p>` : "";
+  }
+  const activeShares = network.ownedShares.filter((entry) => entry.status === "active");
+  const incoming = network.incomingAccessRequests.filter((entry) => entry.status === "requested");
+  const outgoing = network.outgoingAccessRequests.filter((entry) => entry.status === "requested");
+  const ownerLoans = network.ownerLoanRequests.filter((entry) => ["requested", "loaned"].includes(entry.status));
+  const myLoans = network.requesterLoanRequests.filter((entry) => ["requested", "loaned"].includes(entry.status));
+  const attention = incoming.length + ownerLoans.filter((entry) => entry.status === "requested").length;
+  return `<details class="vault-network" ${attention ? "open" : ""}>
+    <summary><span><strong>Freigaben & Ausleihen</strong><small>${attention ? `${attention} Anfrage${attention === 1 ? "" : "n"} wartet auf dich` : "Privat und von dir steuerbar"}</small></span><em>${attention || activeShares.length + network.receivedShares.length}</em></summary>
+    <div class="vault-network-grid">
+      <section class="vault-network-section"><div><small>Sammlung teilen</small><strong>Bereiche gezielt freigeben</strong></div>
+        <form data-collection-share-form class="vault-share-form">
+          ${field("RAMROD-Konto", `<input name="email" type="email" required placeholder="name@example.com" />`)}
+          ${collectionScopeFields()}
+          <button class="primary-action" type="submit" ${state.vaultNetworkBusy ? "disabled" : ""}>${icon("FR")}Freigeben</button>
+        </form>
+        ${activeShares.length ? `<div class="vault-network-list">${activeShares.map((share) => `<article class="vault-share-row"><span><strong>${escapeHtml(share.recipientEmail)}</strong><small>${escapeHtml(collectionScopeLabel(share.scope))}</small></span><button class="secondary-action" data-collection-share-revoke="${share.id}" type="button">Beenden</button></article>`).join("")}</div>` : `<p class="vault-network-empty">Noch keine aktive Freigabe.</p>`}
+      </section>
+      <section class="vault-network-section"><div><small>Zugriff anfragen</small><strong>Sammlung einer anderen Person</strong></div>
+        <form data-collection-access-request-form class="vault-access-form">
+          ${field("E-Mail des Eigentümers", `<input name="ownerEmail" type="email" required placeholder="name@example.com" />`)}
+          ${field("Nachricht", `<input name="message" placeholder="Welche Sammlung möchtest du sehen?" />`)}
+          <button class="secondary-action" type="submit" ${state.vaultNetworkBusy ? "disabled" : ""}>Anfrage senden</button>
+        </form>
+        ${outgoing.length ? `<div class="vault-network-list">${outgoing.map((entry) => `<article class="vault-request-row"><span><strong>Anfrage gesendet</strong><small>${formatShortDate(entry.created_at)}</small></span><button class="secondary-action" data-collection-access-action="cancel" data-request-id="${entry.id}" type="button">Zurückziehen</button></article>`).join("")}</div>` : ""}
+      </section>
+      ${incoming.length ? `<section class="vault-network-section wide"><div><small>Zugriffsanfragen</small><strong>Du entscheidest Umfang und Altersfreigaben</strong></div><div class="vault-network-list">${incoming.map(collectionAccessRequestRow).join("")}</div></section>` : ""}
+      ${(ownerLoans.length || myLoans.length) ? `<section class="vault-network-section wide"><div><small>Ausleihen</small><strong>Anfragen und laufende Leihen</strong></div><div class="vault-network-list">${ownerLoans.map((entry) => collectionLoanRequestRow(entry, true)).join("")}${myLoans.map((entry) => collectionLoanRequestRow(entry, false)).join("")}</div></section>` : ""}
+    </div>
+  </details>`;
+}
+
+function collectionScopeFields() {
+  return `<fieldset class="vault-scope-fields"><legend>Sichtbarer Bereich</legend><label><input name="mediaTypes" value="film" type="checkbox" checked /> Filme</label><label><input name="mediaTypes" value="game" type="checkbox" checked /> Spiele</label><label><input name="mediaTypes" value="other" type="checkbox" /> Sonstiges</label><label><input name="hideFsk18" value="true" type="checkbox" checked /> FSK 18 ausblenden</label><label><input name="allowLoans" value="true" type="checkbox" checked /> Ausleihanfragen erlauben</label></fieldset>`;
+}
+
+function collectionScopeFromForm(form) {
+  const formData = new FormData(form);
+  return {
+    mediaTypes: formData.getAll("mediaTypes"),
+    hiddenAgeRatings: formData.get("hideFsk18") ? ["FSK 18"] : [],
+    hiddenItemIds: [],
+    allowLoans: Boolean(formData.get("allowLoans"))
+  };
+}
+
+function collectionScopeLabel(scope = {}) {
+  const labels = { film: "Filme", game: "Spiele", other: "Sonstiges" };
+  const media = (scope.mediaTypes || []).map((entry) => labels[entry] || entry).join(", ") || "Keine Bereiche";
+  return `${media}${(scope.hiddenAgeRatings || []).includes("FSK 18") ? " · ohne FSK 18" : ""}${scope.allowLoans === false ? " · nur ansehen" : " · Ausleihe möglich"}`;
+}
+
+function collectionAccessRequestRow(entry) {
+  return `<form class="vault-request-row approval" data-collection-access-approve="${entry.id}"><span><strong>${escapeHtml(entry.requester_name || entry.requester_email)}</strong><small>${escapeHtml(entry.message || "Möchte deine Sammlung sehen")}</small></span>${collectionScopeFields()}<div><button class="secondary-action" data-collection-access-action="decline" data-request-id="${entry.id}" type="button">Ablehnen</button><button class="primary-action" type="submit">Bereich freigeben</button></div></form>`;
+}
+
+function loanItemLabel(entry) {
+  const own = state.items.find((item) => item.dbId === entry.item_id || item.id === entry.item_id);
+  const shared = (state.collectionNetwork.sharedItems || []).find((item) => item.dbId === entry.item_id || item.id === entry.item_id);
+  return own?.title || shared?.title || "Sammlungsstück";
+}
+
+function collectionLoanRequestRow(entry, ownerView) {
+  const requested = entry.status === "requested";
+  const loaned = entry.status === "loaned";
+  return `<article class="vault-request-row"><span><strong>${escapeHtml(loanItemLabel(entry))}</strong><small>${ownerView ? `${escapeHtml(entry.requester_name || entry.requester_email)} · ` : ""}${requested ? "Ausleihe angefragt" : "Aktuell verliehen"}${entry.due_at ? ` · bis ${formatShortDate(entry.due_at)}` : ""}</small></span><div>${ownerView && requested ? `<button class="secondary-action" data-collection-loan-action="decline" data-request-id="${entry.id}" type="button">Ablehnen</button><button class="primary-action" data-collection-loan-action="approve" data-request-id="${entry.id}" type="button">Ausleihen</button>` : ownerView && loaned ? `<button class="primary-action" data-collection-loan-action="return" data-request-id="${entry.id}" type="button">Rückgabe bestätigen</button>` : requested ? `<button class="secondary-action" data-collection-loan-action="cancel" data-request-id="${entry.id}" type="button">Zurückziehen</button>` : ""}</div></article>`;
+}
+
+function sharedVaultEmptyState() {
+  return `<section class="vault-empty compact"><strong>Noch keine Sammlung mit dir geteilt</strong><span>Sende oben eine Zugriffsanfrage. Der Eigentümer entscheidet anschließend über Bereiche, FSK 18 und Ausleihen.</span></section>`;
+}
+
+function sharedVaultItemRow(item) {
+  const status = collectionStatus(item);
+  return `<button class="vault-item-row ${state.vaultSelected === item.id ? "active" : ""}" data-vault-select="${item.id}" type="button"><img src="${escapeHtml(item.image)}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.sharedAccess?.ownerName || "Geteilte Sammlung")} · ${escapeHtml(item.collection?.platform || item.category || "Medium")}</small></span><span class="vault-row-meta"><em class="vault-status ${status}">${escapeHtml(collectionStatusLabel(item))}</em></span></button>`;
+}
+
+function sharedVaultInspector(item) {
+  const collection = item.collection || {};
+  const status = collectionStatus(item);
+  const existingRequest = (state.collectionNetwork.requesterLoanRequests || []).find((entry) => entry.item_id === item.dbId && ["requested", "loaned"].includes(entry.status));
+  return `<article class="vault-inspector shared"><div class="vault-inspector-media"><img src="${escapeHtml(item.image)}" alt="${escapeHtml(item.title)}" /><span class="vault-status ${status}">${escapeHtml(collectionStatusLabel(item))}</span></div><div class="vault-inspector-content"><div><p>${escapeHtml(item.sharedAccess?.ownerName || "Geteilte Sammlung")}</p><h3>${escapeHtml(item.title)}</h3><span>${escapeHtml([collection.platform, collection.edition].filter(Boolean).join(" · ") || item.category || "Sammlungsstück")}</span></div><dl class="vault-facts"><div><dt>Wert</dt><dd>${euro(collection.estimatedValue || item.fair || 0)}</dd></div><div><dt>Zustand</dt><dd>${escapeHtml(item.condition || "Nicht erfasst")}</dd></div><div><dt>Altersfreigabe</dt><dd>${escapeHtml(collection.ageRating || "Nicht erfasst")}</dd></div><div><dt>Jahr</dt><dd>${escapeHtml(collection.releaseYear || "Nicht erfasst")}</dd></div></dl>${collection.summary ? `<p class="vault-shared-summary">${escapeHtml(collection.summary)}</p>` : ""}${state.vaultLoanItem === item.id ? `<form class="vault-loan-form" data-shared-loan-form="${item.id}">${field("Nachricht", `<input name="note" placeholder="Optional" />`)}${field("Rückgabe geplant", `<input name="dueAt" type="date" />`)}<button class="primary-action" type="submit">Ausleihe anfragen</button></form>` : ""}<div class="vault-actions">${existingRequest ? `<span class="vault-request-state">${existingRequest.status === "loaned" ? "An dich verliehen" : "Anfrage gesendet"}</span>` : item.sharedAccess?.allowLoans && status === "owned" ? `<button class="primary-action" data-shared-loan="${item.id}" type="button">${icon("VL")}Ausleihe anfragen</button>` : `<span class="vault-request-state">Nur Ansicht</span>`}</div><p class="vault-safety-note">Du siehst nur freigegebene Sammlungsdaten. Private Notizen, Kontakte und ausgeblendete Titel bleiben geschützt.</p></div></article>`;
 }
 
 function vaultMetric(iconLabel, label, value) {
@@ -2330,7 +2531,9 @@ function vaultEditForm(item) {
       ${field("Standort", `<input name="location" value="${escapeHtml(collection.location)}" />`)}
       ${field("Zustand", `<select name="condition">${conditions.map((value) => `<option value="${value}" ${value === item.condition ? "selected" : ""}>${value === "Pruefen" ? "Noch prüfen" : value}</option>`).join("")}</select>`)}
       ${field("Geschätzter Wert", `<div class="input-with-icon">${icon("EU")}<input name="estimatedValue" type="number" min="0" step="0.01" value="${Number(collection.estimatedValue || item.fair || 0)}" /></div>`)}
+      ${field("Korrekturhinweis", `<textarea name="correctionNote" rows="2" placeholder="Woran ist die richtige Version zu erkennen? z. B. Steelbook-Schriftzug, Plattformlogo oder Rückseitentext"></textarea>`)}
     </div>
+    <p class="vault-learning-note">RAMROD vergleicht diese Korrektur anonymisiert mit ähnlichen Fällen aus anderen Kundenbereichen. Erst mehrfach bestätigte Muster werden als Gegenprüfung genutzt; Zustand und Vollständigkeit bleiben immer artikelspezifisch.</p>
     <div class="vault-form-actions"><button class="secondary-action" data-vault-edit-cancel type="button">Abbrechen</button><button class="primary-action" type="submit" ${state.vaultBusy ? "disabled" : ""}>${icon("OK")}Änderungen speichern</button></div>
   </form>`;
 }
@@ -3893,6 +4096,174 @@ function bindEvents() {
     state.vaultFilter = button.dataset.vaultFilter || "all";
     render();
   }));
+  document.querySelectorAll("[data-vault-scope]").forEach((button) => button.addEventListener("click", () => {
+    state.vaultScope = button.dataset.vaultScope === "shared" ? "shared" : "mine";
+    state.vaultSelected = "";
+    state.vaultLoanItem = "";
+    state.vaultFilter = "all";
+    render();
+  }));
+  document.querySelector("[data-recognition-correction-form]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!state.recognition?.identity) return;
+    const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const predictedIdentity = { ...state.recognition.identity };
+    const mediaType = String(values.mediaType || "other");
+    const correctedIdentity = {
+      ...predictedIdentity,
+      title: String(values.title || "").trim(),
+      productType: mediaType === "game" ? "Videospiel" : mediaType === "film" ? "Film" : "Sammlungsstück",
+      category: mediaType === "game" ? "Games" : mediaType === "film" ? "Filme" : "Sammlung",
+      platform: String(values.platform || "").trim(),
+      edition: String(values.edition || "").trim()
+    };
+    state.recognition.identity = correctedIdentity;
+    state.recognition.evidence = {
+      ...(state.recognition.evidence || {}),
+      originalStatus: state.recognition.evidence?.originalStatus || state.recognition.evidence?.status,
+      status: "manual_review_ready",
+      manualIdentityRequired: false,
+      operatorCorrected: true,
+      autoApprovalEligible: false
+    };
+    state.draft.query = correctedIdentity.title;
+    state.draft.manualIdentityConfirmed = true;
+    state.draft.recognitionCorrection = {
+      predictedIdentity,
+      correctedIdentity,
+      correctionNote: String(values.correctionNote || "").trim()
+    };
+    state.importStatus = "Korrektur übernommen. Sie wird beim Speichern als Vergleichshinweis gesichert und nicht blind auf andere Artikel übertragen.";
+    render();
+  });
+  document.querySelector("[data-collection-share-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.vaultNetworkBusy) return;
+    const formData = new FormData(event.currentTarget);
+    const scope = collectionScopeFromForm(event.currentTarget);
+    state.vaultNetworkBusy = "share";
+    state.importStatus = "Sammlungsfreigabe wird gespeichert...";
+    render();
+    try {
+      await postJson("/api/collection-shares", { email: formData.get("email"), scope });
+      await loadCollectionNetwork();
+      state.importStatus = "Sammlungsbereich wurde sicher freigegeben.";
+    } catch (error) {
+      state.importStatus = `Freigabe fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.vaultNetworkBusy = "";
+      render();
+    }
+  });
+  document.querySelectorAll("[data-collection-share-revoke]").forEach((button) => button.addEventListener("click", async () => {
+    if (state.vaultNetworkBusy) return;
+    state.vaultNetworkBusy = button.dataset.collectionShareRevoke;
+    render();
+    try {
+      await postJson(`/api/collection-shares/${encodeURIComponent(button.dataset.collectionShareRevoke)}/revoke`, {});
+      await loadCollectionNetwork();
+      state.importStatus = "Sammlungsfreigabe wurde beendet.";
+    } catch (error) {
+      state.importStatus = `Freigabe konnte nicht beendet werden: ${error.message}`;
+    } finally {
+      state.vaultNetworkBusy = "";
+      render();
+    }
+  }));
+  document.querySelector("[data-collection-access-request-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.vaultNetworkBusy) return;
+    const formData = new FormData(event.currentTarget);
+    state.vaultNetworkBusy = "access-request";
+    render();
+    try {
+      await postJson("/api/collection-access-requests", { ownerEmail: formData.get("ownerEmail"), message: formData.get("message") });
+      await loadCollectionNetwork();
+      state.importStatus = "Zugriffsanfrage wurde gesendet.";
+    } catch (error) {
+      state.importStatus = `Anfrage fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.vaultNetworkBusy = "";
+      render();
+    }
+  });
+  document.querySelectorAll("[data-collection-access-approve]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.vaultNetworkBusy) return;
+    const requestId = event.currentTarget.dataset.collectionAccessApprove;
+    const scope = collectionScopeFromForm(event.currentTarget);
+    state.vaultNetworkBusy = requestId;
+    render();
+    try {
+      await postJson(`/api/collection-access-requests/${encodeURIComponent(requestId)}/approve`, { scope });
+      await loadCollectionNetwork();
+      state.importStatus = "Sammlungszugriff wurde im gewählten Umfang freigegeben.";
+    } catch (error) {
+      state.importStatus = `Anfrage konnte nicht freigegeben werden: ${error.message}`;
+    } finally {
+      state.vaultNetworkBusy = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-collection-access-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (state.vaultNetworkBusy) return;
+    const requestId = button.dataset.requestId;
+    const action = button.dataset.collectionAccessAction;
+    state.vaultNetworkBusy = requestId;
+    render();
+    try {
+      await postJson(`/api/collection-access-requests/${encodeURIComponent(requestId)}/${encodeURIComponent(action)}`, {});
+      await loadCollectionNetwork();
+      state.importStatus = action === "decline" ? "Zugriffsanfrage wurde abgelehnt." : "Zugriffsanfrage wurde zurückgezogen.";
+    } catch (error) {
+      state.importStatus = `Anfrage konnte nicht geändert werden: ${error.message}`;
+    } finally {
+      state.vaultNetworkBusy = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-shared-loan]").forEach((button) => button.addEventListener("click", () => {
+    state.vaultLoanItem = state.vaultLoanItem === button.dataset.sharedLoan ? "" : button.dataset.sharedLoan;
+    render();
+  }));
+  document.querySelectorAll("[data-shared-loan-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (state.vaultNetworkBusy) return;
+    const item = (state.collectionNetwork.sharedItems || []).find((entry) => entry.id === event.currentTarget.dataset.sharedLoanForm);
+    if (!item) return;
+    const formData = new FormData(event.currentTarget);
+    state.vaultNetworkBusy = item.id;
+    render();
+    try {
+      await postJson("/api/collection-loan-requests", { shareId: item.sharedAccess.shareId, itemId: item.dbId, note: formData.get("note"), dueAt: formData.get("dueAt") || null });
+      await loadCollectionNetwork();
+      state.vaultLoanItem = "";
+      state.importStatus = "Ausleihanfrage wurde gesendet.";
+    } catch (error) {
+      state.importStatus = `Ausleihanfrage fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.vaultNetworkBusy = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-collection-loan-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (state.vaultNetworkBusy) return;
+    const requestId = button.dataset.requestId;
+    const action = button.dataset.collectionLoanAction;
+    state.vaultNetworkBusy = requestId;
+    render();
+    try {
+      await postJson(`/api/collection-loan-requests/${encodeURIComponent(requestId)}/${encodeURIComponent(action)}`, {});
+      if (["approve", "return"].includes(action)) await hydrateAppState();
+      else await loadCollectionNetwork();
+      state.importStatus = { approve: "Ausleihe wurde bestätigt.", decline: "Ausleihanfrage wurde abgelehnt.", return: "Rückgabe wurde bestätigt.", cancel: "Ausleihanfrage wurde zurückgezogen." }[action];
+    } catch (error) {
+      state.importStatus = `Ausleihe konnte nicht geändert werden: ${error.message}`;
+    } finally {
+      state.vaultNetworkBusy = "";
+      render();
+    }
+  }));
   document.querySelectorAll("[data-vault-select]").forEach((button) => button.addEventListener("click", () => {
     state.vaultSelected = button.dataset.vaultSelect;
     state.vaultLoanItem = "";
@@ -3914,6 +4285,7 @@ function bindEvents() {
     const item = state.items.find((entry) => entry.id === event.currentTarget.dataset.vaultEditForm);
     if (!item || state.vaultBusy || collectionStatus(item) !== "owned") return;
     const values = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const predictedIdentity = identityFromItem(item);
     const mediaType = String(values.mediaType || "other");
     const value = Math.max(0, Number(values.estimatedValue || 0));
     const now = new Date().toISOString();
@@ -3935,8 +4307,15 @@ function bindEvents() {
     state.vaultBusy = item.id;
     state.vaultEditingItem = "";
     await persistItem(item, "Sammlungsangaben");
+    const feedbackResult = await submitRecognitionFeedback({
+      item,
+      predictedIdentity,
+      correctedIdentity: identityFromItem(item),
+      correctionNote: String(values.correctionNote || "").trim(),
+      source: "vault_edit"
+    });
     state.vaultBusy = "";
-    state.importStatus = `${item.title} wurde aktualisiert.`;
+    if (!feedbackResult) state.importStatus = `${item.title} wurde aktualisiert.`;
     render();
   });
   document.querySelectorAll("[data-vault-reidentify]").forEach((button) => button.addEventListener("click", () => {
@@ -4757,6 +5136,7 @@ function bindEvents() {
       state.draft.photos = [...(state.draft.photos || []), ...preparedPhotos].slice(0, photoLimit);
       state.draft.photo = state.draft.photos[0]?.dataUrl || "";
       state.draft.photoSetComplete = false;
+      state.draft.recognitionCorrection = null;
       if (state.draft.useVisualSearch && previousPhotoCount === 0) {
         state.draft.visualMatchesSearched = false;
         state.draft.visualMatches = [];
@@ -4780,6 +5160,7 @@ function bindEvents() {
     state.draft.photos = (state.draft.photos || []).filter((_, photoIndex) => photoIndex !== index);
     state.draft.photo = state.draft.photos[0]?.dataUrl || "";
     state.draft.photoSetComplete = false;
+    state.draft.recognitionCorrection = null;
     if (state.draft.useVisualSearch && index === 0) {
       state.draft.visualMatchesSearched = false;
       state.draft.visualMatches = [];
@@ -4829,6 +5210,8 @@ function bindEvents() {
       render();
       const vaultCapture = state.captureDestination === "vault";
       let deferredAnalysisError = null;
+      let recognitionFeedback = null;
+      const operatorCorrection = state.draft.recognitionCorrection;
       let item;
       if (usedLiveAi && vaultCapture) {
         item = inventoryItemFromRecognition(state.draft, state.recognition);
@@ -4874,9 +5257,19 @@ function bindEvents() {
             recognitionSource: state.recognitionMeta?.provider || item.sourceType || "visual-search",
             history: [...previousCollection.history, { type: "reidentified", at: now, previousTitle: previous.title, newTitle: item.title, method: state.draft.visualMatches?.length ? "visual-search-plus-ai" : "ai-rescan" }]
           });
+          recognitionFeedback = {
+            predictedIdentity: identityFromItem(previous),
+            correctedIdentity: identityFromItem(item),
+            correctionNote: state.draft.query ? `Neuidentifikation mit Bedienerhinweis: ${state.draft.query}` : "Neuidentifikation mit weiteren Produktfotos",
+            source: "vault_reidentify"
+          };
           state.items[existingIndex] = item;
         } else {
+          const identity = state.recognition?.identity || {};
           item = moveItemToCollection(item, {
+            mediaType: inferMediaType(item),
+            platform: identity.platform || item.franchise || "",
+            edition: identity.edition || "",
             barcode: state.draft.barcode || item.barcode || "",
             capturedViews: state.draft.photos?.length || 1,
             enrichment: { status: "pending", sources: [], enrichedAt: "" }
@@ -4885,6 +5278,14 @@ function bindEvents() {
         }
       } else {
         state.items.unshift(item);
+      }
+      if (operatorCorrection) {
+        recognitionFeedback = {
+          predictedIdentity: operatorCorrection.predictedIdentity,
+          correctedIdentity: operatorCorrection.correctedIdentity,
+          correctionNote: operatorCorrection.correctionNote,
+          source: vaultCapture ? "vault_scan_correction" : "sales_scan_correction"
+        };
       }
       state.selected = item.id;
       if (state.captureDestination === "vault") state.vaultSelected = item.id;
@@ -4904,6 +5305,7 @@ function bindEvents() {
             ? "Artikel erkannt und Verkaufsstrategie erstellt. Der Marktcheck läuft automatisch; danach kannst du freigeben."
           : "Demo-Artikelkarte und Verkaufsstrategie erzeugt.";
       await persistItem(item, "Artikel");
+      if (recognitionFeedback) await submitRecognitionFeedback({ item, ...recognitionFeedback });
     } catch (error) {
       state.importStatus = liveAnalysisErrorMessage(error);
     } finally {

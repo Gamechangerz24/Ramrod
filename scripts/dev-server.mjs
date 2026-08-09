@@ -78,6 +78,12 @@ import {
   normalizeOrganizationRole,
   permissionsForRole
 } from "./lib/workspace-access.mjs";
+import {
+  aggregateRecognitionFeedback,
+  correctedIdentitySignature,
+  recognitionFingerprint,
+  scopeAllowsCollectionItem
+} from "./lib/recognition-learning.mjs";
 
 loadDotEnv(".env.local");
 
@@ -247,6 +253,49 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "GET" && pathname === "/api/organization-team") {
       await handleOrganizationTeam(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/recognition-feedback") {
+      await handleRecognitionFeedback(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/collection-network") {
+      await handleCollectionNetwork(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/collection-shares") {
+      await handleCreateCollectionShare(request, response);
+      return;
+    }
+
+    const collectionShareActionMatch = /^\/api\/collection-shares\/([0-9a-f-]{36})\/(revoke)$/i.exec(pathname);
+    if (request.method === "POST" && collectionShareActionMatch) {
+      await handleCollectionShareAction(request, response, collectionShareActionMatch[1], collectionShareActionMatch[2]);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/collection-access-requests") {
+      await handleCreateCollectionAccessRequest(request, response);
+      return;
+    }
+
+    const collectionAccessActionMatch = /^\/api\/collection-access-requests\/([0-9a-f-]{36})\/(approve|decline|cancel)$/i.exec(pathname);
+    if (request.method === "POST" && collectionAccessActionMatch) {
+      await handleCollectionAccessRequestAction(request, response, collectionAccessActionMatch[1], collectionAccessActionMatch[2]);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/collection-loan-requests") {
+      await handleCreateCollectionLoanRequest(request, response);
+      return;
+    }
+
+    const collectionLoanActionMatch = /^\/api\/collection-loan-requests\/([0-9a-f-]{36})\/(approve|decline|return|cancel)$/i.exec(pathname);
+    if (request.method === "POST" && collectionLoanActionMatch) {
+      await handleCollectionLoanRequestAction(request, response, collectionLoanActionMatch[1], collectionLoanActionMatch[2]);
       return;
     }
 
@@ -1973,6 +2022,473 @@ async function requireTenantPermission(request, response, permission) {
   return tenant;
 }
 
+function recognitionContextBarcode(recognition, body = {}) {
+  if (body.barcode) return String(body.barcode).replace(/\s/g, "");
+  const identifier = (recognition?.identifiers || []).find((entry) =>
+    /barcode|ean|upc|gtin/i.test(String(entry?.type || ""))
+    || /^\d{8,14}$/.test(String(entry?.value || "").replace(/\s/g, ""))
+  );
+  return identifier?.value ? String(identifier.value).replace(/\s/g, "") : "";
+}
+
+function sanitizeRecognitionCorrectionNote(value) {
+  return String(value || "")
+    .trim()
+    .slice(0, 1000)
+    .replace(/\b(?=[a-z0-9-]{12,}\b)(?=[a-z0-9-]*\d)[a-z0-9-]+\b/gi, "[vertraulicher Code entfernt]");
+}
+
+async function compareRecognitionLearning(recognition, body = {}) {
+  const identity = recognition?.identity || {};
+  const barcode = recognitionContextBarcode(recognition, body);
+  const fingerprint = recognitionFingerprint(identity, { barcode });
+  try {
+    const [patterns, feedbackRows] = await Promise.all([
+      supabaseSelect(`/recognition_learning_patterns?select=fingerprint,canonical_identity,confirmations,distinct_organizations,status,updated_at&fingerprint=eq.${encodeURIComponent(fingerprint)}&limit=1`),
+      supabaseSelect(`/recognition_feedback?select=id,organization_id,item_id,corrected_identity,status,created_at&fingerprint=eq.${encodeURIComponent(fingerprint)}&status=in.(pending,corroborated,validated)&order=created_at.desc&limit=100`)
+    ]);
+    const groups = aggregateRecognitionFeedback(feedbackRows);
+    const strongest = groups[0] || null;
+    const pattern = patterns[0] || null;
+    const recommendation = pattern?.canonical_identity || strongest?.correctedIdentity || null;
+    const active = pattern?.status === "active";
+    const conflicts = Boolean(recommendation)
+      && correctedIdentitySignature(recommendation) !== correctedIdentitySignature(identity);
+    if (active && conflicts) {
+      recognition.evidence = {
+        ...(recognition.evidence || {}),
+        originalStatus: recognition.evidence?.originalStatus || recognition.evidence?.status,
+        status: "manual_review_ready",
+        manualIdentityRequired: true,
+        autoApprovalEligible: false
+      };
+    }
+    return {
+      available: true,
+      fingerprint,
+      comparedCases: feedbackRows.length,
+      confirmations: Number(pattern?.confirmations || strongest?.confirmations || 0),
+      distinctOrganizations: Number(pattern?.distinct_organizations || strongest?.distinctOrganizations || 0),
+      status: pattern?.status || (strongest ? "candidate" : "none"),
+      conflicts,
+      recommendation,
+      notice: active
+        ? "Bestätigtes Vergleichsmuster gefunden. Es wird zur Gegenprüfung angezeigt, aber nicht automatisch übernommen."
+        : feedbackRows.length
+          ? "Ähnliche Korrekturen wurden gefunden. Sie bleiben Vergleichshinweise, bis mehrere unabhängige Bestätigungen vorliegen."
+          : "Noch kein vergleichbarer Korrekturfall vorhanden."
+    };
+  } catch (error) {
+    return { available: false, fingerprint, comparedCases: 0, status: "unavailable", notice: redactSecret(error.message) };
+  }
+}
+
+async function handleRecognitionFeedback(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
+  try {
+    const body = JSON.parse(await readRequestBody(request, 256 * 1024));
+    const predicted = body.predictedIdentity && typeof body.predictedIdentity === "object" ? body.predictedIdentity : {};
+    const corrected = body.correctedIdentity && typeof body.correctedIdentity === "object" ? body.correctedIdentity : {};
+    if (!String(corrected.title || "").trim()) throw httpError(400, "Der korrigierte Titel fehlt.");
+    const context = body.comparisonContext && typeof body.comparisonContext === "object" ? body.comparisonContext : {};
+    const fingerprint = recognitionFingerprint(predicted, { barcode: context.barcode });
+    const inserted = await supabaseInsert("/recognition_feedback", {
+      organization_id: tenant.activeOrganization.id,
+      item_id: isUuid(body.itemId) ? body.itemId : null,
+      submitted_by: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
+      fingerprint,
+      predicted_identity: predicted,
+      corrected_identity: corrected,
+      comparison_context: {
+        barcode: String(context.barcode || ""),
+        captureIntent: String(context.captureIntent || ""),
+        source: String(context.source || "manual_correction"),
+        conditionExcluded: true,
+        completenessExcluded: true
+      },
+      correction_note: sanitizeRecognitionCorrectionNote(body.correctionNote) || null,
+      status: "pending"
+    });
+    const rows = await supabaseSelect(`/recognition_feedback?select=id,organization_id,item_id,corrected_identity,status,created_at&fingerprint=eq.${encodeURIComponent(fingerprint)}&status=in.(pending,corroborated,validated)&order=created_at.desc&limit=200`);
+    const strongest = aggregateRecognitionFeedback(rows)[0];
+    const active = Boolean(strongest && strongest.confirmations >= 3 && strongest.distinctOrganizations >= 2);
+    let pattern = null;
+    if (strongest) {
+      const patterns = await supabaseUpsert("/recognition_learning_patterns?on_conflict=fingerprint", {
+        fingerprint,
+        canonical_identity: strongest.correctedIdentity,
+        confirmations: strongest.confirmations,
+        distinct_organizations: strongest.distinctOrganizations,
+        supporting_feedback_ids: strongest.feedbackIds,
+        status: active ? "active" : "candidate",
+        activated_at: active ? new Date().toISOString() : null
+      });
+      pattern = patterns[0] || null;
+      if (strongest.feedbackIds.length) {
+        await supabaseUpdate(`/recognition_feedback?id=in.(${strongest.feedbackIds.map(encodeURIComponent).join(",")})`, {
+          status: active ? "validated" : "corroborated"
+        });
+      }
+    }
+    sendJson(response, 201, {
+      feedback: inserted[0] || null,
+      comparison: {
+        confirmations: strongest?.confirmations || 1,
+        distinctOrganizations: strongest?.distinctOrganizations || 1,
+        status: pattern?.status || "candidate",
+        canonicalIdentity: pattern?.canonical_identity || strongest?.correctedIdentity || corrected,
+        appliedAutomatically: false
+      }
+    });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "recognition_feedback_failed", message: redactSecret(error.message) });
+  }
+}
+
+function cleanCollectionScope(scope = {}) {
+  const allowedMediaTypes = new Set(["film", "game", "other"]);
+  const mediaTypes = [...new Set((Array.isArray(scope.mediaTypes) ? scope.mediaTypes : ["film", "game", "other"])
+    .map((entry) => String(entry || "").toLowerCase())
+    .filter((entry) => allowedMediaTypes.has(entry)))];
+  return {
+    mediaTypes: mediaTypes.length ? mediaTypes : ["film", "game", "other"],
+    hiddenAgeRatings: [...new Set((Array.isArray(scope.hiddenAgeRatings) ? scope.hiddenAgeRatings : ["FSK 18"])
+      .map((entry) => String(entry || "").trim()).filter(Boolean))].slice(0, 20),
+    hiddenItemIds: [...new Set((Array.isArray(scope.hiddenItemIds) ? scope.hiddenItemIds : [])
+      .map((entry) => String(entry || "").trim()).filter(isUuid))].slice(0, 500),
+    allowLoans: scope.allowLoans !== false
+  };
+}
+
+function publicCollectionShare(row, organizations = []) {
+  const owner = organizations.find((entry) => entry.id === row.owner_organization_id);
+  return {
+    id: row.id,
+    ownerOrganizationId: row.owner_organization_id,
+    ownerName: owner?.name || "Private Sammlung",
+    recipientEmail: row.recipient_email,
+    status: row.status,
+    scope: cleanCollectionScope(row.scope || {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function sanitizeSharedCollectionItem(row, share, ownerName, boxes = []) {
+  const item = mapDbItemToUi(row, boxes);
+  const collection = item.collection || {};
+  return {
+    id: item.id,
+    dbId: row.id,
+    sku: item.sku,
+    title: item.title,
+    category: item.category,
+    franchise: item.franchise,
+    condition: item.condition,
+    completeness: item.completeness,
+    confidence: item.confidence,
+    low: item.low,
+    fair: item.fair,
+    aggressive: item.aggressive,
+    image: item.image,
+    collection: {
+      status: collection.status || "owned",
+      mediaType: collection.mediaType || "other",
+      platform: collection.platform || "",
+      edition: collection.edition || "",
+      estimatedValue: Number(collection.estimatedValue || item.fair || 0),
+      genres: Array.isArray(collection.genres) ? collection.genres : [],
+      themes: Array.isArray(collection.themes) ? collection.themes : [],
+      moods: Array.isArray(collection.moods) ? collection.moods : [],
+      releaseYear: collection.releaseYear || "",
+      ageRating: collection.ageRating || "",
+      summary: collection.summary || "",
+      reviewLinks: Array.isArray(collection.reviewLinks) ? collection.reviewLinks : []
+    },
+    sharedAccess: {
+      shareId: share.id,
+      ownerOrganizationId: share.owner_organization_id,
+      ownerName,
+      allowLoans: cleanCollectionScope(share.scope).allowLoans
+    }
+  };
+}
+
+function collectionParticipantQuery(user) {
+  const filters = [];
+  if (isUuid(user?.id)) filters.push(`recipient_user_id.eq.${user.id}`);
+  const email = normalizeInvitationEmail(user?.email);
+  if (email) filters.push(`recipient_email.eq.${email}`);
+  return filters.length ? `or=(${filters.join(",")})` : "";
+}
+
+async function handleCollectionNetwork(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:read");
+  if (!tenant) return;
+  if (tenant.activeOrganization.type !== "personal") {
+    sendJson(response, 200, { available: false, message: "Wechsle in deinen Bereich „Privat“, um persönliche Freigaben und Ausleihen zu verwalten." });
+    return;
+  }
+  const user = request.ramrodUser || {};
+  if (!isUuid(user.id) || !normalizeInvitationEmail(user.email)) {
+    sendJson(response, 200, { available: false, message: "Sammlungsfreigaben benötigen ein persönliches RAMROD-Konto." });
+    return;
+  }
+  try {
+    const organizationId = tenant.activeOrganization.id;
+    const participantQuery = collectionParticipantQuery(user);
+    const [organizations, ownedShares, receivedShares, incomingAccessRequests, outgoingAccessRequests, ownerLoanRequests, requesterLoanRequests] = await Promise.all([
+      selectOrganizations(),
+      supabaseSelect(`/collection_shares?select=*&owner_organization_id=eq.${encodeURIComponent(organizationId)}&order=created_at.desc`),
+      participantQuery ? supabaseSelect(`/collection_shares?select=*&${participantQuery}&status=eq.active&order=created_at.desc`) : [],
+      supabaseSelect(`/collection_access_requests?select=*&owner_organization_id=eq.${encodeURIComponent(organizationId)}&order=created_at.desc`),
+      supabaseSelect(`/collection_access_requests?select=*&requester_user_id=eq.${encodeURIComponent(user.id)}&order=created_at.desc`),
+      supabaseSelect(`/collection_loan_requests?select=*&owner_organization_id=eq.${encodeURIComponent(organizationId)}&order=created_at.desc`),
+      supabaseSelect(`/collection_loan_requests?select=*&requester_user_id=eq.${encodeURIComponent(user.id)}&order=created_at.desc`)
+    ]);
+    const sharedItems = [];
+    for (const share of receivedShares) {
+      const owner = organizations.find((entry) => entry.id === share.owner_organization_id);
+      const [rows, boxes] = await Promise.all([
+        supabaseSelect(`/items?select=*&customer_id=eq.${encodeURIComponent(share.owner_organization_id)}&order=created_at.desc&limit=1000`),
+        supabaseSelect(`/boxes?select=id,code,label,location,status,customer_id&customer_id=eq.${encodeURIComponent(share.owner_organization_id)}&order=code.asc`)
+      ]);
+      for (const row of rows) {
+        const item = mapDbItemToUi(row, boxes);
+        if (!item.collection || !["owned", "loaned"].includes(String(item.collection.status || "owned"))) continue;
+        if (!scopeAllowsCollectionItem(cleanCollectionScope(share.scope), item)) continue;
+        sharedItems.push(sanitizeSharedCollectionItem(row, share, owner?.name || "Private Sammlung", boxes));
+      }
+    }
+    sendJson(response, 200, {
+      available: true,
+      ownedShares: ownedShares.map((entry) => publicCollectionShare(entry, organizations)),
+      receivedShares: receivedShares.map((entry) => publicCollectionShare(entry, organizations)),
+      sharedItems,
+      incomingAccessRequests,
+      outgoingAccessRequests,
+      ownerLoanRequests,
+      requesterLoanRequests
+    });
+  } catch (error) {
+    sendJson(response, 200, { available: false, message: `Sammlungsnetzwerk noch nicht eingerichtet: ${redactSecret(error.message)}` });
+  }
+}
+
+async function handleCreateCollectionShare(request, response) {
+  const tenant = await requireTenantPermission(request, response, "team:manage");
+  if (!tenant) return;
+  try {
+    if (tenant.activeOrganization.type !== "personal") throw httpError(400, "Sammlungen können nur aus einem persönlichen Bereich freigegeben werden.");
+    const body = JSON.parse(await readRequestBody(request, 128 * 1024));
+    const email = normalizeInvitationEmail(body.email);
+    if (!email) throw httpError(400, "Bitte eine gültige E-Mail-Adresse angeben.");
+    const users = await supabaseAdminUsers();
+    const recipient = users.find((entry) => normalizeInvitationEmail(entry.email) === email);
+    if (!recipient) throw httpError(404, "Für diese E-Mail gibt es noch kein RAMROD-Konto. Die Person muss zuerst ein eigenes Konto anlegen.");
+    const rows = await supabaseUpsert("/collection_shares?on_conflict=owner_organization_id,recipient_email", {
+      owner_organization_id: tenant.activeOrganization.id,
+      recipient_user_id: recipient.id,
+      recipient_email: email,
+      status: "active",
+      scope: cleanCollectionScope(body.scope),
+      created_by: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null
+    });
+    sendJson(response, 201, { share: publicCollectionShare(rows[0], await selectOrganizations()) });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "collection_share_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleCollectionShareAction(request, response, shareId, action) {
+  const tenant = await requireTenantPermission(request, response, "team:manage");
+  if (!tenant) return;
+  try {
+    if (tenant.activeOrganization.type !== "personal") throw httpError(400, "Wechsle zuerst in deinen persönlichen Bereich.");
+    const rows = await supabaseUpdate(`/collection_shares?id=eq.${encodeURIComponent(shareId)}&owner_organization_id=eq.${encodeURIComponent(tenant.activeOrganization.id)}`, {
+      status: action === "revoke" ? "revoked" : "active"
+    });
+    if (!rows[0]) throw httpError(404, "Freigabe nicht gefunden.");
+    sendJson(response, 200, { share: rows[0] });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "collection_share_action_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function findPersonalOrganizationForUser(userId) {
+  const memberships = await supabaseSelect(`/organization_memberships?select=organization_id,role,status&user_id=eq.${encodeURIComponent(userId)}&status=eq.active`);
+  if (!memberships.length) return null;
+  const ids = memberships.map((entry) => entry.organization_id);
+  const organizations = await selectOrganizations();
+  return organizations.find((entry) => ids.includes(entry.id) && entry.type === "personal") || null;
+}
+
+async function handleCreateCollectionAccessRequest(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:read");
+  if (!tenant) return;
+  try {
+    if (tenant.activeOrganization.type !== "personal") throw httpError(400, "Wechsle zuerst in deinen persönlichen Bereich.");
+    const body = JSON.parse(await readRequestBody(request, 128 * 1024));
+    const ownerEmail = normalizeInvitationEmail(body.ownerEmail);
+    const requesterEmail = normalizeInvitationEmail(request.ramrodUser?.email);
+    if (!ownerEmail || !requesterEmail || !isUuid(request.ramrodUser?.id)) throw httpError(400, "Für die Anfrage werden zwei gültige RAMROD-Konten benötigt.");
+    const users = await supabaseAdminUsers();
+    const ownerUser = users.find((entry) => normalizeInvitationEmail(entry.email) === ownerEmail);
+    if (!ownerUser) throw httpError(404, "Die angegebene Person hat noch kein RAMROD-Konto.");
+    const ownerOrganization = await findPersonalOrganizationForUser(ownerUser.id);
+    if (!ownerOrganization) throw httpError(404, "Für diese Person wurde noch keine private Sammlung gefunden.");
+    if (ownerOrganization.id === tenant.activeOrganization.id) throw httpError(400, "Du bist bereits in dieser Sammlung.");
+    const rows = await supabaseUpsert("/collection_access_requests?on_conflict=owner_organization_id,requester_user_id", {
+      owner_organization_id: ownerOrganization.id,
+      requester_user_id: request.ramrodUser.id,
+      requester_email: requesterEmail,
+      requester_name: String(request.ramrodUser.user_metadata?.name || body.requesterName || requesterEmail.split("@")[0]).slice(0, 120),
+      message: String(body.message || "Ich möchte deine freigegebenen Sammlungsbereiche sehen.").slice(0, 1000),
+      status: "requested",
+      decided_by: null,
+      decided_at: null
+    });
+    sendJson(response, 201, { request: rows[0] || null });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "collection_access_request_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleCollectionAccessRequestAction(request, response, requestId, action) {
+  try {
+    const rows = await supabaseSelect(`/collection_access_requests?select=*&id=eq.${encodeURIComponent(requestId)}&limit=1`);
+    const accessRequest = rows[0];
+    if (!accessRequest) throw httpError(404, "Zugriffsanfrage nicht gefunden.");
+    const tenant = await resolveTenantContext(request);
+    const isRequester = accessRequest.requester_user_id === request.ramrodUser?.id;
+    const isOwner = tenant.activeOrganization?.id === accessRequest.owner_organization_id
+      && hasOrganizationPermission(tenant.activeOrganization.role, "team:manage", tenant.platformAdmin);
+    if ((action === "cancel" && !isRequester) || (action !== "cancel" && !isOwner)) throw httpError(403, "Diese Anfrage darfst du nicht bearbeiten.");
+    const body = JSON.parse(await readRequestBody(request, 128 * 1024));
+    if (action === "approve") {
+      const shareRows = await supabaseUpsert("/collection_shares?on_conflict=owner_organization_id,recipient_email", {
+        owner_organization_id: accessRequest.owner_organization_id,
+        recipient_user_id: accessRequest.requester_user_id,
+        recipient_email: normalizeInvitationEmail(accessRequest.requester_email),
+        status: "active",
+        scope: cleanCollectionScope(body.scope),
+        created_by: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null
+      });
+      await supabaseUpdate(`/collection_access_requests?id=eq.${encodeURIComponent(requestId)}`, {
+        status: "approved",
+        decided_by: request.ramrodUser.id,
+        decided_at: new Date().toISOString()
+      });
+      sendJson(response, 200, { request: { ...accessRequest, status: "approved" }, share: shareRows[0] || null });
+      return;
+    }
+    const status = action === "decline" ? "declined" : "cancelled";
+    const updated = await supabaseUpdate(`/collection_access_requests?id=eq.${encodeURIComponent(requestId)}`, {
+      status,
+      decided_by: action === "decline" ? request.ramrodUser.id : null,
+      decided_at: new Date().toISOString()
+    });
+    sendJson(response, 200, { request: updated[0] || null });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "collection_access_action_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function handleCreateCollectionLoanRequest(request, response) {
+  try {
+    const body = JSON.parse(await readRequestBody(request, 128 * 1024));
+    if (!isUuid(request.ramrodUser?.id)) throw httpError(401, "Bitte zuerst anmelden.");
+    const shares = await supabaseSelect(`/collection_shares?select=*&id=eq.${encodeURIComponent(body.shareId)}&status=eq.active&limit=1`);
+    const share = shares[0];
+    if (!share) throw httpError(404, "Sammlungsfreigabe nicht gefunden.");
+    const email = normalizeInvitationEmail(request.ramrodUser.email);
+    if (share.recipient_user_id !== request.ramrodUser.id && normalizeInvitationEmail(share.recipient_email) !== email) throw httpError(403, "Dieses Stück ist nicht für dich freigegeben.");
+    const scope = cleanCollectionScope(share.scope);
+    if (!scope.allowLoans) throw httpError(403, "Für diesen Sammlungsbereich sind keine Ausleihanfragen erlaubt.");
+    const itemRows = await supabaseSelect(`/items?select=*&id=eq.${encodeURIComponent(body.itemId)}&customer_id=eq.${encodeURIComponent(share.owner_organization_id)}&limit=1`);
+    const row = itemRows[0];
+    if (!row) throw httpError(404, "Sammlungsstück nicht gefunden.");
+    const item = mapDbItemToUi(row);
+    if (!item.collection || !scopeAllowsCollectionItem(scope, item)) throw httpError(403, "Dieses Stück ist nicht Teil der Freigabe.");
+    if (String(item.collection.status || "owned") !== "owned") throw httpError(409, "Dieses Stück ist aktuell nicht verfügbar.");
+    const existing = await supabaseSelect(`/collection_loan_requests?select=id,status&item_id=eq.${encodeURIComponent(row.id)}&requester_user_id=eq.${encodeURIComponent(request.ramrodUser.id)}&status=in.(requested,approved,loaned)&limit=1`);
+    if (existing[0]) throw httpError(409, "Für dieses Stück gibt es bereits eine offene Ausleihanfrage.");
+    const inserted = await supabaseInsert("/collection_loan_requests", {
+      share_id: share.id,
+      item_id: row.id,
+      owner_organization_id: share.owner_organization_id,
+      requester_user_id: request.ramrodUser.id,
+      requester_email: email,
+      requester_name: String(request.ramrodUser.user_metadata?.name || body.requesterName || email.split("@")[0]).slice(0, 120),
+      note: String(body.note || "").slice(0, 1000) || null,
+      due_at: body.dueAt || null,
+      status: "requested"
+    });
+    sendJson(response, 201, { request: inserted[0] || null });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "collection_loan_request_failed", message: redactSecret(error.message) });
+  }
+}
+
+async function updateCollectionLoanedItem(loanRequest, loaned) {
+  const rows = await supabaseSelect(`/items?select=*&id=eq.${encodeURIComponent(loanRequest.item_id)}&customer_id=eq.${encodeURIComponent(loanRequest.owner_organization_id)}&limit=1`);
+  const row = rows[0];
+  if (!row) throw httpError(404, "Sammlungsstück nicht gefunden.");
+  const raw = row.raw_analysis || {};
+  const item = mapDbItemToUi(row);
+  const now = new Date().toISOString();
+  const previous = item.collection || {};
+  const collection = loaned ? {
+    ...previous,
+    status: "loaned",
+    borrowerName: loanRequest.requester_name || loanRequest.requester_email,
+    borrowerContact: loanRequest.requester_email,
+    loanedAt: now,
+    dueAt: loanRequest.due_at || "",
+    history: [...(Array.isArray(previous.history) ? previous.history : []), { type: "loaned", at: now, borrowerName: loanRequest.requester_name || loanRequest.requester_email, requestId: loanRequest.id }]
+  } : {
+    ...previous,
+    status: "owned",
+    borrowerName: "",
+    borrowerContact: "",
+    loanedAt: "",
+    dueAt: "",
+    returnedAt: now,
+    history: [...(Array.isArray(previous.history) ? previous.history : []), { type: "returned", at: now, requestId: loanRequest.id }]
+  };
+  item.collection = collection;
+  await supabaseUpdate(`/items?id=eq.${encodeURIComponent(row.id)}&customer_id=eq.${encodeURIComponent(loanRequest.owner_organization_id)}`, {
+    status: "Sammlung",
+    primary_channel: "Sammlung",
+    raw_analysis: { ...raw, uiItem: item }
+  });
+}
+
+async function handleCollectionLoanRequestAction(request, response, requestId, action) {
+  try {
+    const rows = await supabaseSelect(`/collection_loan_requests?select=*&id=eq.${encodeURIComponent(requestId)}&limit=1`);
+    const loanRequest = rows[0];
+    if (!loanRequest) throw httpError(404, "Ausleihanfrage nicht gefunden.");
+    const tenant = await resolveTenantContext(request);
+    const isRequester = loanRequest.requester_user_id === request.ramrodUser?.id;
+    const isOwner = tenant.activeOrganization?.id === loanRequest.owner_organization_id
+      && hasOrganizationPermission(tenant.activeOrganization.role, "inventory:write", tenant.platformAdmin);
+    if ((action === "cancel" && !isRequester) || (action !== "cancel" && !isOwner)) throw httpError(403, "Diese Ausleihanfrage darfst du nicht bearbeiten.");
+    if (action === "approve") await updateCollectionLoanedItem(loanRequest, true);
+    if (action === "return") await updateCollectionLoanedItem(loanRequest, false);
+    const status = { approve: "loaned", decline: "declined", return: "returned", cancel: "cancelled" }[action];
+    const updated = await supabaseUpdate(`/collection_loan_requests?id=eq.${encodeURIComponent(requestId)}`, {
+      status,
+      decided_by: isUuid(request.ramrodUser?.id) ? request.ramrodUser.id : null,
+      decided_at: new Date().toISOString()
+    });
+    sendJson(response, 200, { request: updated[0] || null });
+  } catch (error) {
+    sendJson(response, error.status || 500, { error: "collection_loan_action_failed", message: redactSecret(error.message) });
+  }
+}
+
 async function pendingInvitationsForEmail(email) {
   const normalized = normalizeInvitationEmail(email);
   if (!normalized) return [];
@@ -2604,6 +3120,7 @@ async function requestOpenAiRecognition(body, images, apiKey, candidateModel, st
     clientImageQualities: body.clientImageQualities
   });
   recognition.externalVisualEvidence = buildExternalVisualEvidence(body.visualMatches);
+  recognition.learningComparison = await compareRecognitionLearning(recognition, body);
   return {
     provider: "openai-fast",
     model: result.model || candidateModel,
