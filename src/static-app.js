@@ -1759,6 +1759,48 @@ function photoSourceActions(photoCount, photoLimit) {
   </div>`;
 }
 
+async function addPhotosToDraft(fileList, { startVaultScan = false } = {}) {
+  if (startVaultScan) {
+    state.recognitionRequestId += 1;
+    state.captureDestination = "vault";
+    state.captureMode = "single";
+    state.vaultReidentifyItem = "";
+    state.draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
+    state.recognition = null;
+    state.recognitionMeta = null;
+    state.view = "vault-scan";
+  }
+
+  const photoLimit = capturePhotoLimit();
+  const remaining = Math.max(0, photoLimit - (state.draft.photos?.length || 0));
+  const files = [...(fileList || [])].slice(0, remaining);
+  if (!files.length) return false;
+  const previousPhotoCount = state.draft.photos?.length || 0;
+  state.importStatus = `${files.length} Foto${files.length === 1 ? "" : "s"} wird vorbereitet...`;
+  render();
+  try {
+    const preparedPhotos = [];
+    for (const file of files) preparedPhotos.push(await prepareImageForAi(file));
+    state.draft.photos = [...(state.draft.photos || []), ...preparedPhotos].slice(0, photoLimit);
+    state.draft.photo = state.draft.photos[0]?.dataUrl || "";
+    state.draft.photoSetComplete = false;
+    state.draft.recognitionCorrection = null;
+    if (state.draft.useVisualSearch && previousPhotoCount === 0) {
+      state.draft.visualMatchesSearched = false;
+      state.draft.visualMatches = [];
+    }
+    state.recognition = null;
+    state.recognitionMeta = null;
+    const weakest = Math.min(...state.draft.photos.map((entry) => entry.quality?.score ?? 100));
+    state.importStatus = `${state.draft.photos.length} Foto${state.draft.photos.length === 1 ? "" : "s"} bereit · schwächste Bildqualität ${weakest}%.`;
+  } catch (error) {
+    state.importStatus = `Bildvorbereitung fehlgeschlagen: ${error.message}.`;
+  }
+  render();
+  if ((state.captureMode === "single" || state.view === "vault-scan") && state.draft.photos.length) await runFastRecognition();
+  return true;
+}
+
 function vaultScanView() {
   const reidentifyItem = state.items.find((item) => item.id === state.vaultReidentifyItem);
   const photos = state.draft.photos?.length
@@ -2313,9 +2355,11 @@ function vaultView() {
       <div><p>RAMROD VAULT</p><h2>${sharedScope ? "Freigegebene Sammlungen" : "Deine Spiele- und Filmsammlung"}</h2><span>${sharedScope ? "Du siehst nur die Bereiche, die andere Personen ausdrücklich mit dir geteilt haben." : "Inventar, Leihstatus und Wert an einem Ort. Verkauft wird erst nach deinem Klick."}</span></div>
       ${sharedScope ? "" : `<div class="vault-hero-actions">
         <button class="secondary-action" data-vault-new type="button">${icon("NE")}Manuell hinzufügen</button>
-        <button class="primary-action" data-vault-scan type="button">${icon("KA")}Sammlung scannen</button>
+        <button class="secondary-action" data-vault-upload type="button">${icon("UP")}Bilder auswählen</button>
+        <button class="primary-action" data-vault-scan type="button">${icon("KA")}Kamera öffnen</button>
       </div>`}
     </header>
+    ${sharedScope ? "" : `<input class="photo-source-input" id="vault-start-upload" accept="image/*" type="file" multiple />`}
     <nav class="vault-scope-tabs" aria-label="Sammlungsbereich">
       <button class="${sharedScope ? "" : "active"}" data-vault-scope="mine" type="button">${icon("SA")}Meine Sammlung <span>${ownItems.length}</span></button>
       <button class="${sharedScope ? "active" : ""}" data-vault-scope="shared" type="button">${icon("FR")}Mit mir geteilt <span>${sharedItems.length}</span></button>
@@ -2462,7 +2506,7 @@ function vaultEntryForm() {
 function vaultEmptyState(importable) {
   return `<section class="vault-empty">
     <span>${icon("SA")}</span><div><p>Dein Vault ist bereit</p><h3>Beginne mit dem ersten Spiel oder Film</h3><small>Fotografiere den Artikel oder übernimm vorhandene RAMROD-Datensätze. Nichts wird automatisch angeboten.</small></div>
-    <div class="vault-empty-actions"><button class="primary-action" data-vault-scan type="button">${icon("KA")}Für Sammlung fotografieren</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
+    <div class="vault-empty-actions"><button class="primary-action" data-vault-scan type="button">${icon("KA")}Kamera öffnen</button><button class="secondary-action" data-vault-upload type="button">${icon("UP")}Bilder auswählen</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
   </section>${importable.length ? vaultImportStrip(importable) : ""}`;
 }
 
@@ -4069,6 +4113,14 @@ function bindEvents() {
     state.view = "vault-scan";
     render();
   }));
+  document.querySelectorAll("[data-vault-upload]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("#vault-start-upload")?.click();
+  }));
+  document.querySelector("#vault-start-upload")?.addEventListener("change", async (event) => {
+    const files = [...(event.target.files || [])];
+    event.target.value = "";
+    await addPhotosToDraft(files, { startVaultScan: true });
+  });
   document.querySelector("[data-vault-back]")?.addEventListener("click", () => {
     state.recognitionRequestId += 1;
     state.draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
@@ -5120,38 +5172,9 @@ function bindEvents() {
 
   const photoInputs = document.querySelectorAll("#photo, #photo-upload");
   photoInputs.forEach((photoInput) => photoInput.addEventListener("change", async (event) => {
-    const photoLimit = capturePhotoLimit();
-    const remaining = Math.max(0, photoLimit - (state.draft.photos?.length || 0));
-    const files = [...(event.target.files || [])].slice(0, remaining);
-    if (!files.length) return;
-    const previousPhotoCount = state.draft.photos?.length || 0;
-    state.importStatus = `${files.length} Foto${files.length === 1 ? "" : "s"} wird vorbereitet...`;
-    render();
-    try {
-      const preparedPhotos = [];
-      for (const file of files) {
-        const prepared = await prepareImageForAi(file);
-        preparedPhotos.push(prepared);
-      }
-      state.draft.photos = [...(state.draft.photos || []), ...preparedPhotos].slice(0, photoLimit);
-      state.draft.photo = state.draft.photos[0]?.dataUrl || "";
-      state.draft.photoSetComplete = false;
-      state.draft.recognitionCorrection = null;
-      if (state.draft.useVisualSearch && previousPhotoCount === 0) {
-        state.draft.visualMatchesSearched = false;
-        state.draft.visualMatches = [];
-      }
-      state.recognition = null;
-      state.recognitionMeta = null;
-      const weakest = Math.min(...state.draft.photos.map((entry) => entry.quality?.score ?? 100));
-      state.importStatus = `${state.draft.photos.length} Foto${state.draft.photos.length === 1 ? "" : "s"} bereit · schwächste Bildqualität ${weakest}%.`;
-    } catch (error) {
-      state.importStatus = `Bildvorbereitung fehlgeschlagen: ${error.message}.`;
-    } finally {
-      event.target.value = "";
-    }
-    render();
-    if ((state.captureMode === "single" || state.view === "vault-scan") && state.draft.photos.length) await runFastRecognition();
+    const files = [...(event.target.files || [])];
+    event.target.value = "";
+    await addPhotosToDraft(files);
   }));
 
   document.querySelectorAll("[data-remove-photo]").forEach((button) => button.addEventListener("click", async () => {
