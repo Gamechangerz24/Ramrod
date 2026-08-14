@@ -135,6 +135,11 @@ async function executeJob(job) {
 }
 
 async function applyJobResult(job, result) {
+  if (job.job_type === "analyze_image" && job.item_id && result?.item) {
+    await applyImageAnalysisToItem(job, result);
+    return;
+  }
+
   if (job.job_type !== "price_check" || !job.item_id || !result?.priceCheck) return;
 
   const priceCheck = result.priceCheck;
@@ -167,6 +172,115 @@ async function applyJobResult(job, result) {
       checked_at: priceCheck.checkedAt || new Date().toISOString()
     })
   });
+}
+
+async function applyImageAnalysisToItem(job, result) {
+  const rows = await supabaseRequest(`/items?select=*&id=eq.${encodeURIComponent(job.item_id)}&limit=1`);
+  const row = rows[0];
+  if (!row) {
+    const error = new Error("Der Intake-Artikel für die Hintergrundanalyse wurde nicht gefunden.");
+    error.code = "intake_item_missing";
+    error.retryable = false;
+    throw error;
+  }
+
+  const raw = row.raw_analysis && typeof row.raw_analysis === "object" ? row.raw_analysis : {};
+  const previous = raw.uiItem && typeof raw.uiItem === "object" ? raw.uiItem : {};
+  const analyzed = result.item;
+  const collectionCapture = String(job.payload?.captureIntent || "sales") === "vault";
+  const image = previous.image || raw.image || null;
+  const imageStoragePaths = Array.isArray(previous.imageStoragePaths)
+    ? previous.imageStoragePaths
+    : Array.isArray(job.payload?.imageStoragePaths)
+      ? job.payload.imageStoragePaths
+      : [];
+  const merged = {
+    ...previous,
+    ...analyzed,
+    id: previous.id || analyzed.id || row.id,
+    dbId: row.id,
+    sku: row.sku,
+    boxId: previous.boxId || analyzed.boxId || job.payload?.boxId || "RR-001",
+    image,
+    imageStoragePath: previous.imageStoragePath || job.payload?.imageStoragePath || "",
+    imageStoragePaths,
+    channel: collectionCapture ? "Sammlung" : (analyzed.channel || "Pruefen"),
+    stage: collectionCapture ? "Sammlung" : (analyzed.stage || "Freigabe"),
+    sourceType: collectionCapture ? "vault-background-analysis" : "background_analysis",
+    analysisPending: false,
+    analysisWarning: "",
+    analysisCompletedAt: new Date().toISOString(),
+    analysisJob: {
+      id: job.id,
+      status: "succeeded",
+      attempts: Number(job.attempts || 0),
+      maxAttempts: Number(job.max_attempts || 0)
+    }
+  };
+
+  await supabaseRequest(`/items?id=eq.${encodeURIComponent(job.item_id)}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({
+      title: merged.title || row.title,
+      category: merged.category || row.category,
+      franchise: merged.franchise || row.franchise,
+      condition: merged.condition || row.condition,
+      completeness: merged.completeness || row.completeness,
+      confidence: clampInteger(merged.confidence, 0, 100, 0),
+      price_low: numberOrNull(merged.low),
+      price_fair: numberOrNull(merged.fair),
+      price_aggressive: numberOrNull(merged.aggressive),
+      weight_kg: numberOrNull(merged.weight),
+      primary_channel: merged.channel,
+      status: merged.stage,
+      source_type: merged.sourceType,
+      notes: merged.notes || null,
+      raw_analysis: {
+        ...raw,
+        uiItem: merged,
+        image,
+        research: Array.isArray(merged.research) ? merged.research : [],
+        whatnot: {
+          eligible: Boolean(merged.whatnotEligible),
+          channel: merged.whatnotChannel || "",
+          channelLabel: merged.whatnotChannelLabel || "",
+          campaignId: merged.campaignId || "",
+          campaignSuggestion: merged.campaignSuggestion || "",
+          showLotType: merged.showLotType || "",
+          sortOrderScore: merged.sortOrderScore || 0,
+          bundleSuggestion: merged.bundleSuggestion || "",
+          script: merged.whatnotScript || ""
+        },
+        listingDraft: merged.listingDraft || null
+      }
+    })
+  });
+
+  if (!collectionCapture) await ensurePriceCheckJob(job, merged);
+}
+
+async function ensurePriceCheckJob(job, item) {
+  const idempotencyKey = `auto-price-check:${job.item_id}:v2`;
+  const existing = await supabaseRequest(`/jobs?select=id&idempotency_key=eq.${encodeURIComponent(idempotencyKey)}&limit=1`);
+  if (existing[0]) return existing[0];
+
+  const rows = await supabaseRequest("/jobs", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      customer_id: job.customer_id,
+      item_id: job.item_id,
+      job_type: "price_check",
+      status: "queued",
+      priority: 70,
+      payload: { item: { ...item, dbId: job.item_id } },
+      max_attempts: 3,
+      run_after: new Date().toISOString(),
+      idempotency_key: idempotencyKey
+    })
+  });
+  return rows[0] || null;
 }
 
 async function handleJob(job) {

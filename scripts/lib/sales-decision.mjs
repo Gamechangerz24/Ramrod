@@ -33,9 +33,10 @@ export function reconcileSalesDecision(item, priceCheck) {
 
   const isGame = /videospiel|video game|xbox|playstation|nintendo|dreamcast|game boy|switch|ps[1-5]\b/.test(categoryText);
   const isCard = /pokemon|pokémon|trading card|sammelkarte|tcg|magic the gathering|yu-gi-oh/.test(categoryText);
-  const isCollectible = /collectible|sammler|actionfigur|action figure|figur|comic|toy|spielzeug/.test(categoryText);
+  const isCollectible = /collectible|sammler|actionfigur|action figure|comic|vintage.?toy|limited.?figur|sammelfigur/.test(categoryText);
   const isFashion = /handtasche|designer.?tasche|schuhe|sneaker|kleidung|jacke|mantel|kleid\b|mode|fashion/.test(categoryText);
   const isLocalGeneral = /staubsauger|kindersitz|kinderwagen|möbel|moebel|sofa|esstisch|haushaltsgerät|haushaltsgeraet|waschmaschine|kühlschrank|kuehlschrank|fahrrad|fitnessgerät|fitnessgeraet/.test(categoryText);
+  const isOrdinaryToy = /spielzeug|kinder.?spiel|puppe|holzspielzeug|lernspielzeug|spielzeugauto|playmobil|plüschtier|plueschtier|kuscheltier/.test(categoryText) && !isCollectible;
   const isEverydayBundle = /spielzeugpaket|kleiderpaket|haushaltspaket|kinderkleidung.?paket|haushaltsauflösung|haushaltsaufloesung/.test(categoryText);
   const isSpecialist = /modelleisenbahn|modellbahn|analogkamera|plattenspieler|verstärker|verstaerker|hi-?fi|vintage.?uhr/.test(categoryText);
   const isSingleCard = isCard && /single|einzelkarte|graded|psa|bgs|cgc|karte\b/.test(categoryText) && !/display|booster box|sealed|versiegelt/.test(categoryText);
@@ -56,12 +57,9 @@ export function reconcileSalesDecision(item, priceCheck) {
   } else if (isFashion) {
     channel = "Vinted";
     reasons.push("Mode, Schuhe und Taschen erreichen auf Vinted eine passende kaufbereite Zielgruppe; Marke, Größe und Zustand müssen klar belegt sein.");
-  } else if (isLocalGeneral) {
+  } else if (isLocalGeneral || isOrdinaryToy || isEverydayBundle) {
     channel = "Kleinanzeigen";
-    reasons.push("Sperrige oder alltagsnahe Gebrauchtware ist über Kleinanzeigen mit Abholung meist wirtschaftlicher als Paketversand.");
-  } else if (isEverydayBundle) {
-    channel = "Facebook Marketplace";
-    reasons.push("Lokale Pakete und gemischte Alltagsware lassen sich über Facebook Marketplace zielgruppennah als Abhol-Bundle anbieten.");
+    reasons.push("Alltagsware, normale Spielsachen und lokale Pakete sind über Kleinanzeigen mit Abholung meist wirtschaftlicher als Sammler- oder Versandplattformen.");
   } else if (isSingleCard) {
     channel = "Cardmarket";
     reasons.push("Die Karte ist katalogisierbar und erreicht auf Cardmarket gezielt Käufer, die nach Set, Sprache und Zustand suchen.");
@@ -270,10 +268,10 @@ function buildChannelPlan(context) {
     if (isVinyl) addParallel("Discogs", "Fachmarkt", 88, "Pressung und Medienzustand sind im Discogs-Katalog direkt vergleichbar.", "when-connector-ready");
     if (isMusicGear) addParallel("Reverb", "Fachmarkt", 88, "Technische Käufer suchen dort gezielt nach Modell und Zustand.", "when-connector-ready");
     if (isLocalGeneral || isEverydayBundle) {
-      addParallel(channel === "Kleinanzeigen" ? "Facebook Marketplace" : "Kleinanzeigen", "Lokale Reichweite", 82, "Ein zweiter lokaler Kanal erhöht die Abholreichweite ohne zusätzlichen Versand.", "manual-after-approval");
+      addParallel(channel === "Kleinanzeigen" ? "Facebook Marketplace" : "Kleinanzeigen", "Lokale Reichweite", 82, "Ein zweiter lokaler Kanal erhöht die Abholreichweite ohne zusätzlichen Versand.", "when-connector-ready");
     }
     if (isFashion) {
-      addParallel("Kleinanzeigen", "Lokaler Zweitmarkt", 76, "Für Taschen, Schuhe und Mode kann ein lokales Angebot zusätzliche Nachfrage ohne Rückversandrisiko liefern.", "manual-after-approval");
+      addParallel("Kleinanzeigen", "Lokaler Zweitmarkt", 76, "Für Taschen, Schuhe und Mode kann ein lokales Angebot zusätzliche Nachfrage ohne Rückversandrisiko liefern.", "when-connector-ready");
     }
     if (isNerdItem) {
       addParallel("RAMROD Shop", "Eigener Shop", 80, "Der eigene Katalog baut SEO, Kundendaten und Marge auf; Veröffentlichung startet erst mit aktivem Bestandssync.", "when-shop-sync-ready");

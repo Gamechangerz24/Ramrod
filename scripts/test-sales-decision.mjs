@@ -155,7 +155,8 @@ const householdBundle = reconcileSalesDecision({
   evidence: [{ price: 15 }, { price: 20 }, { price: 25 }]
 });
 
-assert.equal(householdBundle.channel, "Facebook Marketplace");
+assert.equal(householdBundle.channel, "Kleinanzeigen");
+assert.ok(householdBundle.salesStrategy.alternativeChannels.includes("Facebook Marketplace"));
 
 const unknown = reconcileSalesDecision({
   title: "Unbekannter Sammlerartikel",

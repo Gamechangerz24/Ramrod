@@ -163,7 +163,7 @@ const whatnotChannels = [
 const fallbackChannelCatalog = [
   { id: "ebay", name: "eBay", status: "draft-ready", statusLabel: "Entwurf bereit", spotlight: true, selectable: true },
   { id: "whatnot", name: "Whatnot", status: "assisted", statusLabel: "Show vorbereitet", spotlight: true, selectable: true },
-  { id: "kleinanzeigen", name: "Kleinanzeigen", status: "assisted", statusLabel: "Assistiert", spotlight: true, selectable: true },
+  { id: "kleinanzeigen", name: "Kleinanzeigen", status: "authorization-required", statusLabel: "Connector-Zugang fehlt", spotlight: true, selectable: true },
   { id: "vinted", name: "Vinted", status: "assisted", statusLabel: "Assistiert", selectable: true },
   { id: "facebook_marketplace", name: "Facebook Marketplace", status: "assisted", statusLabel: "Assistiert", selectable: true },
   { id: "instagram", name: "Instagram", status: "assisted", statusLabel: "Content assistiert", selectable: false },
@@ -245,10 +245,11 @@ const state = {
   recognitionMeta: null,
   recognitionRequestId: 0,
   analyzing: false,
-  captureMode: "single",
+  captureMode: window.matchMedia("(max-width: 760px)").matches ? "batch" : "single",
   captureDestination: initialView === "vault-scan" ? "vault" : "sales",
   batchDrafts: [],
   batchAnalyzing: false,
+  batchUploading: false,
   batchProgress: null,
   batchSummary: null,
   mobileReviewItem: "",
@@ -283,6 +284,7 @@ const state = {
   items: normalizeItems(loadStoredItems(initialOrganizationId))
 };
 const watchedAutomationJobs = new Set();
+const watchedAnalysisJobs = new Set();
 
 function localItemsKey(organizationId = state.activeOrganizationId) {
   return organizationId ? `ramrod-items:${organizationId}` : "creators-scanapp-items";
@@ -845,6 +847,9 @@ async function hydrateAppState() {
       state.items
         .filter((item) => ["queued", "running"].includes(item.automationJob?.status))
         .forEach((item) => watchAutomationJob(item, item.automationJob.id));
+      state.items
+        .filter((item) => ["queued", "running"].includes(item.analysisJob?.status))
+        .forEach((item) => watchBackgroundAnalysis(item, item.analysisJob.id));
     } else if (!state.persistence.configured) {
       state.importStatus = "Lokaler Modus: Datenbank ist nicht verbunden.";
     }
@@ -957,6 +962,82 @@ async function watchAutomationJob(item, jobId) {
     render();
   } finally {
     watchedAutomationJobs.delete(jobId);
+  }
+}
+
+async function watchBackgroundAnalysis(item, jobId) {
+  if (!jobId || watchedAnalysisJobs.has(jobId)) return;
+  watchedAnalysisJobs.add(jobId);
+
+  try {
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      const payload = await fetchJson(`/api/jobs?id=${encodeURIComponent(jobId)}&limit=1`);
+      const job = payload.jobs?.[0];
+      if (!job) return;
+      const current = state.items.find((entry) => entry.dbId === item.dbId || entry.id === item.id) || item;
+      current.analysisJob = {
+        id: job.id,
+        status: job.status,
+        attempts: Number(job.attempts || 0),
+        maxAttempts: Number(job.max_attempts || 0),
+        createdAt: job.created_at || null,
+        updatedAt: job.updated_at || null,
+        error: job.error || null
+      };
+
+      if (job.status === "succeeded" && job.result?.item) {
+        const stable = {
+          id: current.id,
+          dbId: current.dbId,
+          sku: current.sku,
+          boxId: current.boxId,
+          image: current.image,
+          imageStoragePath: current.imageStoragePath,
+          imageStoragePaths: current.imageStoragePaths
+        };
+        Object.assign(current, normalizeItems([{ ...current, ...job.result.item, ...stable }])[0], {
+          analysisPending: false,
+          analysisWarning: "",
+          analysisJob: { ...current.analysisJob, status: "succeeded" }
+        });
+        state.importStatus = `${current.title}: Erkennung und Verkaufsstrategie sind fertig. Der Marktpreis wird jetzt gegengeprüft.`;
+        saveLocal();
+        render();
+
+        if (current.dbId) {
+          const priceJobs = await fetchJson(`/api/jobs?itemId=${encodeURIComponent(current.dbId)}&jobType=price_check&limit=1`).catch(() => ({ jobs: [] }));
+          const priceJob = priceJobs.jobs?.[0];
+          if (priceJob?.id) {
+            current.automationJob = {
+              id: priceJob.id,
+              status: priceJob.status,
+              attempts: Number(priceJob.attempts || 0),
+              maxAttempts: Number(priceJob.max_attempts || 0),
+              error: priceJob.error || null
+            };
+            watchAutomationJob(current, priceJob.id);
+          }
+        }
+        return;
+      }
+
+      if (["failed", "cancelled"].includes(job.status)) {
+        current.analysisPending = false;
+        current.analysisWarning = job.error?.message || "Die Hintergrundanalyse ist fehlgeschlagen.";
+        state.importStatus = `${current.sku}: Analyse fehlgeschlagen. Die Fotos bleiben sicher gespeichert und können erneut verarbeitet werden.`;
+        saveLocal();
+        render();
+        return;
+      }
+
+      render();
+      await delay(2000);
+    }
+  } catch (error) {
+    state.importStatus = `Analysestatus konnte nicht geladen werden: ${error.message}`;
+    render();
+  } finally {
+    watchedAnalysisJobs.delete(jobId);
   }
 }
 
@@ -1089,6 +1170,8 @@ function getWorkQueues(items = visibleItems()) {
 }
 
 function workStatus(item) {
+  if (item.analysisPending || ["queued", "running"].includes(item.analysisJob?.status)) return "Analyse läuft";
+  if (["failed", "cancelled"].includes(item.analysisJob?.status)) return "Analyse wiederholen";
   if (item.stage === "Versand") return "Versand";
   if (item.stage === "Verkauft") return "Verkauft";
   if (item.ebayListing?.status === "active" || item.stage === "Gelistet") return "Bei eBay live";
@@ -2007,7 +2090,7 @@ function scanView() {
       ${batchMode
         ? bulkUpload
           ? `<div class="batch-instruction"><strong>${batchPhotoTotal} Bilder → ${state.batchDrafts.length} vorgeschlagene Artikel</strong><span>Vorderseite, Rückseite, Rücken und Barcode werden automatisch verbunden. Prüfe die Gruppen rechts vor dem Speichern.</span></div>`
-          : `<div class="batch-instruction"><strong>${state.batchDrafts.length} Artikel gespeichert</strong><span>Fotografiere alle Seiten dieses Artikels. Danach „Nächster Artikel“.</span></div>`
+          : `<div class="batch-instruction"><strong>${state.batchDrafts.filter((entry) => entry.status === "queued").length} Artikel sicher übertragen</strong><span>Fotografiere nur. „Sichern & nächstes Objekt“ lädt die Fotos hoch; die gesamte Analyse läuft danach im Hintergrund.</span></div>`
         : `<div class="workflow-progress ${vaultCapture ? "vault-progress" : ""}" aria-label="${vaultCapture ? "Sammlungsworkflow" : "Verkaufsworkflow"}">${progressSteps.map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>`}
       <label class="photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
       <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder vorhandene Bilder"}</strong></div>
@@ -2017,8 +2100,8 @@ function scanView() {
       ${manualFields}
       ${batchMode
         ? `<div class="batch-capture-actions">
-            <button class="secondary-action" id="batch-next" type="button" ${!photos.length || state.batchAnalyzing ? "disabled" : ""}>${icon("NX")}Nächster Artikel</button>
-            <button class="primary-action" id="batch-finish" type="button" ${!capturedCount || state.batchAnalyzing ? "disabled" : ""}>${icon(vaultCapture ? "SA" : "AI")}${state.batchAnalyzing ? (vaultCapture ? "Inventar wird erstellt..." : "Sammelanalyse läuft...") : (vaultCapture ? `${capturedCount} in Sammlung speichern` : `${capturedCount} Artikel analysieren`)}</button>
+            <button class="primary-action" id="batch-next" type="button" ${!photos.length || state.batchAnalyzing || state.batchUploading ? "disabled" : ""}>${icon("NX")}${state.batchUploading ? "Fotos werden gesichert..." : "Sichern & nächstes Objekt"}</button>
+            <button class="secondary-action" id="batch-finish" type="button" ${!capturedCount || state.batchAnalyzing || state.batchUploading ? "disabled" : ""}>${icon("OK")}${state.batchAnalyzing ? "Restliche Fotos werden gesichert..." : "Aufnahme beenden"}</button>
           </div>`
         : `<button class="primary-action mobile-primary-action" id="add-item" type="button" ${actionDisabled ? "disabled" : ""}>${icon(vaultCapture ? "SA" : "AI")}${actionLabel}</button>`}
     </div>
@@ -2034,13 +2117,13 @@ function batchCapturePanel() {
   const progress = state.batchProgress;
   if (state.batchAnalyzing && progress) {
     const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
-    return `<div class="panel-heading"><div><p>Sammelanalyse</p><h2>${progress.completed}/${progress.total} verarbeitet</h2></div>${icon("AI")}</div>
-      <div class="batch-progress"><span><i style="width:${percent}%"></i></span><strong>${escapeHtml(progress.label || "Artikel werden analysiert")}</strong><small>${progress.failed} benötigen bisher eine manuelle Prüfung.</small></div>
+    return `<div class="panel-heading"><div><p>Sicherer Intake</p><h2>${progress.completed}/${progress.total} übertragen</h2></div>${icon("UP")}</div>
+      <div class="batch-progress"><span><i style="width:${percent}%"></i></span><strong>${escapeHtml(progress.label || "Fotos werden gesichert")}</strong><small>${progress.failed} Uploads müssen erneut versucht werden.</small></div>
       ${batchDraftList()}`;
   }
 
-  return `<div class="panel-heading"><div><p>Aufnahmesession</p><h2>${state.batchDrafts.length} Artikel bereit</h2></div>${icon("ST")}</div>
-    <div class="batch-explainer"><strong>${bulkUpload ? "RAMROD hat zusammengehörige Ansichten gruppiert." : vaultCapture ? "Erst fotografieren, dann gemeinsam ins Inventar übernehmen." : "Erst fotografieren, dann gemeinsam analysieren."}</strong><p>${bulkUpload ? "Stimmen Vorder- und Rückseite nicht, kannst du Gruppen trennen oder mit der vorherigen Gruppe verbinden." : "Weitere Ansichten gehören zum aktuellen Artikel. Mit „Nächster Artikel“ beginnt das nächste Objekt."}</p></div>
+  return `<div class="panel-heading"><div><p>Aufnahmesession</p><h2>${state.batchDrafts.length} Artikel erfasst</h2></div>${icon("ST")}</div>
+    <div class="batch-explainer"><strong>${bulkUpload ? "RAMROD hat zusammengehörige Ansichten gruppiert." : "Die Aufnahme wartet nie auf eine KI-Analyse."}</strong><p>${bulkUpload ? "Stimmen Vorder- und Rückseite nicht, kannst du Gruppen vor dem Hochladen trennen oder verbinden." : "Weitere Ansichten gehören zum aktuellen Artikel. Nach dem sicheren Upload ist die Kamera sofort für das nächste Objekt bereit."}</p></div>
     ${batchDraftList()}`;
 }
 
@@ -2049,17 +2132,17 @@ function batchDraftList() {
   return `<div class="batch-draft-list">${state.batchDrafts.map((entry, index) => `<article class="batch-draft-row">
     <div class="batch-group-photos">${entry.draft.photos.slice(0, 4).map((photo, photoIndex) => `<img src="${photo.dataUrl}" alt="Artikel ${index + 1}, Ansicht ${photoIndex + 1}" />`).join("")}</div>
     <span><strong>${escapeHtml(entry.draft.query || `Artikel ${index + 1}`)}</strong><small>${entry.draft.photos.length} Foto${entry.draft.photos.length === 1 ? "" : "s"} · ${entry.grouping?.automatic ? `${entry.grouping.confidence}% Zuordnung · ` : ""}${escapeHtml(batchEntryStatus(entry.status))}</small></span>
-    ${state.batchAnalyzing ? "" : `<div class="batch-group-actions">${index ? `<button data-merge-batch="${entry.id}" type="button">Mit vorherigem verbinden</button>` : ""}${entry.draft.photos.length > 1 ? `<button data-split-batch="${entry.id}" type="button">Fotos trennen</button>` : ""}<button data-remove-batch="${entry.id}" type="button">Entfernen</button></div>`}
+    ${state.batchAnalyzing || !["captured", "failed"].includes(entry.status) ? "" : `<div class="batch-group-actions">${index ? `<button data-merge-batch="${entry.id}" type="button">Mit vorherigem verbinden</button>` : ""}${entry.draft.photos.length > 1 ? `<button data-split-batch="${entry.id}" type="button">Fotos trennen</button>` : ""}<button data-remove-batch="${entry.id}" type="button">Entfernen</button></div>`}
   </article>`).join("")}</div>`;
 }
 
 function batchEntryStatus(status) {
   return {
     captured: "bereit",
-    recognizing: "wird erkannt",
-    analyzing: state.captureDestination === "vault" ? "Inventar wird erstellt" : "Strategie wird berechnet",
-    completed: state.captureDestination === "vault" ? "gespeichert" : "analysiert",
-    failed: "manuell prüfen"
+    uploading: "Fotos werden gesichert",
+    queued: "gesichert · Analyse läuft im Hintergrund",
+    completed: "Analyse abgeschlossen",
+    failed: "Upload erneut versuchen"
   }[status] || "bereit";
 }
 
@@ -2072,82 +2155,91 @@ function cloneCaptureDraft(draft) {
 
 function queueCurrentBatchDraft() {
   const photos = state.draft.photos || [];
-  if (!photos.length) return false;
-  state.batchDrafts.push({
+  if (!photos.length) return null;
+  const entry = {
     id: makeId(),
     status: "captured",
     draft: cloneCaptureDraft(state.draft)
-  });
+  };
+  state.batchDrafts.push(entry);
   state.recognitionRequestId += 1;
   state.draft = createEmptyDraft(state.draft.boxId);
   state.recognition = null;
   state.recognitionMeta = null;
-  return true;
+  return entry;
 }
 
-async function runBatchAnalysis() {
+async function submitCapturedEntry(entry, index = 0) {
+  if (!entry || ["queued", "completed"].includes(entry.status)) {
+    return state.items.find((item) => item.id === entry?.itemId) || null;
+  }
+
+  const draft = entry.draft;
+  entry.status = "uploading";
+  render();
+  try {
+    const result = await postJson("/api/intake/capture", {
+      captureId: entry.id,
+      imageDataUrl: draft.photos?.[0]?.dataUrl || draft.photo,
+      imageDataUrls: (draft.photos || []).map((photo) => photo.dataUrl),
+      clientImageQualities: (draft.photos || []).map((photo) => photo.quality || null),
+      boxId: draft.boxId,
+      condition: draft.condition,
+      completeness: draft.completeness,
+      barcode: draft.barcode,
+      query: draft.query,
+      weight: draft.weight,
+      captureIntent: state.captureDestination === "vault" ? "vault" : "sales"
+    });
+    const item = normalizeItems([result.item])[0];
+    item.analysisJob = result.analysisJob || item.analysisJob || null;
+    item.analysisPending = true;
+    state.items = [item, ...state.items.filter((candidate) => candidate.dbId !== item.dbId && candidate.id !== item.id)];
+    state.selected = item.id;
+    entry.status = "queued";
+    entry.itemId = item.id;
+    entry.analysisJob = item.analysisJob;
+    if (item.image) {
+      entry.draft.photo = item.image;
+      entry.draft.photos = [{ dataUrl: item.image, quality: null }];
+    }
+    if (item.analysisJob?.id) watchBackgroundAnalysis(item, item.analysisJob.id);
+    state.importStatus = `Artikel ${index + 1} sicher gespeichert. Die Analyse läuft unabhängig im Hintergrund.`;
+    saveLocal();
+    render();
+    return item;
+  } catch (error) {
+    entry.status = "failed";
+    entry.error = error.message;
+    state.importStatus = `Artikel ${index + 1} konnte noch nicht hochgeladen werden: ${error.message}`;
+    render();
+    throw error;
+  }
+}
+
+async function runBatchCapture() {
   if (state.batchAnalyzing) return;
   queueCurrentBatchDraft();
   const entries = [...state.batchDrafts];
   if (!entries.length) return;
 
   state.batchAnalyzing = true;
-  const vaultCapture = state.captureDestination === "vault";
-  state.batchProgress = { total: entries.length, completed: 0, failed: 0, label: vaultCapture ? "Inventar wird vorbereitet" : "Sammelanalyse wird vorbereitet" };
-  state.importStatus = vaultCapture
-    ? `${entries.length} Sammlungsstücke werden gemeinsam ins Inventar übernommen.`
-    : `${entries.length} Artikel werden gemeinsam analysiert. Du kannst das Smartphone liegen lassen.`;
+  state.batchProgress = { total: entries.length, completed: 0, failed: 0, label: "Fotos werden sicher übertragen" };
+  state.importStatus = `${entries.length} Artikelgruppen werden gesichert. Es wird noch keine Analyse abgewartet.`;
   render();
 
-  const completedItemIds = [];
+  const capturedItemIds = entries.map((entry) => entry.itemId).filter(Boolean);
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
+    if (["queued", "completed"].includes(entry.status)) {
+      state.batchProgress.completed += 1;
+      continue;
+    }
     try {
-      state.draft = cloneCaptureDraft(entry.draft);
-      state.recognition = null;
-      state.recognitionMeta = null;
-      entry.status = "recognizing";
-      state.batchProgress.label = `Artikel ${index + 1}: Produkt erkennen`;
+      state.batchProgress.label = `Artikel ${index + 1}: Fotos sichern`;
       render();
-
-      const recognition = await runFastRecognition();
-      if (!recognition) throw new Error("Produkt konnte nicht erkannt werden");
-
-      entry.status = "analyzing";
-      state.batchProgress.label = vaultCapture
-        ? `Artikel ${index + 1}: Inventareintrag speichern`
-        : `Artikel ${index + 1}: Preis, Kanal und Strategie`;
-      render();
-      let item;
-      if (vaultCapture) {
-        item = inventoryItemFromRecognition(state.draft, recognition);
-      } else {
-        try {
-          item = enrichWorkflow(await analyzeWithApi());
-        } catch (error) {
-          item = salesItemFromRecognition(state.draft, recognition, error);
-          entry.warning = "Produkt erkannt; Markt- und Strategieanalyse wird nachgeholt.";
-        }
-      }
-      item.recognition = recognition;
-      item.recognitionEvidence = recognition.evidence || null;
-      if (vaultCapture) {
-        item = moveItemToCollection(item, {
-          barcode: state.draft.barcode || item.barcode || "",
-          capturedViews: state.draft.photos?.length || 1,
-          enrichment: { status: "pending", sources: [], enrichedAt: "" }
-        });
-      } else if (recognition.evidence?.status !== "ready_for_research") {
-        item.channel = "Pruefen";
-        item.stage = "Gescannt";
-        Object.assign(item, enrichWorkflow(item));
-      }
-      state.items.unshift(item);
-      state.selected = item.id;
-      await persistItem(item, `Artikel ${index + 1}`);
-      entry.status = "completed";
-      entry.itemId = item.id;
-      completedItemIds.push(item.id);
+      const item = await submitCapturedEntry(entry, index);
+      if (item && !capturedItemIds.includes(item.id)) capturedItemIds.push(item.id);
     } catch (error) {
       entry.status = "failed";
       entry.error = error.message;
@@ -2160,9 +2252,10 @@ async function runBatchAnalysis() {
 
   const failedEntries = entries.filter((entry) => entry.status === "failed");
   state.batchSummary = {
-    itemIds: completedItemIds,
+    mode: "background",
+    itemIds: capturedItemIds,
     total: entries.length,
-    completed: completedItemIds.length,
+    completed: capturedItemIds.length,
     failed: failedEntries.length,
     createdAt: new Date().toISOString()
   };
@@ -2173,9 +2266,7 @@ async function runBatchAnalysis() {
   state.recognition = null;
   state.recognitionMeta = null;
   state.view = state.captureDestination === "vault" ? "vault" : "review";
-  state.importStatus = state.captureDestination === "vault"
-    ? `${completedItemIds.length} Artikel zur Sammlung hinzugefügt${failedEntries.length ? ` · ${failedEntries.length} Aufnahme${failedEntries.length === 1 ? "" : "n"} erneut prüfen` : ""}.`
-    : `${completedItemIds.length} Artikel analysiert${failedEntries.length ? ` · ${failedEntries.length} Aufnahme${failedEntries.length === 1 ? "" : "n"} erneut prüfen` : ""}. Preischecks laufen im Hintergrund.`;
+  state.importStatus = `${capturedItemIds.length} Artikel sicher erfasst. Erkennung, Preis, Kanal und Strategie laufen jetzt im Hintergrund${failedEntries.length ? ` · ${failedEntries.length} Upload${failedEntries.length === 1 ? "" : "s"} erneut versuchen` : ""}.`;
   saveLocal();
   render();
 }
@@ -2385,21 +2476,22 @@ function batchSummaryCard() {
   const summary = state.batchSummary;
   if (!summary) return "";
   const items = (summary.itemIds || []).map((id) => state.items.find((item) => item.id === id)).filter(Boolean);
+  const analyzing = items.filter((item) => item.analysisPending || ["queued", "running"].includes(item.analysisJob?.status));
   const approved = items.filter((item) => item.approval?.status === "approved");
-  const openItems = items.filter((item) => item.approval?.status !== "approved");
+  const openItems = items.filter((item) => item.approval?.status !== "approved" && !analyzing.includes(item));
   const ready = openItems.filter((item) => releaseRequirements(item).every((entry) => entry.ready));
   const waiting = openItems.filter((item) => releaseRequirements(item).some((entry) => entry.id === "sources" && !entry.ready && entry.pending));
   const manual = openItems.filter((item) => !ready.includes(item) && !waiting.includes(item));
   return `<section class="batch-summary-card">
-    <div class="batch-summary-head"><div><p>Sammelanalyse abgeschlossen</p><h2>${summary.completed} Artikel verarbeitet</h2></div><button class="icon-button" data-dismiss-batch-summary type="button" title="Zusammenfassung schließen">×</button></div>
+    <div class="batch-summary-head"><div><p>${summary.mode === "background" ? "Aufnahme sicher gespeichert" : "Sammelanalyse abgeschlossen"}</p><h2>${summary.completed} Artikel erfasst</h2>${analyzing.length ? `<span>Du kannst weiterarbeiten oder die App schließen. Die Analyse läuft serverseitig weiter.</span>` : ""}</div><button class="icon-button" data-dismiss-batch-summary type="button" title="Zusammenfassung schließen">×</button></div>
     <div class="batch-summary-stats">
+      ${suggestion("Analyse läuft", analyzing.length)}
       ${suggestion("Freigabebereit", ready.length)}
       ${suggestion("Marktcheck läuft", waiting.length)}
       ${suggestion("Manuell prüfen", manual.length + Number(summary.failed || 0))}
-      ${suggestion("Freigegeben", approved.length)}
     </div>
     <div class="batch-summary-actions">
-      <button class="primary-action" data-bulk-approve type="button" ${ready.length && can("sales:approve") ? "" : "disabled"}>${icon("OK")}${!can("sales:approve") ? "Admin-Freigabe erforderlich" : ready.length ? `${ready.length} sichere Artikel freigeben` : waiting.length ? "Marktchecks laufen" : "Keine Sammelfreigabe möglich"}</button>
+      <button class="primary-action" data-bulk-approve type="button" ${ready.length && can("sales:approve") ? "" : "disabled"}>${icon("OK")}${!can("sales:approve") ? "Admin-Freigabe erforderlich" : ready.length ? `${ready.length} sichere Artikel freigeben` : analyzing.length ? "Analyse läuft im Hintergrund" : waiting.length ? "Marktchecks laufen" : "Freigabe noch nicht möglich"}</button>
       <button class="secondary-action" data-view="scan" type="button">${icon("KA")}Weitere scannen</button>
     </div>
   </section>`;
@@ -2733,7 +2825,8 @@ function formatArchiveDate(value) {
 
 function itemRow(item) {
   const strategy = normalizeSalesStrategy(item);
-  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${escapeHtml(workStatus(item))}</small><small class="item-recommendation">Empfehlung: ${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice || item.fair)}</small></span><span class="row-meta">${demoBadge(item)}<em>${euro(item.fair)}</em></span></button>`;
+  const pending = item.analysisPending || ["queued", "running"].includes(item.analysisJob?.status);
+  return `<button class="item-row ${state.selected === item.id ? "active" : ""}" data-select="${item.id}" type="button"><img src="${item.image}" alt="" /><span><strong>${escapeHtml(item.title)}</strong><small>${item.sku} · ${escapeHtml(workStatus(item))}</small><small class="item-recommendation">${pending ? "Identität, Preis, Kanal und Strategie werden automatisch ermittelt." : `Empfehlung: ${escapeHtml(channelLabel(item.channel))} · ${euro(strategy.targetPrice || item.fair)}`}</small></span><span class="row-meta">${demoBadge(item)}<em>${pending ? "…" : euro(item.fair)}</em></span></button>`;
 }
 
 function inspector(item) {
@@ -2775,6 +2868,13 @@ function inspector(item) {
 }
 
 function itemNextStepCard(item) {
+  if (item.analysisPending || ["queued", "running"].includes(item.analysisJob?.status)) {
+    const running = item.analysisJob?.status === "running";
+    return `<section class="item-next-step"><div><small>Im Hintergrund</small><strong>${running ? "RAMROD analysiert diesen Artikel" : "Artikel wartet auf den Analyse-Agenten"}</strong><span>Identität, Zustand, Preisquellen, bester Verkaufskanal und Strategie erscheinen automatisch. Du musst hier nichts tun.</span></div><span class="status-pill ${running ? "running" : "muted"}">${running ? "Läuft" : "Wartet"}</span></section>`;
+  }
+  if (["failed", "cancelled"].includes(item.analysisJob?.status)) {
+    return `<section class="item-next-step"><div><small>Analyse unterbrochen</small><strong>Die Fotos sind weiterhin sicher gespeichert</strong><span>${escapeHtml(item.analysisJob?.error?.message || item.analysisWarning || "Der Analyse-Agent konnte den Artikel noch nicht verarbeiten.")}</span></div><button class="secondary-action" data-view="agents" type="button">${icon("AG")}Agentenstatus</button></section>`;
+  }
   const approved = item.approval?.status === "approved";
   const blocker = releaseRequirements(item).find((entry) => !entry.ready);
   const prepared = item.ebayListing?.status === "prepared";
@@ -2796,7 +2896,8 @@ function itemNextStepCard(item) {
     if (blocker?.id === "channel") {
       return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkaufskanal bestätigen</strong><span>Wähle den empfohlenen oder einen anderen Kanal.</span></div><button class="primary-action" data-focus-channel-picker type="button">${icon("RT")}Kanal auswählen</button></section>`;
     }
-    return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkauf freigeben</strong><span>Danach bereitet RAMROD den gewählten Kanal vor.</span></div><button class="primary-action" data-approve-sale="${item.id}" type="button" ${blocker || state.approving || !can("sales:approve") ? "disabled" : ""}>${icon("GO")}${state.approving === item.id ? "Wird freigegeben..." : "Verkauf freigeben"}</button></section>`;
+    const automatic = item.channel === "eBay";
+    return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>${automatic ? "Freigeben und automatisch veröffentlichen" : "Verkauf freigeben"}</strong><span>${automatic ? "RAMROD erstellt und veröffentlicht das eBay-Angebot anschließend ohne weitere Klicks." : `RAMROD übergibt den Artikel danach automatisch an den ${escapeHtml(channelLabel(item.channel))}-Connector.`}</span></div><button class="primary-action" data-approve-sale="${item.id}" type="button" ${blocker || state.approving || !can("sales:approve") ? "disabled" : ""}>${icon("GO")}${state.approving === item.id ? "Wird ausgeführt..." : automatic ? "Freigeben & veröffentlichen" : "Verkauf freigeben"}</button></section>`;
   }
 
   if (item.channel === "eBay") {
@@ -2845,7 +2946,9 @@ function salesStrategyCard(item) {
             ? "Verkaufskanal wählen"
           : state.approving === item.id
             ? "Verkauf wird vorbereitet..."
-            : "Verkauf freigeben";
+            : item.channel === "eBay"
+              ? "Freigeben & veröffentlichen"
+              : "Verkauf freigeben";
   const action = strategyActionLabel(strategy.recommendedAction);
   const repairLabel = repairDecisionLabel(repair.recommendation);
 
@@ -2953,7 +3056,7 @@ function channelActivationLabel(value) {
   return {
     blocked: "Prüfung nötig",
     "after-approval": "Nach Freigabe",
-    "manual-after-approval": "Manuell nach Freigabe",
+    "manual-after-approval": "Connector nach Freigabe",
     "when-connector-ready": "Nach Connector",
     "when-shop-sync-ready": "Nach Shop-Sync",
     "content-after-approval": "Content vorbereiten",
@@ -3457,7 +3560,7 @@ function sellView() {
 function assistedSalesQueue(items) {
   return `<section class="assisted-sales">
     <div class="panel-heading"><div><p>Weitere Empfehlungen</p><h2>Assistierte Verkaufskanäle</h2></div><span class="queue-count">${items.length}</span></div>
-    <p class="assisted-note">RAMROD bereitet Preis, Text, Fotos und Vorgehen vor. Die Veröffentlichung bleibt manuell, bis der jeweilige Connector verfügbar ist.</p>
+    <p class="assisted-note">RAMROD bereitet Preis, Text und Bilder vollständig vor. Ein freigegebener Artikel bleibt automatisch in der Connector-Warteschlange; du musst ihn nicht manuell auf der Plattform nachbauen.</p>
     <div class="assisted-sales-list">${items.map((item) => {
       const strategy = normalizeSalesStrategy(item);
       const connector = strategy.channelPlan?.primary?.statusLabel || "Assistiert";
@@ -4097,6 +4200,14 @@ async function approveItemForSale(item) {
     const result = await postJson("/api/ebay-draft", { item });
     item.ebayDraft = result.ebayDraft;
   }
+  if (item.channel === "eBay") {
+    const draftReady = item.ebayDraft?.status === "ready_for_ebay"
+      && (item.ebayDraft.readiness || []).every((entry) => entry.ready);
+    if (!draftReady) {
+      await persistItem(item, "eBay-Vorschau");
+      throw new Error("Die eBay-Vorschau enthält noch markierte Pflichtangaben. Ergänze sie einmal und gib den Verkauf danach frei.");
+    }
+  }
   const strategy = normalizeSalesStrategy(item);
   item.approval = {
     status: "approved",
@@ -4104,10 +4215,28 @@ async function approveItemForSale(item) {
     strategyAccepted: true,
     summary: strategy.approvalSummary
   };
-  item.stage = item.channel === "eBay" && item.ebayDraft?.status !== "ready_for_ebay"
-    ? "Freigegeben"
-    : "Verkaufsbereit";
+  item.stage = "Verkaufsbereit";
   await persistItem(item, "Verkaufsfreigabe");
+
+  if (item.channel === "eBay") {
+    const prepared = await postJson("/api/ebay-listing/prepare", { item });
+    item.ebayListing = { ...prepared.listing, status: "prepared" };
+    await persistItem(item, "eBay-Angebot vorbereitet");
+
+    const published = await postJson("/api/ebay-listing/publish", {
+      item: { dbId: item.dbId || "", sku: item.sku },
+      confirm: true
+    });
+    item.ebayListing = {
+      ...item.ebayListing,
+      ...published.listing,
+      listingId: published.listingId,
+      url: published.url,
+      status: "active"
+    };
+    item.stage = "Gelistet";
+    await persistItem(item, "eBay-Angebot veröffentlicht");
+  }
   return item;
 }
 
@@ -5215,17 +5344,23 @@ function bindEvents() {
   document.querySelectorAll("[data-approve-sale]").forEach((button) => button.addEventListener("click", async () => {
     const item = state.items.find((entry) => entry.id === button.dataset.approveSale);
     if (!item || state.approving || releaseRequirements(item).some((entry) => !entry.ready)) return;
+    if (item.channel === "eBay") {
+      const strategy = normalizeSalesStrategy(item);
+      const auction = ebaySaleModeFor(item) === "auction_1_euro";
+      const confirmed = window.confirm(`RAMROD veröffentlicht diesen Artikel nach der Freigabe direkt im verbundenen eBay-Konto.\n\n${item.title}\n${auction ? `Auktion ab 1 € · geschätzter Marktwert ${euro(item.fair)}` : `Zielpreis ${euro(strategy.targetPrice || item.fair)}`}\n\nJetzt freigeben und veröffentlichen?`);
+      if (!confirmed) return;
+    }
     state.approving = item.id;
-    state.importStatus = `${item.sku} wird für den Verkauf vorbereitet...`;
+    state.importStatus = item.channel === "eBay"
+      ? `${item.sku} wird freigegeben, zu eBay übertragen und veröffentlicht...`
+      : `${item.sku} wird freigegeben und an den Kanal-Connector übergeben...`;
     render();
     try {
       await approveItemForSale(item);
       state.view = "sell";
       state.importStatus = item.channel === "eBay"
-        ? item.ebayDraft?.status === "ready_for_ebay"
-          ? `${item.sku} freigegeben. Die RAMROD-Vorschau ist vollständig; noch wurde nichts zu eBay übertragen.`
-          : `${item.sku} freigegeben. Die RAMROD-Vorschau zeigt noch offene eBay- oder Kontoeinstellungen.`
-        : `${item.sku} freigegeben und für ${channelLabel(item.channel)} vorbereitet.`;
+        ? `${item.sku} ist jetzt bei eBay veröffentlicht und wird von RAMROD überwacht.`
+        : `${item.sku} freigegeben. Der ${channelLabel(item.channel)}-Connector übernimmt die Veröffentlichung.`;
     } catch (error) {
       state.importStatus = `Freigabe fehlgeschlagen: ${error.message}`;
     } finally {
@@ -5350,14 +5485,26 @@ function bindEvents() {
   }));
 
   const batchNext = document.querySelector("#batch-next");
-  if (batchNext) batchNext.addEventListener("click", () => {
-    if (!queueCurrentBatchDraft()) return;
-    state.importStatus = `Artikel ${state.batchDrafts.length} gespeichert. Fotografiere jetzt Artikel ${state.batchDrafts.length + 1}.`;
+  if (batchNext) batchNext.addEventListener("click", async () => {
+    if (state.batchUploading || state.batchAnalyzing) return;
+    const entry = queueCurrentBatchDraft();
+    if (!entry) return;
+    state.batchUploading = true;
+    state.importStatus = `Artikel ${state.batchDrafts.length} wird sicher hochgeladen. Keine Analyse wird abgewartet.`;
     render();
+    try {
+      await submitCapturedEntry(entry, state.batchDrafts.length - 1);
+      state.importStatus = `Artikel ${state.batchDrafts.length} ist gesichert. Fotografiere jetzt Artikel ${state.batchDrafts.length + 1}.`;
+    } catch {
+      state.importStatus = `Upload von Artikel ${state.batchDrafts.length} fehlgeschlagen. Die Fotos bleiben in der Session und können am Ende erneut übertragen werden.`;
+    } finally {
+      state.batchUploading = false;
+      render();
+    }
   });
 
   const batchFinish = document.querySelector("#batch-finish");
-  if (batchFinish) batchFinish.addEventListener("click", runBatchAnalysis);
+  if (batchFinish) batchFinish.addEventListener("click", runBatchCapture);
 
   const add = document.querySelector("#add-item");
   if (add) add.addEventListener("click", async () => {

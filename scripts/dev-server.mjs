@@ -422,6 +422,11 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/intake/capture") {
+      await handleIntakeCapture(request, response);
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/visual-match") {
       await handleVisualMatch(request, response);
       return;
@@ -587,11 +592,14 @@ async function handleAppState(request, response) {
 
     const organizationId = tenant.activeOrganization.id;
     const organizationFilter = encodeURIComponent(organizationId);
-    const [boxes, items, priceJobs, adminOverview, agentControl] = await Promise.all([
+    const [boxes, items, priceJobs, analysisJobs, adminOverview, agentControl] = await Promise.all([
       supabaseSelect(`/boxes?select=id,code,label,location,status,customer_id&customer_id=eq.${organizationFilter}&order=code.asc`),
       supabaseSelect(`/items?select=*&customer_id=eq.${organizationFilter}&order=created_at.desc&limit=500`),
       persistence.writable
         ? supabaseSelect(`/jobs?select=id,item_id,status,attempts,max_attempts,created_at,updated_at,result,error&customer_id=eq.${organizationFilter}&job_type=eq.price_check&order=created_at.desc&limit=500`)
+        : [],
+      persistence.writable
+        ? supabaseSelect(`/jobs?select=id,item_id,status,attempts,max_attempts,created_at,updated_at,result,error&customer_id=eq.${organizationFilter}&job_type=eq.analyze_image&order=created_at.desc&limit=500`)
         : [],
       tenant.platformAdmin ? buildAdminOverview(tenant.organizations) : [],
       buildAgentControlSnapshot(organizationId)
@@ -600,6 +608,12 @@ async function handleAppState(request, response) {
     for (const job of priceJobs) {
       if (job.item_id && !latestPriceJobByItem.has(job.item_id)) {
         latestPriceJobByItem.set(job.item_id, job);
+      }
+    }
+    const latestAnalysisJobByItem = new Map();
+    for (const job of analysisJobs) {
+      if (job.item_id && !latestAnalysisJobByItem.has(job.item_id)) {
+        latestAnalysisJobByItem.set(job.item_id, job);
       }
     }
     const itemIds = items.map((item) => item.id).filter(isUuid);
@@ -628,7 +642,8 @@ async function handleAppState(request, response) {
         item,
         boxes,
         latestPriceJobByItem.get(item.id),
-        latestEbayListingByItem.get(item.id) || null
+        latestEbayListingByItem.get(item.id) || null,
+        latestAnalysisJobByItem.get(item.id)
       )),
       agentControl
     });
@@ -2975,6 +2990,128 @@ async function handleSaveItem(request, response) {
   }
 }
 
+async function handleIntakeCapture(request, response) {
+  const persistence = supabasePersistenceStatus();
+  if (!persistence.writable) {
+    sendJson(response, 503, {
+      error: "intake_not_configured",
+      message: "Supabase Storage und die Jobqueue werden für die schnelle Aufnahme benötigt."
+    });
+    return;
+  }
+
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
+
+  const body = JSON.parse(await readRequestBody(request, 48 * 1024 * 1024));
+  const images = normalizeImageDataUrls(body);
+  if (!images.length) {
+    sendJson(response, 400, { error: "missing_image", message: "Mindestens ein Bild wird benötigt." });
+    return;
+  }
+
+  const customer = tenant.activeOrganization || await getOrCreateCustomer();
+  if (!customer) {
+    sendJson(response, 403, {
+      error: "organization_access_required",
+      message: "Vor der Aufnahme muss ein Kundenbereich ausgewählt werden."
+    });
+    return;
+  }
+
+  const captureId = String(body.captureId || randomUUID()).replace(/[^a-zA-Z0-9]/g, "").slice(-16) || randomUUID().replaceAll("-", "").slice(-16);
+  const skuPrefix = String(customer.short_code || "RR").replace(/[^A-Z0-9]/gi, "").toUpperCase() || "RR";
+  const sku = `${skuPrefix}-CAP-${captureId.toUpperCase()}`;
+  const existingItems = await supabaseSelect(`/items?select=*&customer_id=eq.${encodeURIComponent(customer.id)}&sku=eq.${encodeURIComponent(sku)}&limit=1`);
+  if (existingItems[0]) {
+    const existingJobs = await supabaseSelect(`/jobs?select=*&customer_id=eq.${encodeURIComponent(customer.id)}&item_id=eq.${encodeURIComponent(existingItems[0].id)}&job_type=eq.analyze_image&order=created_at.desc&limit=1`);
+    sendJson(response, 200, {
+      captured: true,
+      duplicate: true,
+      item: { ...mapDbItemToUi(existingItems[0]), analysisJob: existingJobs[0] ? mapWorkerJobToUi(existingJobs[0]) : null },
+      analysisJob: existingJobs[0] ? mapWorkerJobToUi(existingJobs[0]) : null
+    });
+    return;
+  }
+
+  const storedImages = [];
+  try {
+    for (const image of images) storedImages.push(await uploadWorkerImage(image));
+    const boxCode = String(body.boxId || `${customer.short_code || "RR"}-001`).trim();
+    const box = await getBoxByCode(customer.id, boxCode);
+    const capturedAt = new Date().toISOString();
+    const item = {
+      id: `capture-${randomUUID()}`,
+      sku,
+      boxId: boxCode,
+      title: String(body.query || "").trim() || "Wird im Hintergrund erkannt",
+      category: "Analyse ausstehend",
+      franchise: "",
+      condition: String(body.condition || "Gebraucht"),
+      completeness: String(body.completeness || "Ungeprüft, Fotos vorhanden"),
+      confidence: 0,
+      low: 0,
+      fair: 0,
+      aggressive: 0,
+      channel: "Pruefen",
+      stage: "Analyse läuft",
+      weight: numberOrNull(body.weight) || 0,
+      barcode: String(body.barcode || ""),
+      image: storedImages[0].signedUrl,
+      imageStoragePath: storedImages[0].path,
+      imageStoragePaths: storedImages.map((image) => image.path),
+      notes: "Fotos sind sicher gespeichert. Identität, Marktwert, Verkaufskanal und Strategie werden im Hintergrund ermittelt.",
+      sourceType: "background_capture",
+      analysisPending: true,
+      capturedAt,
+      captureIntent: String(body.captureIntent || "sales"),
+      research: []
+    };
+
+    const savedRows = await supabaseInsert("/items", mapUiItemToDb(item, customer, box));
+    const saved = savedRows[0];
+    if (!saved?.id) throw new Error("Der Intake-Artikel konnte nicht gespeichert werden.");
+
+    const queued = await createWorkerJob({
+      customerId: customer.id,
+      itemId: saved.id,
+      jobType: "analyze_image",
+      payload: {
+        imageUrl: storedImages[0].signedUrl,
+        imageUrls: storedImages.map((image) => image.signedUrl),
+        imageStoragePath: storedImages[0].path,
+        imageStoragePaths: storedImages.map((image) => image.path),
+        sku,
+        boxId: boxCode,
+        condition: item.condition,
+        completeness: item.completeness,
+        barcode: item.barcode,
+        query: String(body.query || ""),
+        captureIntent: item.captureIntent,
+        weight: item.weight,
+        clientImageQualities: Array.isArray(body.clientImageQualities) ? body.clientImageQualities.slice(0, 6) : []
+      },
+      priority: 90,
+      maxAttempts: 3,
+      idempotencyKey: `intake-analysis:${customer.id}:${captureId}:v1`
+    });
+
+    sendJson(response, 202, {
+      captured: true,
+      item: {
+        ...mapDbItemToUi(saved, box ? [box] : []),
+        analysisJob: mapWorkerJobToUi(queued.job)
+      },
+      analysisJob: mapWorkerJobToUi(queued.job)
+    });
+  } catch (error) {
+    sendJson(response, 500, {
+      error: "intake_capture_failed",
+      message: redactSecret(error.message)
+    });
+  }
+}
+
 async function handleRecognizeImage(request, response) {
   const tenant = await requireTenantPermission(request, response, "inventory:write");
   if (!tenant) return;
@@ -3479,7 +3616,7 @@ async function uploadWorkerImage(imageDataUrl) {
   const sign = await fetch(`${supabaseUrl}/storage/v1/object/sign/${encodeURIComponent(storageBucket)}/${path.split("/").map(encodeURIComponent).join("/")}`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ expiresIn: 3600 })
+    body: JSON.stringify({ expiresIn: 7 * 24 * 60 * 60 })
   });
   const signed = await sign.json();
   if (!sign.ok || !(signed.signedURL || signed.signedUrl)) {
@@ -4469,7 +4606,7 @@ function mapUiItemToDb(item, customer, box) {
   return payload;
 }
 
-function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing = undefined) {
+function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing = undefined, latestAnalysisJob = null) {
   const raw = row.raw_analysis || {};
   const ui = raw.uiItem || {};
   const box = boxes.find((entry) => entry.id === row.box_id || entry.dbId === row.box_id);
@@ -4529,7 +4666,11 @@ function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing
       ? ui.ebayDraft
       : completedEbayDraft || raw.ebayDraft || null,
     priceCheck: completedPriceCheck || ui.priceCheck || null,
-    automationJob: latestPriceJob ? mapWorkerJobToUi(latestPriceJob) : ui.automationJob || null
+    automationJob: latestPriceJob ? mapWorkerJobToUi(latestPriceJob) : ui.automationJob || null,
+    analysisJob: latestAnalysisJob ? mapWorkerJobToUi(latestAnalysisJob) : ui.analysisJob || null,
+    analysisPending: latestAnalysisJob
+      ? ["queued", "running"].includes(latestAnalysisJob.status)
+      : Boolean(ui.analysisPending)
   };
 }
 
