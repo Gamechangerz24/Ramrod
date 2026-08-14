@@ -258,6 +258,8 @@ const state = {
   ebayDrafting: "",
   ebayPreparing: "",
   ebayPublishing: "",
+  kleinanzeigenDrafting: "",
+  kleinanzeigenPreparing: "",
   approving: "",
   vaultSelected: "",
   vaultFilter: "all",
@@ -2851,10 +2853,13 @@ function inspector(item) {
         <div class="price-grid">${suggestion("Minimum", euro(item.low))}${suggestion("Marktwert", euro(item.fair))}${suggestion("Optimistisch", euro(item.aggressive))}${suggestion("Erkennung", `${item.confidence}%`)}</div>
         <div class="draft-actions">
           <button class="secondary-action" data-price-check="${item.id}" type="button">${icon("EU")}${state.priceChecking === item.id ? "Prüfe..." : "Preise checken"}</button>
-          <button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Optimiere..." : "eBay-Vorschau"}</button>
+          ${item.channel === "Kleinanzeigen"
+            ? `<button class="secondary-action" data-kleinanzeigen-draft="${item.id}" type="button">${icon("KA")}${state.kleinanzeigenDrafting === item.id ? "Schreibt..." : "Kleinanzeigen-Vorschau"}</button>`
+            : `<button class="secondary-action" data-ebay-draft="${item.id}" type="button">${icon("EB")}${state.ebayDrafting === item.id ? "Optimiere..." : "eBay-Vorschau"}</button>`}
         </div>
         ${priceCheckCard(item)}
         ${ebayDraftCard(item)}
+        ${kleinanzeigenDraftCard(item)}
         ${channelPicker(item)}
         ${whatnotRoutingCard(item)}
         <div class="detail-grid">${suggestion("Kiste", item.boxId)}${suggestion("Zustand", item.condition)}${suggestion("Vollständigkeit", item.completeness)}${suggestion("Gewicht", `${item.weight.toFixed(2)} kg`)}</div>
@@ -2878,9 +2883,11 @@ function itemNextStepCard(item) {
   const approved = item.approval?.status === "approved";
   const blocker = releaseRequirements(item).find((entry) => !entry.ready);
   const prepared = item.ebayListing?.status === "prepared";
-  const active = item.ebayListing?.status === "active" || item.stage === "Gelistet";
+  const active = item.channel === "eBay" && (item.ebayListing?.status === "active" || item.stage === "Gelistet");
   const draftReady = item.ebayDraft?.status === "ready_for_ebay"
     && (item.ebayDraft.readiness || []).every((entry) => entry.ready);
+  const kleinanzeigenReady = item.kleinanzeigenDraft?.status === "ready_for_approval"
+    && (item.kleinanzeigenDraft.readiness || []).every((entry) => entry.ready);
 
   if (active) {
     return `<section class="item-next-step complete"><div><small>Aktueller Status</small><strong>Der Artikel ist bei eBay live</strong><span>RAMROD überwacht als Nächstes Verkauf und Versand.</span></div>${item.ebayListing?.url ? `<a class="primary-action" href="${escapeHtml(item.ebayListing.url)}" target="_blank" rel="noreferrer">${icon("EB")}Auf eBay ansehen</a>` : `<button class="secondary-action" data-view="sell" type="button">${icon("VK")}Verkaufsstatus</button>`}</section>`;
@@ -2895,6 +2902,19 @@ function itemNextStepCard(item) {
     }
     if (blocker?.id === "channel") {
       return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkaufskanal bestätigen</strong><span>Wähle den empfohlenen oder einen anderen Kanal.</span></div><button class="primary-action" data-focus-channel-picker type="button">${icon("RT")}Kanal auswählen</button></section>`;
+    }
+    if (item.channel === "Kleinanzeigen") {
+      if (!item.kleinanzeigenDraft) {
+        return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Kleinanzeigen-Angebot erstellen</strong><span>RAMROD schreibt Titel, Beschreibung, Preisart und Übergabe aus bestätigten Fakten.</span></div><button class="primary-action" data-kleinanzeigen-draft="${item.id}" type="button" ${state.kleinanzeigenDrafting ? "disabled" : ""}>${icon("AI")}${state.kleinanzeigenDrafting === item.id ? "Wird erstellt..." : "Vorschau erstellen"}</button></section>`;
+      }
+      if (!kleinanzeigenReady) {
+        return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Offene Angaben ergänzen</strong><span>Die Kleinanzeigen-Vorschau markiert alle kaufentscheidenden Fragen.</span></div><button class="primary-action" data-focus-kleinanzeigen-card type="button">${icon("KA")}Angaben öffnen</button></section>`;
+      }
+      if (!item.kleinanzeigenDraft.connector?.ready) {
+        const browserReady = item.kleinanzeigenDraft.connector?.browserProfileReady;
+        return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>${browserReady ? "Automatisierung freigeben" : "Kleinanzeigen-Konto verbinden"}</strong><span>${browserReady ? "Das Browserprofil ist verbunden. Für automatisierten Plattformzugriff fehlt noch eine dokumentierte Freigabe oder Partneranbindung." : "Ein autorisierter Connector arbeitet anschließend in einem isolierten Browserprofil und stoppt vor externen Aktionen."}</span></div><button class="primary-action" data-view="agents" type="button">${icon("AG")}${browserReady ? "Freigabe klären" : "Connector einrichten"}</button></section>`;
+      }
+      return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Anzeige freigeben</strong><span>Danach startet RAMROD die kontrollierte Browser-Mission. Noch nichts wird sofort öffentlich.</span></div><button class="primary-action" data-approve-sale="${item.id}" type="button" ${state.approving || !can("sales:approve") ? "disabled" : ""}>${icon("GO")}${state.approving === item.id ? "Wird übergeben..." : "Freigeben & Agent starten"}</button></section>`;
     }
     const automatic = item.channel === "eBay";
     return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>${automatic ? "Freigeben und automatisch veröffentlichen" : "Verkauf freigeben"}</strong><span>${automatic ? "RAMROD erstellt und veröffentlicht das eBay-Angebot anschließend ohne weitere Klicks." : `RAMROD übergibt den Artikel danach automatisch an den ${escapeHtml(channelLabel(item.channel))}-Connector.`}</span></div><button class="primary-action" data-approve-sale="${item.id}" type="button" ${blocker || state.approving || !can("sales:approve") ? "disabled" : ""}>${icon("GO")}${state.approving === item.id ? "Wird ausgeführt..." : automatic ? "Freigeben & veröffentlichen" : "Verkauf freigeben"}</button></section>`;
@@ -2912,6 +2932,17 @@ function itemNextStepCard(item) {
       return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>eBay-Angaben vervollständigen</strong><span>Die Vorschau zeigt dir, was noch fehlt.</span></div><button class="primary-action" data-focus-ebay-card type="button">${icon("EB")}eBay-Angaben öffnen</button></section>`;
     }
     return `<section class="item-next-step ebay"><div><small>Nächster Schritt</small><strong>${auction ? "Auktion ab 1 € bei eBay vorbereiten" : "Unveröffentlichten eBay-Entwurf anlegen"}</strong><span>Fotos und Daten werden geprüft zu eBay übertragen. Noch kein Verkauf.</span></div><button class="primary-action" data-ebay-prepare="${item.id}" type="button" ${state.ebayPreparing ? "disabled" : ""}>${icon("EB")}${state.ebayPreparing === item.id ? "Wird vorbereitet..." : "Bei eBay vorbereiten"}</button></section>`;
+  }
+
+  if (item.channel === "Kleinanzeigen" && item.kleinanzeigenListing?.status === "prepared") {
+    if (item.kleinanzeigenListing.missionStatus === "failed") {
+      return `<section class="item-next-step"><div><small>Mission unterbrochen</small><strong>Browser-Agent erneut starten</strong><span>${escapeHtml(item.kleinanzeigenListing.missionError || "Die vorbereitete Anzeige ist erhalten geblieben und kann erneut übergeben werden.")}</span></div><button class="primary-action" data-kleinanzeigen-resume="${item.id}" type="button" ${state.approving ? "disabled" : ""}>${icon("AG")}${state.approving === item.id ? "Wird neu gestartet..." : "Mission erneut starten"}</button></section>`;
+    }
+    return `<section class="item-next-step complete"><div><small>Aktueller Status</small><strong>Browser-Mission läuft</strong><span>Die Anzeige ist vorbereitet. Externe Veröffentlichung bleibt an die Agentenfreigabe gebunden.</span></div><button class="primary-action" data-view="agents" type="button">${icon("AG")}Mission ansehen</button></section>`;
+  }
+
+  if (item.channel === "Kleinanzeigen" && approved) {
+    return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Connector-Mission starten</strong><span>Die Verkaufsfreigabe ist gespeichert. RAMROD kann die Anzeige jetzt erneut für das verbundene Browserprofil vorbereiten.</span></div><button class="primary-action" data-kleinanzeigen-resume="${item.id}" type="button" ${state.approving ? "disabled" : ""}>${icon("AG")}${state.approving === item.id ? "Wird vorbereitet..." : "Mission starten"}</button></section>`;
   }
 
   return `<section class="item-next-step"><div><small>Nächster Schritt</small><strong>Verkaufsplan ausführen</strong><span>Öffne die Übersicht für ${escapeHtml(channelLabel(item.channel))}.</span></div><button class="primary-action" data-view="sell" type="button">${icon("VK")}Zu den Verkäufen</button></section>`;
@@ -3448,11 +3479,61 @@ function ebayDraftCard(item) {
   </section>`;
 }
 
+function kleinanzeigenDraftCard(item) {
+  const draft = item.kleinanzeigenDraft;
+  if (!draft) return "";
+  const ready = draft.status === "ready_for_approval" && (draft.readiness || []).every((entry) => entry.ready);
+  const prepared = item.kleinanzeigenListing?.status === "prepared";
+  const active = item.kleinanzeigenListing?.status === "active";
+  const content = draft.content || {};
+  const delivery = {
+    pickup: "Nur Abholung",
+    shipping: "Versand möglich",
+    pickup_or_shipping: "Abholung oder Versand"
+  }[draft.deliveryMode] || "Übergabe offen";
+  const priceLabel = draft.priceMode === "giveaway" ? "Zu verschenken" : `${euro(Number(draft.price || item.fair))} VB`;
+  return `<section class="script-box ebay-draft-card kleinanzeigen-draft-card ${ready ? "ready" : "needs-input"}">
+    <div class="ebay-listing-head">
+      <div><small>Käuferansicht vor Übergabe</small><h3>Kleinanzeigen-Angebot</h3></div>
+      <span class="status-pill ${active ? "live" : prepared ? "running" : ready ? "ready" : "muted"}">${active ? "Live" : prepared ? "Agentenmission" : ready ? "Bereit zur Freigabe" : "Angaben fehlen"}</span>
+    </div>
+    <div class="ebay-preview-title"><strong>${escapeHtml(draft.title || item.title)}</strong><em>${escapeHtml(priceLabel)}</em></div>
+    <div class="ebay-preview-meta">
+      <span>${escapeHtml(draft.categoryHint || item.category || "Kategorie offen")}</span>
+      <span>${escapeHtml(draft.condition || item.condition)}</span>
+      <span>${escapeHtml(delivery)}</span>
+      <span>${Number(draft.sourceImages?.length || 0)} Foto${Number(draft.sourceImages?.length || 0) === 1 ? "" : "s"}</span>
+    </div>
+    ${listingCopyAgentCard(item, { ...draft, content, channel: "kleinanzeigen" })}
+    <div class="ebay-preview-copy">
+      <div><small>Öffentliche Beschreibung</small><p class="preserve-lines">${escapeHtml(draft.description || content.shortDescription || "-")}</p></div>
+      <div><small>Zustand</small><p>${escapeHtml(content.conditionDescription || item.condition || "-")}</p></div>
+      ${content.includedItems?.length ? `<div><small>Lieferumfang</small><p>${escapeHtml(content.includedItems.join(" · "))}</p></div>` : ""}
+      ${content.defects?.length ? `<div><small>Bekannte Mängel</small><p>${escapeHtml(content.defects.join(" · "))}</p></div>` : ""}
+    </div>
+    <section class="ebay-readiness">
+      <div class="section-title"><h3>Vor der Freigabe</h3><span>${(draft.readiness || []).filter((entry) => entry.ready).length}/${(draft.readiness || []).length}</span></div>
+      ${(draft.readiness || []).map((entry) => `<div class="ebay-readiness-row ${entry.ready ? "done" : "missing"}">${icon(entry.ready ? "OK" : "!")}<span><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.detail)}</small></span></div>`).join("")}
+    </section>
+    <div class="kleinanzeigen-connector ${draft.connector?.ready ? "ready" : "missing"}">
+      <div><small>Autorisierter Connector</small><strong>${escapeHtml(draft.connector?.displayName || "Kleinanzeigen-Konto fehlt")}</strong><p>${escapeHtml(draft.connector?.message || "Verbindung noch nicht eingerichtet.")}</p></div>
+      ${draft.connector?.ready ? `<span class="status-pill ready">Freigabe dokumentiert</span>` : `<button class="secondary-action" data-view="agents" type="button">${icon("AG")}${draft.connector?.browserProfileReady ? "Freigabe klären" : "Konto verbinden"}</button>`}
+    </div>
+    ${prepared ? `<div class="ebay-external-status"><strong>Browser-Mission vorbereitet</strong><span>Der Agent füllt die Anzeige im isolierten Profil aus. Vor dem endgültigen Absenden bleibt eine menschliche Freigabe Pflicht.</span><button class="secondary-action" data-view="agents" type="button">${icon("AG")}Mission ansehen</button></div>` : ""}
+    <div class="ebay-publish-actions">
+      <button class="secondary-action" data-kleinanzeigen-draft="${item.id}" type="button" ${state.kleinanzeigenDrafting || prepared ? "disabled" : ""}>${icon("AI")}${state.kleinanzeigenDrafting === item.id ? "Schreibt..." : "Vorschau neu erzeugen"}</button>
+      ${!prepared ? `<button class="primary-action" data-approve-sale="${item.id}" type="button" ${!ready || !draft.connector?.ready || state.approving ? "disabled" : ""}>${icon("GO")}${state.approving === item.id ? "Wird übergeben..." : "Freigeben & Agent starten"}</button>` : ""}
+    </div>
+    <small class="ebay-safety-note">Die Freigabe erzeugt noch keine öffentliche Anzeige. Der Agent stoppt vor dem finalen Absenden erneut an der Kontrollstufe.</small>
+  </section>`;
+}
+
 function listingCopyAgentCard(item, draft) {
   const agent = draft.copyAgent;
   if (!agent) return `<section class="listing-copy-agent legacy"><span>${icon("TX")}</span><div><small>Listing-Redakteur</small><strong>Textprüfung beim nächsten Entwurf aktiv</strong><p>Erzeuge die Vorschau neu, damit Käufertext und offene Angaben getrennt geprüft werden.</p></div></section>`;
   const missing = Array.isArray(agent.missingFacts) ? agent.missingFacts : [];
-  const locked = ["prepared", "active"].includes(item.ebayListing?.status);
+  const locked = ["prepared", "active"].includes(draft.channel === "kleinanzeigen" ? item.kleinanzeigenListing?.status : item.ebayListing?.status);
+  const formAttribute = draft.channel === "kleinanzeigen" ? "data-kleinanzeigen-copy-form" : "data-listing-copy-form";
   const tone = agent.status === "ready" ? "ready" : agent.status === "needs_input" ? "blocked" : "review";
   const status = agent.status === "ready" ? "Text bereit" : agent.status === "needs_input" ? "Angaben fehlen" : "Text prüfen";
   return `<section class="listing-copy-agent ${tone}">
@@ -3460,7 +3541,7 @@ function listingCopyAgentCard(item, draft) {
     <p>${escapeHtml(agent.summary || "Der Verkaufstext wurde aus Käufersicht geprüft.")}</p>
     <div class="listing-copy-checks">${(agent.checks || []).map((entry) => `<span class="${entry.ready ? "done" : "missing"}">${icon(entry.ready ? "OK" : "!")}${escapeHtml(entry.label)}</span>`).join("")}</div>
     ${missing.length ? `<div class="listing-copy-questions"><strong>Vor dem Einstellen klären</strong>${missing.map((entry) => `<article><span class="${entry.severity === "blocking" ? "blocking" : "warning"}">${entry.severity === "blocking" ? "Pflicht" : "Hinweis"}</span><div><strong>${escapeHtml(entry.question)}</strong><small>${escapeHtml(entry.reason)}</small></div></article>`).join("")}</div>` : ""}
-    ${missing.length && !locked ? `<form data-listing-copy-form="${item.id}"><div>${missing.map((entry) => `<label><span>${escapeHtml(entry.field)}</span><input name="${escapeHtml(entry.field)}" value="${escapeHtml(item.listingCopyAnswers?.[entry.field] || "")}" placeholder="Sichere Angabe eintragen" ${entry.severity === "blocking" ? "required" : ""} /></label>`).join("")}</div><button class="secondary-action" type="submit">${icon("AI")}Text neu schreiben</button></form>` : ""}
+    ${missing.length && !locked ? `<form ${formAttribute}="${item.id}"><div>${missing.map((entry) => `<label><span>${escapeHtml(entry.field)}</span><input name="${escapeHtml(entry.field)}" value="${escapeHtml(item.listingCopyAnswers?.[entry.field] || "")}" placeholder="Sichere Angabe eintragen" ${entry.severity === "blocking" ? "required" : ""} /></label>`).join("")}</div><button class="secondary-action" type="submit">${icon("AI")}Text neu schreiben</button></form>` : ""}
   </section>`;
 }
 
@@ -3598,6 +3679,8 @@ function salesOverview() {
 function salesProgress(item) {
   if (item.stage === "Versand") return 5;
   if (item.stage === "Verkauft") return 4;
+  if (item.channel === "Kleinanzeigen" && item.kleinanzeigenListing?.status === "active") return 3;
+  if (item.channel === "Kleinanzeigen" && item.kleinanzeigenListing?.status === "prepared") return 2;
   if ((item.channel === "eBay" && item.ebayListing?.status === "prepared") || (item.approval?.status === "approved" && ["Whatnot", "Strongvision"].includes(item.channel))) return 3;
   if (item.approval?.status === "approved") return 2;
   return item.priceCheck ? 1 : 0;
@@ -3606,8 +3689,26 @@ function salesProgress(item) {
 function salesStatus(item) {
   if (item.stage === "Versand") return { label: "Versandbereit", note: "Verkauf erkannt · jetzt packen und versenden", tone: "shipping" };
   if (item.stage === "Verkauft") return { label: "Verkauft", note: "Der Verkauf wurde erkannt", tone: "sold" };
-  if (item.ebayListing?.status === "active" || item.stage === "Gelistet") return { label: "Bei eBay live", note: "Öffentlich gelistet · Verkauf wird überwacht", tone: "prepared" };
+  if (item.channel === "eBay" && (item.ebayListing?.status === "active" || item.stage === "Gelistet")) return { label: "Bei eBay live", note: "Öffentlich gelistet · Verkauf wird überwacht", tone: "prepared" };
   if (item.ebayListing?.status === "prepared") return { label: "eBay bereit", note: "Bei eBay vorbereitet · noch nicht veröffentlicht", tone: "prepared" };
+  if (item.channel === "Kleinanzeigen" && item.kleinanzeigenListing?.status === "active") return { label: "Auf Kleinanzeigen live", note: "Öffentlich gelistet · Verkauf wird überwacht", tone: "prepared" };
+  if (item.channel === "Kleinanzeigen" && item.kleinanzeigenListing?.status === "prepared") {
+    return {
+      label: item.kleinanzeigenListing.missionStatus === "failed" ? "Agent wartet" : "Browser-Mission",
+      note: item.kleinanzeigenListing.missionStatus === "failed"
+        ? item.kleinanzeigenListing.missionError || "Die Mission muss erneut gestartet werden."
+        : "Anzeige vorbereitet · externe Veröffentlichung noch nicht freigegeben",
+      tone: item.kleinanzeigenListing.missionStatus === "failed" ? "muted" : "approved"
+    };
+  }
+  if (item.channel === "Kleinanzeigen" && item.kleinanzeigenDraft) {
+    const ready = item.kleinanzeigenDraft.status === "ready_for_approval";
+    return {
+      label: ready ? "Kleinanzeigen-Vorschau" : "Angaben offen",
+      note: ready ? "Nur in RAMROD · bereit zur Freigabe" : "Kaufentscheidende Angaben fehlen",
+      tone: ready ? "approved" : "muted"
+    };
+  }
   if (item.channel === "eBay" && item.ebayDraft) {
     const ready = item.ebayDraft.status === "ready_for_ebay";
     return {
@@ -4208,6 +4309,22 @@ async function approveItemForSale(item) {
       throw new Error("Die eBay-Vorschau enthält noch markierte Pflichtangaben. Ergänze sie einmal und gib den Verkauf danach frei.");
     }
   }
+  if (item.channel === "Kleinanzeigen" && !item.kleinanzeigenDraft) {
+    const result = await postJson("/api/kleinanzeigen-draft", { item });
+    item.kleinanzeigenDraft = result.kleinanzeigenDraft;
+  }
+  if (item.channel === "Kleinanzeigen") {
+    const draftReady = item.kleinanzeigenDraft?.status === "ready_for_approval"
+      && (item.kleinanzeigenDraft.readiness || []).every((entry) => entry.ready);
+    if (!draftReady) {
+      await persistItem(item, "Kleinanzeigen-Vorschau");
+      throw new Error("Die Kleinanzeigen-Vorschau enthält noch markierte Pflichtangaben.");
+    }
+    if (!item.kleinanzeigenDraft?.connector?.ready) {
+      await persistItem(item, "Kleinanzeigen-Vorschau");
+      throw new Error("Verbinde zuerst das Kleinanzeigen-Konto im Bereich Agenten.");
+    }
+  }
   const strategy = normalizeSalesStrategy(item);
   item.approval = {
     status: "approved",
@@ -4236,6 +4353,31 @@ async function approveItemForSale(item) {
     };
     item.stage = "Gelistet";
     await persistItem(item, "eBay-Angebot veröffentlicht");
+  }
+  if (item.channel === "Kleinanzeigen") {
+    const prepared = await postJson("/api/kleinanzeigen-listing/prepare", { item });
+    item.kleinanzeigenListing = { ...prepared.listing, status: "prepared", missionStatus: "starting" };
+    item.stage = "Connector";
+    await persistItem(item, "Kleinanzeigen-Angebot vorbereitet");
+    try {
+      const mission = await postJson("/api/agent-runs", {
+        agentType: "publish_item",
+        objective: `${item.title} nach der menschlichen Freigabe kontrolliert auf Kleinanzeigen veröffentlichen und verifizieren.`,
+        channelId: "kleinanzeigen",
+        itemId: item.dbId
+      });
+      item.kleinanzeigenListing = {
+        ...item.kleinanzeigenListing,
+        missionId: mission.run?.id || "",
+        missionStatus: mission.run?.status || "ready"
+      };
+      state.agentControl = mission.snapshot || state.agentControl;
+      await persistItem(item, "Kleinanzeigen-Agent gestartet");
+    } catch (error) {
+      item.kleinanzeigenListing = { ...item.kleinanzeigenListing, missionStatus: "failed", missionError: error.message };
+      await persistItem(item, "Kleinanzeigen-Agent wartet").catch(() => {});
+      throw new Error(`Die Anzeige ist vorbereitet, aber der Browser-Agent konnte noch nicht starten: ${error.message}`);
+    }
   }
   return item;
 }
@@ -5055,6 +5197,28 @@ function bindEvents() {
   document.querySelectorAll("[data-focus-ebay-card]").forEach((button) => button.addEventListener("click", () => {
     button.closest(".inspector-content")?.querySelector(".ebay-draft-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
+  document.querySelectorAll("[data-focus-kleinanzeigen-card]").forEach((button) => button.addEventListener("click", () => {
+    button.closest(".inspector-content")?.querySelector(".kleinanzeigen-draft-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+  document.querySelectorAll("[data-kleinanzeigen-resume]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.kleinanzeigenResume);
+    if (!item || state.approving || item.channel !== "Kleinanzeigen") return;
+    const confirmed = window.confirm(`Kleinanzeigen-Mission erneut starten?\n\n${item.kleinanzeigenDraft?.title || item.title}\n\nDie vorbereitete Anzeige bleibt unveröffentlicht, bis die externe Aktion separat freigegeben wurde.`);
+    if (!confirmed) return;
+    state.approving = item.id;
+    state.importStatus = `${item.sku}: Browser-Mission wird erneut vorbereitet...`;
+    render();
+    try {
+      await approveItemForSale(item);
+      state.view = "sell";
+      state.importStatus = `${item.sku}: Kleinanzeigen-Mission wurde erneut gestartet. Die Anzeige ist noch nicht öffentlich.`;
+    } catch (error) {
+      state.importStatus = `Kleinanzeigen-Mission fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.approving = "";
+      render();
+    }
+  }));
   document.querySelectorAll("[data-release-fields]").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const item = state.items.find((entry) => entry.id === event.currentTarget.dataset.releaseFields);
@@ -5238,6 +5402,30 @@ function bindEvents() {
       render();
     }
   }));
+  document.querySelectorAll("[data-kleinanzeigen-draft]").forEach((button) => button.addEventListener("click", async () => {
+    const item = state.items.find((entry) => entry.id === button.dataset.kleinanzeigenDraft);
+    if (!item || state.kleinanzeigenDrafting || ["prepared", "active"].includes(item.kleinanzeigenListing?.status)) return;
+    state.kleinanzeigenDrafting = item.id;
+    state.importStatus = "Der Kleinanzeigen-Redakteur erstellt Titel, Käufertext, Preisart und Übergabe...";
+    render();
+    try {
+      const result = await postJson("/api/kleinanzeigen-draft", { item });
+      item.kleinanzeigenDraft = result.kleinanzeigenDraft;
+      item.kleinanzeigenListing = null;
+      state.selected = item.id;
+      state.view = "inventory";
+      state.mobileDetailsItem = item.id;
+      state.importStatus = result.kleinanzeigenDraft?.status === "ready_for_approval"
+        ? "Kleinanzeigen-Vorschau vollständig. Prüfe sie und gib danach die Browser-Mission frei."
+        : "Kleinanzeigen-Vorschau erzeugt. Ergänze die markierten Angaben.";
+      await persistItem(item, "Kleinanzeigen-Vorschau");
+    } catch (error) {
+      state.importStatus = `Kleinanzeigen-Vorschau fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.kleinanzeigenDrafting = "";
+      render();
+    }
+  }));
   document.querySelectorAll("[data-listing-copy-form]").forEach((form) => form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const item = state.items.find((entry) => entry.id === form.dataset.listingCopyForm);
@@ -5261,6 +5449,32 @@ function bindEvents() {
       state.importStatus = `Text-Agent fehlgeschlagen: ${error.message}`;
     } finally {
       state.ebayDrafting = "";
+      render();
+    }
+  }));
+  document.querySelectorAll("[data-kleinanzeigen-copy-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const item = state.items.find((entry) => entry.id === form.dataset.kleinanzeigenCopyForm);
+    if (!item || state.kleinanzeigenDrafting || ["prepared", "active"].includes(item.kleinanzeigenListing?.status)) return;
+    const values = Object.fromEntries(new FormData(form).entries());
+    item.listingCopyAnswers = {
+      ...(item.listingCopyAnswers || {}),
+      ...Object.fromEntries(Object.entries(values).map(([name, value]) => [name, String(value).trim()]).filter(([, value]) => value))
+    };
+    state.kleinanzeigenDrafting = item.id;
+    state.importStatus = "Der Kleinanzeigen-Redakteur übernimmt die bestätigten Angaben...";
+    render();
+    try {
+      const result = await postJson("/api/kleinanzeigen-draft", { item: { ...item, kleinanzeigenDraft: null } });
+      item.kleinanzeigenDraft = result.kleinanzeigenDraft;
+      state.importStatus = result.kleinanzeigenDraft?.status === "ready_for_approval"
+        ? "Der Kleinanzeigen-Text ist bereit zur Freigabe."
+        : "Text neu erstellt. Prüfe bitte die weiterhin markierten Angaben.";
+      await persistItem(item, "Kleinanzeigen-Text");
+    } catch (error) {
+      state.importStatus = `Kleinanzeigen-Text-Agent fehlgeschlagen: ${error.message}`;
+    } finally {
+      state.kleinanzeigenDrafting = "";
       render();
     }
   }));
@@ -5350,17 +5564,26 @@ function bindEvents() {
       const confirmed = window.confirm(`RAMROD veröffentlicht diesen Artikel nach der Freigabe direkt im verbundenen eBay-Konto.\n\n${item.title}\n${auction ? `Auktion ab 1 € · geschätzter Marktwert ${euro(item.fair)}` : `Zielpreis ${euro(strategy.targetPrice || item.fair)}`}\n\nJetzt freigeben und veröffentlichen?`);
       if (!confirmed) return;
     }
+    if (item.channel === "Kleinanzeigen") {
+      const draft = item.kleinanzeigenDraft;
+      const confirmed = window.confirm(`Kleinanzeigen-Mission starten?\n\n${draft?.title || item.title}\n${draft?.priceMode === "giveaway" ? "Zu verschenken" : `${euro(draft?.price || item.fair)} VB`}\n${draft?.deliveryMode === "pickup" ? "Nur Abholung" : "Abholung oder Versand"}\n\nDer Browser-Agent bereitet die Anzeige vor. Vor dem endgültigen Absenden bleibt eine weitere Freigabe Pflicht.`);
+      if (!confirmed) return;
+    }
     state.approving = item.id;
     state.importStatus = item.channel === "eBay"
       ? `${item.sku} wird freigegeben, zu eBay übertragen und veröffentlicht...`
-      : `${item.sku} wird freigegeben und an den Kanal-Connector übergeben...`;
+      : item.channel === "Kleinanzeigen"
+        ? `${item.sku} wird freigegeben und als kontrollierte Browser-Mission vorbereitet...`
+        : `${item.sku} wird freigegeben und an den Kanal-Connector übergeben...`;
     render();
     try {
       await approveItemForSale(item);
       state.view = "sell";
       state.importStatus = item.channel === "eBay"
         ? `${item.sku} ist jetzt bei eBay veröffentlicht und wird von RAMROD überwacht.`
-        : `${item.sku} freigegeben. Der ${channelLabel(item.channel)}-Connector übernimmt die Veröffentlichung.`;
+        : item.channel === "Kleinanzeigen"
+          ? `${item.sku} ist als Kleinanzeigen-Mission vorbereitet. Die Anzeige ist noch nicht öffentlich.`
+          : `${item.sku} freigegeben. Der ${channelLabel(item.channel)}-Connector übernimmt die Veröffentlichung.`;
     } catch (error) {
       state.importStatus = `Freigabe fehlgeschlagen: ${error.message}`;
     } finally {

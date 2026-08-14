@@ -56,6 +56,14 @@ import {
   uploadEbayImageFromUrl
 } from "./lib/ebay-listing.mjs";
 import {
+  buildFallbackKleinanzeigenContent,
+  buildKleinanzeigenBrowserTask,
+  buildKleinanzeigenListingPreview,
+  buildKleinanzeigenListingPrompt,
+  kleinanzeigenListingContentSchema,
+  normalizeKleinanzeigenContent
+} from "./lib/kleinanzeigen-listing.mjs";
+import {
   buildSecretRef,
   createEncryptedSecretStore
 } from "./lib/secret-store.mjs";
@@ -457,6 +465,16 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/kleinanzeigen-draft") {
+      await handleKleinanzeigenDraft(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/kleinanzeigen-listing/prepare") {
+      await handlePrepareKleinanzeigenListing(request, response);
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/elevenlabs-tts") {
       await handleElevenLabsTts(request, response);
       return;
@@ -617,13 +635,17 @@ async function handleAppState(request, response) {
       }
     }
     const itemIds = items.map((item) => item.id).filter(isUuid);
-    const ebayListings = itemIds.length
-      ? await supabaseSelect(`/listings?select=*&channel_id=eq.ebay&item_id=in.(${itemIds.map(encodeURIComponent).join(",")})&order=created_at.desc&limit=1000`)
+    const channelListings = itemIds.length
+      ? await supabaseSelect(`/listings?select=*&channel_id=in.(ebay,kleinanzeigen)&item_id=in.(${itemIds.map(encodeURIComponent).join(",")})&order=created_at.desc&limit=1000`)
       : [];
     const latestEbayListingByItem = new Map();
-    for (const listing of ebayListings) {
-      if (listing.item_id && !latestEbayListingByItem.has(listing.item_id)) {
+    const latestKleinanzeigenListingByItem = new Map();
+    for (const listing of channelListings) {
+      if (listing.channel_id === "ebay" && listing.item_id && !latestEbayListingByItem.has(listing.item_id)) {
         latestEbayListingByItem.set(listing.item_id, listing);
+      }
+      if (listing.channel_id === "kleinanzeigen" && listing.item_id && !latestKleinanzeigenListingByItem.has(listing.item_id)) {
+        latestKleinanzeigenListingByItem.set(listing.item_id, listing);
       }
     }
 
@@ -643,7 +665,8 @@ async function handleAppState(request, response) {
         boxes,
         latestPriceJobByItem.get(item.id),
         latestEbayListingByItem.get(item.id) || null,
-        latestAnalysisJobByItem.get(item.id)
+        latestAnalysisJobByItem.get(item.id),
+        latestKleinanzeigenListingByItem.get(item.id) || null
       )),
       agentControl
     });
@@ -972,20 +995,23 @@ async function handleCreateAgentRun(request, response) {
       return;
     }
   }
+  let missionItem = null;
   if (plan.itemId) {
     if (!isUuid(plan.itemId)) {
       sendJson(response, 400, { error: "invalid_item", message: "itemId muss eine gültige UUID sein." });
       return;
     }
-    const item = await supabaseSelect(`/items?select=id&customer_id=eq.${encodeURIComponent(organizationId)}&id=eq.${encodeURIComponent(plan.itemId)}&limit=1`);
+    const item = await supabaseSelect(`/items?select=*&customer_id=eq.${encodeURIComponent(organizationId)}&id=eq.${encodeURIComponent(plan.itemId)}&limit=1`);
     if (!item[0]) {
       sendJson(response, 404, { error: "item_not_found", message: "Der Artikel gehört nicht zu diesem Kundenbereich." });
       return;
     }
+    missionItem = item[0];
   }
 
   try {
     let channelAccount = null;
+    let preparedListing = null;
     if (plan.agentType === "onboard_channel_account") {
       const channel = publicChannelRegistry().find((entry) => entry.id === plan.channelId);
       if (!channel) throw httpError(400, "Unbekannter Verkaufskanal.");
@@ -1008,6 +1034,29 @@ async function handleCreateAgentRun(request, response) {
         });
         channelAccount = accountRows[0] || null;
       }
+    } else if (plan.agentType === "publish_item") {
+      if (!plan.channelId || !missionItem) throw httpError(400, "Artikel und Verkaufskanal werden für die Veröffentlichung benötigt.");
+      if (missionItem.raw_analysis?.uiItem?.approval?.status !== "approved") {
+        throw httpError(409, "Der Artikel wurde noch nicht für den Verkauf freigegeben.");
+      }
+      channelAccount = await channelAccountFor(organizationId, plan.channelId);
+      if (!channelAccount || channelAccount.status !== "connected") {
+        throw httpError(409, `Verbinde zuerst das ${plan.channelId}-Verkaufskonto dieses Kundenbereichs.`);
+      }
+      if (plan.channelId === "kleinanzeigen" && !channelAccount.browser_profile_key) {
+        throw httpError(409, "Für Kleinanzeigen fehlt noch das isolierte Browserprofil.");
+      }
+      if (plan.channelId === "kleinanzeigen" && !(
+        channelAccount.metadata?.automationAuthorizationRef
+        || channelAccount.metadata?.automation_authorization_ref
+        || channelAccount.metadata?.partnerIntegrationRef
+        || channelAccount.metadata?.partner_integration_ref
+      )) {
+        throw httpError(409, "Für automatisierten Kleinanzeigen-Zugriff fehlt eine dokumentierte Plattform- oder Partnerfreigabe.");
+      }
+      const listings = await supabaseSelect(`/listings?select=*&item_id=eq.${encodeURIComponent(plan.itemId)}&channel_id=eq.${encodeURIComponent(plan.channelId)}&status=eq.prepared&order=created_at.desc&limit=1`);
+      preparedListing = listings[0] || null;
+      if (!preparedListing) throw httpError(409, "Bereite zuerst den geprüften Kanalentwurf vor.");
     }
 
     const missionContext = redactAgentPayload({
@@ -1016,6 +1065,8 @@ async function handleCreateAgentRun(request, response) {
       sellerMode: plan.sellerMode,
       accountLabel: plan.accountLabel,
       channelAccountId: channelAccount?.id || null,
+      listingId: preparedListing?.id || null,
+      browserTask: preparedListing?.payload?.browserTask || null,
       source: request.ramrodUser?.agent ? "mcp" : "ramrod_ui"
     });
     const runRows = await supabaseInsert("/agent_runs", {
@@ -1987,6 +2038,14 @@ async function ensureEbayChannelAccount(organizationId) {
 async function ebayChannelAccount(organizationId) {
   const rows = await supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,external_account_ref,secret_ref,browser_profile_key,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${encodeURIComponent(organizationId)}&channel_id=eq.ebay&order=created_at.asc&limit=1`);
   return rows[0] || null;
+}
+
+async function channelAccountFor(organizationId, channelId) {
+  const rows = await supabaseSelect(`/organization_channel_accounts?select=id,organization_id,channel_id,display_name,auth_mode,status,external_account_ref,browser_profile_key,capabilities,metadata,last_verified_at,created_at,updated_at&organization_id=eq.${encodeURIComponent(organizationId)}&channel_id=eq.${encodeURIComponent(channelId)}&order=last_verified_at.desc.nullslast,created_at.asc&limit=20`);
+  return rows.find((entry) => entry.status === "connected" && entry.browser_profile_key)
+    || rows.find((entry) => entry.status === "connected")
+    || rows[0]
+    || null;
 }
 
 async function verifyAndPersistEbaySetup(account) {
@@ -3757,6 +3816,101 @@ async function handleEbayDraft(request, response) {
   }
 }
 
+async function handleKleinanzeigenDraft(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
+  const body = JSON.parse(await readRequestBody(request, 8 * 1024 * 1024));
+  const item = body.item;
+  if (!item?.sku || !item?.title) {
+    sendJson(response, 400, {
+      error: "missing_item",
+      message: "Artikel mit SKU und Titel wird benötigt."
+    });
+    return;
+  }
+
+  try {
+    const account = await channelAccountFor(tenant.activeOrganization.id, "kleinanzeigen");
+    const content = await optimizeKleinanzeigenListingContent(item, account);
+    const kleinanzeigenDraft = buildKleinanzeigenListingPreview({ item, content, account });
+    sendJson(response, 200, {
+      provider: process.env.OPENAI_API_KEY ? "openai-kleinanzeigen-copy-editor" : "deterministic-kleinanzeigen-copy-editor",
+      kleinanzeigenDraft
+    });
+  } catch (error) {
+    sendJson(response, error.status || 500, {
+      error: "kleinanzeigen_preview_failed",
+      message: redactSecret(error.message)
+    });
+  }
+}
+
+async function handlePrepareKleinanzeigenListing(request, response) {
+  const tenant = await requireTenantPermission(request, response, "sales:approve");
+  if (!tenant) return;
+  const body = JSON.parse(await readRequestBody(request, 12 * 1024 * 1024));
+  const item = body.item;
+  const preview = item?.kleinanzeigenDraft;
+  if (!item?.sku || !preview?.title) {
+    sendJson(response, 400, {
+      error: "missing_kleinanzeigen_preview",
+      message: "Erzeuge und prüfe zuerst die Kleinanzeigen-Vorschau."
+    });
+    return;
+  }
+  const missing = (preview.readiness || []).filter((entry) => !entry.ready);
+  if (missing.length || preview.status !== "ready_for_approval") {
+    sendJson(response, 409, {
+      error: "kleinanzeigen_preview_incomplete",
+      message: `Vor der Übergabe fehlt: ${missing.map((entry) => entry.label).join(", ") || "Pflichtangaben"}.`
+    });
+    return;
+  }
+
+  try {
+    const dbItem = await tenantItem(tenant.activeOrganization.id, item);
+    const approved = dbItem.raw_analysis?.uiItem?.approval?.status === "approved";
+    if (!approved) throw httpError(409, "Der Artikel muss vor der Connector-Mission ausdrücklich freigegeben werden.");
+    const account = await channelAccountFor(tenant.activeOrganization.id, "kleinanzeigen");
+    const browserTask = buildKleinanzeigenBrowserTask({ item: { ...item, dbId: dbItem.id }, preview, account });
+    const previous = await supabaseSelect(`/listings?select=*&item_id=eq.${encodeURIComponent(dbItem.id)}&channel_id=eq.kleinanzeigen&status=eq.prepared&order=created_at.desc&limit=1`);
+    const payload = {
+      preview,
+      browserTask,
+      channelAccountId: account.id,
+      preparedAt: new Date().toISOString(),
+      publicationMode: "approval_then_isolated_browser"
+    };
+    const rows = previous[0]
+      ? await supabaseUpdate(`/listings?id=eq.${encodeURIComponent(previous[0].id)}`, {
+        title: preview.title,
+        price: preview.price,
+        payload
+      })
+      : await supabaseInsert("/listings", {
+        item_id: dbItem.id,
+        channel_id: "kleinanzeigen",
+        status: "prepared",
+        title: preview.title,
+        price: preview.price,
+        payload
+      });
+    sendJson(response, previous[0] ? 200 : 201, {
+      provider: "ramrod-kleinanzeigen-browser-connector",
+      prepared: true,
+      reused: Boolean(previous[0]),
+      listing: publicListing(rows[0]),
+      browserTask: redactAgentPayload(browserTask),
+      message: "Die Anzeige ist geprüft und für eine freigabepflichtige Browser-Mission vorbereitet. Sie ist noch nicht öffentlich."
+    });
+  } catch (error) {
+    sendJson(response, error.status || 500, {
+      error: "kleinanzeigen_prepare_failed",
+      message: redactSecret(error.message)
+    });
+  }
+}
+
 async function handlePrepareEbayListing(request, response) {
   const tenant = await requireTenantPermission(request, response, "sales:approve");
   if (!tenant) return;
@@ -3972,6 +4126,49 @@ async function optimizeEbayListingContent(item, category, categoryAspects) {
     return fallback;
   }
   return normalizeEbayListingContent(extractJson(result), item);
+}
+
+async function optimizeKleinanzeigenListingContent(item, account) {
+  const fallback = buildFallbackKleinanzeigenContent(item);
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return fallback;
+  const requestBody = {
+    model,
+    input: [{
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: buildKleinanzeigenListingPrompt(item, {
+          sellerMode: account?.metadata?.sellerMode || account?.metadata?.seller_mode || "unknown"
+        })
+      }]
+    }],
+    max_output_tokens: 1800,
+    text: {
+      ...(isGpt56Model(model) ? { verbosity: "low" } : {}),
+      format: {
+        type: "json_schema",
+        name: "ramrod_kleinanzeigen_listing_content",
+        strict: true,
+        schema: kleinanzeigenListingContentSchema()
+      }
+    },
+    ...(isGpt56Model(model) ? { reasoning: { effort: strategyReasoningEffort } } : {})
+  };
+  const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(requestBody)
+  });
+  const result = await openAiResponse.json().catch(() => ({}));
+  if (!openAiResponse.ok) {
+    console.warn("Kleinanzeigen listing optimizer fallback:", redactSecret(result.error?.message || `OpenAI HTTP ${openAiResponse.status}`));
+    return fallback;
+  }
+  return normalizeKleinanzeigenContent(extractJson(result), item);
 }
 
 async function activeSellerProfile(organizationId) {
@@ -4591,7 +4788,9 @@ function mapUiItemToDb(item, customer, box) {
         script: item.whatnotScript || ""
       },
       listingDraft: item.listingDraft || null,
-      ebayDraft: item.ebayDraft || null
+      ebayDraft: item.ebayDraft || null,
+      kleinanzeigenDraft: item.kleinanzeigenDraft || null,
+      kleinanzeigenListing: item.kleinanzeigenListing || null
     }
   };
   if (multiTenantSchemaAvailable !== false) {
@@ -4606,7 +4805,7 @@ function mapUiItemToDb(item, customer, box) {
   return payload;
 }
 
-function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing = undefined, latestAnalysisJob = null) {
+function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing = undefined, latestAnalysisJob = null, latestKleinanzeigenListing = undefined) {
   const raw = row.raw_analysis || {};
   const ui = raw.uiItem || {};
   const box = boxes.find((entry) => entry.id === row.box_id || entry.dbId === row.box_id);
@@ -4665,6 +4864,10 @@ function mapDbItemToUi(row, boxes = [], latestPriceJob = null, latestEbayListing
     ebayDraft: Object.prototype.hasOwnProperty.call(ui, "ebayDraft")
       ? ui.ebayDraft
       : completedEbayDraft || raw.ebayDraft || null,
+    kleinanzeigenDraft: raw.kleinanzeigenDraft || ui.kleinanzeigenDraft || null,
+    ...(latestKleinanzeigenListing !== undefined
+      ? { kleinanzeigenListing: latestKleinanzeigenListing ? { ...(ui.kleinanzeigenListing || raw.kleinanzeigenListing || {}), ...publicListing(latestKleinanzeigenListing) } : null }
+      : { kleinanzeigenListing: raw.kleinanzeigenListing || ui.kleinanzeigenListing || null }),
     priceCheck: completedPriceCheck || ui.priceCheck || null,
     automationJob: latestPriceJob ? mapWorkerJobToUi(latestPriceJob) : ui.automationJob || null,
     analysisJob: latestAnalysisJob ? mapWorkerJobToUi(latestAnalysisJob) : ui.analysisJob || null,

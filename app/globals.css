@@ -2422,6 +2422,59 @@ img {
   line-height: 1.4;
 }
 
+.kleinanzeigen-draft-card {
+  border-left: 4px solid #2d7d46;
+}
+
+.kleinanzeigen-draft-card .preserve-lines {
+  white-space: pre-line;
+}
+
+.kleinanzeigen-connector {
+  align-items: center;
+  background: #f6f7f8;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 14px;
+}
+
+.kleinanzeigen-connector.ready {
+  background: #f1f8f4;
+  border-color: #add3bd;
+}
+
+.kleinanzeigen-connector > div {
+  min-width: 0;
+}
+
+.kleinanzeigen-connector small,
+.kleinanzeigen-connector strong,
+.kleinanzeigen-connector p {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.kleinanzeigen-connector small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.kleinanzeigen-connector p {
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+.kleinanzeigen-connector .secondary-action,
+.kleinanzeigen-connector .status-pill {
+  flex: 0 0 auto;
+}
+
 .applied-price {
   align-items: center;
   background: #0d0d0d;
@@ -6340,6 +6393,16 @@ img {
 
   .ebay-publish-actions > button {
     justify-content: center;
+    width: 100%;
+  }
+
+  .kleinanzeigen-connector {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .kleinanzeigen-connector .secondary-action,
+  .kleinanzeigen-connector .status-pill {
     width: 100%;
   }
 }
