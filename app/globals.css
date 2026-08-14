@@ -3761,16 +3761,22 @@ img {
   border-radius: 8px;
   display: grid;
   gap: 10px;
-  grid-template-columns: 52px minmax(0, 1fr) 32px;
+  grid-template-columns: 104px minmax(0, 1fr);
   min-width: 0;
   padding: 8px;
 }
 
-.batch-draft-row img {
+.batch-group-photos {
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(2, 50px);
+}
+
+.batch-group-photos img {
   border-radius: 6px;
-  height: 52px;
+  height: 50px;
   object-fit: cover;
-  width: 52px;
+  width: 50px;
 }
 
 .batch-draft-row strong,
@@ -3779,11 +3785,27 @@ img {
   overflow-wrap: anywhere;
 }
 
-.batch-draft-row button {
+.batch-group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  grid-column: 1 / -1;
+}
+
+.batch-group-actions button {
   background: transparent;
-  border: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   color: var(--muted);
-  font-size: 22px;
+  font-size: 11px;
+  font-weight: 850;
+  min-height: 32px;
+  padding: 5px 8px;
+}
+
+.batch-group-actions button:hover {
+  border-color: var(--orange);
+  color: var(--ink);
 }
 
 .review-flow,

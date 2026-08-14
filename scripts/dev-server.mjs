@@ -84,6 +84,11 @@ import {
   recognitionFingerprint,
   scopeAllowsCollectionItem
 } from "./lib/recognition-learning.mjs";
+import {
+  buildPhotoGroupingPrompt,
+  normalizePhotoGroups,
+  photoGroupingSchema
+} from "./lib/photo-grouping.mjs";
 
 loadDotEnv(".env.local");
 
@@ -409,6 +414,11 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && pathname === "/api/recognize-image") {
       await handleRecognizeImage(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/group-collection-photos") {
+      await handleGroupCollectionPhotos(request, response);
       return;
     }
 
@@ -3005,6 +3015,86 @@ async function handleRecognizeImage(request, response) {
   }
 }
 
+async function handleGroupCollectionPhotos(request, response) {
+  const tenant = await requireTenantPermission(request, response, "inventory:write");
+  if (!tenant) return;
+  const body = JSON.parse(await readRequestBody(request, 48 * 1024 * 1024));
+  const images = normalizeCollectionGroupImages(body);
+  if (!images.length) {
+    sendJson(response, 400, { error: "missing_images", message: "Mindestens ein Bild wird benötigt." });
+    return;
+  }
+  if (images.length === 1) {
+    sendJson(response, 200, {
+      provider: "deterministic",
+      groups: [{ imageIndexes: [0], titleHint: "", confidence: 100, reason: "Ein einzelnes Bild." }]
+    });
+    return;
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    sendJson(response, 503, {
+      error: "grouping_not_configured",
+      message: "Die automatische Foto-Gruppierung ist noch nicht konfiguriert."
+    });
+    return;
+  }
+
+  const startedAt = Date.now();
+  const candidateModel = recognitionModel;
+  const requestBody = {
+    model: candidateModel,
+    input: [{
+      role: "user",
+      content: [
+        { type: "input_text", text: buildPhotoGroupingPrompt(images.length) },
+        ...images.flatMap((imageUrl, index) => [
+          { type: "input_text", text: `Bild ${index + 1}` },
+          { type: "input_image", image_url: imageUrl, detail: "low" }
+        ])
+      ]
+    }],
+    max_output_tokens: 1400,
+    text: {
+      ...(isGpt56Model(candidateModel) ? { verbosity: "low" } : {}),
+      format: {
+        type: "json_schema",
+        name: "ramrod_collection_photo_groups",
+        strict: true,
+        schema: photoGroupingSchema(images.length)
+      }
+    },
+    ...(isGpt56Model(candidateModel) ? { reasoning: { effort: recognitionReasoningEffort } } : {})
+  };
+
+  const { response: openAiResponse, body: result } = await fetchJsonUpstream("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(requestBody)
+  }, {
+    label: "OpenAI-Fotogruppierung",
+    retries: 1
+  });
+  if (!openAiResponse.ok) {
+    sendJson(response, openAiResponse.status, {
+      error: result.error?.code || "photo_grouping_failed",
+      message: redactSecret(result.error?.message || "Die Fotos konnten nicht automatisch gruppiert werden.")
+    });
+    return;
+  }
+
+  sendJson(response, 200, {
+    provider: "openai-vision-grouping",
+    model: result.model || candidateModel,
+    durationMs: Date.now() - startedAt,
+    groups: normalizePhotoGroups(extractJson(result), images.length)
+  });
+}
+
 async function handleVisualMatch(request, response) {
   const tenant = await requireTenantPermission(request, response, "inventory:write");
   if (!tenant) return;
@@ -3338,6 +3428,13 @@ function normalizeImageDataUrls(body) {
   ].filter(Boolean);
   const unique = [...new Set(candidates)].slice(0, 6);
   return unique.filter((value) => /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(String(value)));
+}
+
+function normalizeCollectionGroupImages(body) {
+  const candidates = Array.isArray(body.imageDataUrls) ? body.imageDataUrls : [];
+  return candidates
+    .slice(0, 30)
+    .filter((value) => /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(String(value)));
 }
 
 function isGpt56Model(value) {

@@ -1801,6 +1801,93 @@ async function addPhotosToDraft(fileList, { startVaultScan = false } = {}) {
   return true;
 }
 
+async function addBulkCollectionPhotos(fileList) {
+  const files = [...(fileList || [])].filter((file) => String(file.type || "").startsWith("image/")).slice(0, 30);
+  if (!files.length) return false;
+
+  state.recognitionRequestId += 1;
+  state.captureDestination = "vault";
+  state.captureMode = "batch";
+  state.vaultReidentifyItem = "";
+  state.batchDrafts = [];
+  state.batchSummary = null;
+  state.batchProgress = null;
+  state.draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
+  state.recognition = null;
+  state.recognitionMeta = null;
+  state.view = "scan";
+  state.importStatus = `${files.length} Bilder werden für die automatische Zuordnung vorbereitet...`;
+  render();
+
+  const preparedPhotos = [];
+  let failed = 0;
+  for (let index = 0; index < files.length; index += 1) {
+    try {
+      preparedPhotos.push(await prepareImageForAi(files[index]));
+    } catch {
+      failed += 1;
+    }
+    state.importStatus = `${index + 1}/${files.length} Bilder vorbereitet${failed ? ` · ${failed} nicht lesbar` : ""}.`;
+    render();
+  }
+
+  if (!preparedPhotos.length) {
+    state.importStatus = "Keines der ausgewählten Bilder konnte gelesen werden.";
+    render();
+    return false;
+  }
+
+  state.importStatus = `${preparedPhotos.length} Bilder werden jetzt nach zusammengehörigen Exemplaren sortiert...`;
+  render();
+  let groups;
+  let groupingWarning = "";
+  try {
+    const result = await postJson("/api/group-collection-photos", {
+      imageDataUrls: preparedPhotos.map((photo) => photo.dataUrl)
+    });
+    groups = Array.isArray(result.groups) ? result.groups : [];
+  } catch (error) {
+    groupingWarning = error.message;
+    groups = preparedPhotos.map((_, index) => ({
+      imageIndexes: [index],
+      titleHint: "",
+      confidence: 0,
+      reason: "Automatische Gruppierung nicht verfügbar."
+    }));
+  }
+
+  state.batchDrafts = groups.map((group) => {
+    const groupPhotos = (group.imageIndexes || [])
+      .map((index) => preparedPhotos[Number(index)])
+      .filter(Boolean)
+      .slice(0, 6);
+    if (!groupPhotos.length) return null;
+    const draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
+    draft.photos = groupPhotos;
+    draft.photo = groupPhotos[0].dataUrl;
+    draft.photoSetComplete = true;
+    draft.query = String(group.titleHint || "").trim();
+    return {
+      id: makeId(),
+      status: "captured",
+      source: "smart_bulk_upload",
+      grouping: {
+        confidence: Number(group.confidence || 0),
+        reason: String(group.reason || ""),
+        automatic: !groupingWarning
+      },
+      draft
+    };
+  }).filter(Boolean);
+
+  const groupedPhotoCount = state.batchDrafts.reduce((sum, entry) => sum + (entry.draft.photos?.length || 0), 0);
+  state.importStatus = groupingWarning
+    ? `${groupedPhotoCount} Bilder vorbereitet. Die automatische Zuordnung war nicht verfügbar; bitte Gruppen manuell verbinden.`
+    : `${groupedPhotoCount} Bilder wurden zu ${state.batchDrafts.length} vorgeschlagenen Artikeln gruppiert. Bitte Zuordnung prüfen.`;
+  render();
+  return Boolean(state.batchDrafts.length);
+}
+
 function vaultScanView() {
   const reidentifyItem = state.items.find((item) => item.id === state.vaultReidentifyItem);
   const photos = state.draft.photos?.length
@@ -1877,6 +1964,8 @@ function scanView() {
       ? [{ dataUrl: state.draft.photo, quality: null }]
       : [];
   const batchMode = state.captureMode === "batch";
+  const bulkUpload = batchMode && state.batchDrafts.some((entry) => entry.source === "smart_bulk_upload");
+  const batchPhotoTotal = state.batchDrafts.reduce((sum, entry) => sum + (entry.draft.photos?.length || 0), 0);
   const photoLimit = capturePhotoLimit();
   const currentBatchNumber = state.batchDrafts.length + 1;
   const capturedCount = state.batchDrafts.length + (photos.length ? 1 : 0);
@@ -1916,7 +2005,9 @@ function scanView() {
         <button class="${batchMode ? "selected" : ""}" data-capture-mode="batch" type="button">Serienaufnahme</button>
       </div>
       ${batchMode
-        ? `<div class="batch-instruction"><strong>${state.batchDrafts.length} Artikel gespeichert</strong><span>Fotografiere alle Seiten dieses Artikels. Danach „Nächster Artikel“.</span></div>`
+        ? bulkUpload
+          ? `<div class="batch-instruction"><strong>${batchPhotoTotal} Bilder → ${state.batchDrafts.length} vorgeschlagene Artikel</strong><span>Vorderseite, Rückseite, Rücken und Barcode werden automatisch verbunden. Prüfe die Gruppen rechts vor dem Speichern.</span></div>`
+          : `<div class="batch-instruction"><strong>${state.batchDrafts.length} Artikel gespeichert</strong><span>Fotografiere alle Seiten dieses Artikels. Danach „Nächster Artikel“.</span></div>`
         : `<div class="workflow-progress ${vaultCapture ? "vault-progress" : ""}" aria-label="${vaultCapture ? "Sammlungsworkflow" : "Verkaufsworkflow"}">${progressSteps.map((label, index) => `<span class="${activeStep === index + 1 ? "active" : activeStep > index + 1 ? "done" : ""}">${index + 1} ${label}</span>`).join("")}</div>`}
       <label class="photo-drop ${needsPhotoEvidence ? "attention-required" : ""}">${photos[0] ? `<img src="${photos[0].dataUrl}" alt="Artikelvorschau" />` : `<span>${icon("KA")}<strong>${batchMode ? `Artikel ${currentBatchNumber} fotografieren` : "Erstes Foto aufnehmen"}</strong><small>Vorderseite vollständig und gerade</small></span>`}<input id="photo" accept="image/*" capture="environment" type="file" multiple /></label>
       <div class="photo-capture-meta"><span>${photos.length}/${photoLimit} Ansichten</span><strong>${photos.length ? "Weiteres Foto desselben Artikels" : "Kamera oder vorhandene Bilder"}</strong></div>
@@ -1939,6 +2030,7 @@ function scanView() {
 
 function batchCapturePanel() {
   const vaultCapture = state.captureDestination === "vault";
+  const bulkUpload = state.batchDrafts.some((entry) => entry.source === "smart_bulk_upload");
   const progress = state.batchProgress;
   if (state.batchAnalyzing && progress) {
     const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
@@ -1948,16 +2040,16 @@ function batchCapturePanel() {
   }
 
   return `<div class="panel-heading"><div><p>Aufnahmesession</p><h2>${state.batchDrafts.length} Artikel bereit</h2></div>${icon("ST")}</div>
-    <div class="batch-explainer"><strong>${vaultCapture ? "Erst fotografieren, dann gemeinsam ins Inventar übernehmen." : "Erst fotografieren, dann gemeinsam analysieren."}</strong><p>Weitere Ansichten gehören zum aktuellen Artikel. Mit „Nächster Artikel“ beginnt das nächste Objekt.</p></div>
+    <div class="batch-explainer"><strong>${bulkUpload ? "RAMROD hat zusammengehörige Ansichten gruppiert." : vaultCapture ? "Erst fotografieren, dann gemeinsam ins Inventar übernehmen." : "Erst fotografieren, dann gemeinsam analysieren."}</strong><p>${bulkUpload ? "Stimmen Vorder- und Rückseite nicht, kannst du Gruppen trennen oder mit der vorherigen Gruppe verbinden." : "Weitere Ansichten gehören zum aktuellen Artikel. Mit „Nächster Artikel“ beginnt das nächste Objekt."}</p></div>
     ${batchDraftList()}`;
 }
 
 function batchDraftList() {
   if (!state.batchDrafts.length) return `<div class="recognition-empty"><strong>Noch kein Artikel abgeschlossen</strong><p>Fotografiere den ersten Artikel von mehreren Seiten.</p></div>`;
   return `<div class="batch-draft-list">${state.batchDrafts.map((entry, index) => `<article class="batch-draft-row">
-    <img src="${entry.draft.photos[0]?.dataUrl || entry.draft.photo}" alt="Artikel ${index + 1}" />
-    <span><strong>Artikel ${index + 1}</strong><small>${entry.draft.photos.length} Ansicht${entry.draft.photos.length === 1 ? "" : "en"} · ${escapeHtml(batchEntryStatus(entry.status))}</small></span>
-    ${state.batchAnalyzing ? "" : `<button data-remove-batch="${entry.id}" type="button" title="Artikel aus Session entfernen">×</button>`}
+    <div class="batch-group-photos">${entry.draft.photos.slice(0, 4).map((photo, photoIndex) => `<img src="${photo.dataUrl}" alt="Artikel ${index + 1}, Ansicht ${photoIndex + 1}" />`).join("")}</div>
+    <span><strong>${escapeHtml(entry.draft.query || `Artikel ${index + 1}`)}</strong><small>${entry.draft.photos.length} Foto${entry.draft.photos.length === 1 ? "" : "s"} · ${entry.grouping?.automatic ? `${entry.grouping.confidence}% Zuordnung · ` : ""}${escapeHtml(batchEntryStatus(entry.status))}</small></span>
+    ${state.batchAnalyzing ? "" : `<div class="batch-group-actions">${index ? `<button data-merge-batch="${entry.id}" type="button">Mit vorherigem verbinden</button>` : ""}${entry.draft.photos.length > 1 ? `<button data-split-batch="${entry.id}" type="button">Fotos trennen</button>` : ""}<button data-remove-batch="${entry.id}" type="button">Entfernen</button></div>`}
   </article>`).join("")}</div>`;
 }
 
@@ -2355,11 +2447,12 @@ function vaultView() {
       <div><p>RAMROD VAULT</p><h2>${sharedScope ? "Freigegebene Sammlungen" : "Deine Spiele- und Filmsammlung"}</h2><span>${sharedScope ? "Du siehst nur die Bereiche, die andere Personen ausdrücklich mit dir geteilt haben." : "Inventar, Leihstatus und Wert an einem Ort. Verkauft wird erst nach deinem Klick."}</span></div>
       ${sharedScope ? "" : `<div class="vault-hero-actions">
         <button class="secondary-action" data-vault-new type="button">${icon("NE")}Manuell hinzufügen</button>
-        <button class="secondary-action" data-vault-upload type="button">${icon("UP")}Bilder auswählen</button>
+        <button class="secondary-action" data-vault-upload type="button">${icon("UP")}Fotos eines Artikels</button>
+        <button class="secondary-action" data-vault-bulk-upload type="button">${icon("ST")}Viele Artikel hochladen</button>
         <button class="primary-action" data-vault-scan type="button">${icon("KA")}Kamera öffnen</button>
       </div>`}
     </header>
-    ${sharedScope ? "" : `<input class="photo-source-input" id="vault-start-upload" accept="image/*" type="file" multiple />`}
+    ${sharedScope ? "" : `<input class="photo-source-input" id="vault-start-upload" accept="image/*" type="file" multiple /><input class="photo-source-input" id="vault-bulk-upload" accept="image/*" type="file" multiple />`}
     <nav class="vault-scope-tabs" aria-label="Sammlungsbereich">
       <button class="${sharedScope ? "" : "active"}" data-vault-scope="mine" type="button">${icon("SA")}Meine Sammlung <span>${ownItems.length}</span></button>
       <button class="${sharedScope ? "active" : ""}" data-vault-scope="shared" type="button">${icon("FR")}Mit mir geteilt <span>${sharedItems.length}</span></button>
@@ -2506,7 +2599,7 @@ function vaultEntryForm() {
 function vaultEmptyState(importable) {
   return `<section class="vault-empty">
     <span>${icon("SA")}</span><div><p>Dein Vault ist bereit</p><h3>Beginne mit dem ersten Spiel oder Film</h3><small>Fotografiere den Artikel oder übernimm vorhandene RAMROD-Datensätze. Nichts wird automatisch angeboten.</small></div>
-    <div class="vault-empty-actions"><button class="primary-action" data-vault-scan type="button">${icon("KA")}Kamera öffnen</button><button class="secondary-action" data-vault-upload type="button">${icon("UP")}Bilder auswählen</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
+    <div class="vault-empty-actions"><button class="primary-action" data-vault-scan type="button">${icon("KA")}Kamera öffnen</button><button class="secondary-action" data-vault-upload type="button">${icon("UP")}Fotos eines Artikels</button><button class="secondary-action" data-vault-bulk-upload type="button">${icon("ST")}Viele Artikel hochladen</button><button class="secondary-action" data-vault-new type="button">Manuell erfassen</button></div>
   </section>${importable.length ? vaultImportStrip(importable) : ""}`;
 }
 
@@ -4121,6 +4214,14 @@ function bindEvents() {
     event.target.value = "";
     await addPhotosToDraft(files, { startVaultScan: true });
   });
+  document.querySelectorAll("[data-vault-bulk-upload]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("#vault-bulk-upload")?.click();
+  }));
+  document.querySelector("#vault-bulk-upload")?.addEventListener("change", async (event) => {
+    const files = [...(event.target.files || [])];
+    event.target.value = "";
+    await addBulkCollectionPhotos(files);
+  });
   document.querySelector("[data-vault-back]")?.addEventListener("click", () => {
     state.recognitionRequestId += 1;
     state.draft = createEmptyDraft(state.draft.boxId || boxes[0]?.id || "VLT-001");
@@ -5199,6 +5300,52 @@ function bindEvents() {
     if (state.batchAnalyzing) return;
     state.batchDrafts = state.batchDrafts.filter((entry) => entry.id !== button.dataset.removeBatch);
     state.importStatus = `${state.batchDrafts.length} Artikel in der Aufnahmesession.`;
+    render();
+  }));
+
+  document.querySelectorAll("[data-merge-batch]").forEach((button) => button.addEventListener("click", () => {
+    if (state.batchAnalyzing) return;
+    const index = state.batchDrafts.findIndex((entry) => entry.id === button.dataset.mergeBatch);
+    if (index < 1) return;
+    const previous = state.batchDrafts[index - 1];
+    const current = state.batchDrafts[index];
+    const photos = [...(previous.draft.photos || []), ...(current.draft.photos || [])];
+    if (photos.length > 6) {
+      state.importStatus = "Eine Artikelgruppe kann höchstens sechs Ansichten enthalten.";
+      render();
+      return;
+    }
+    previous.draft.photos = photos;
+    previous.draft.photo = photos[0]?.dataUrl || "";
+    previous.draft.photoSetComplete = true;
+    previous.draft.query = previous.draft.query || current.draft.query || "";
+    previous.grouping = { confidence: 100, reason: "Vom Nutzer zusammengeführt.", automatic: false };
+    state.batchDrafts.splice(index, 1);
+    state.importStatus = `Gruppen verbunden. ${state.batchDrafts.length} Artikel bleiben zur Prüfung.`;
+    render();
+  }));
+
+  document.querySelectorAll("[data-split-batch]").forEach((button) => button.addEventListener("click", () => {
+    if (state.batchAnalyzing) return;
+    const index = state.batchDrafts.findIndex((entry) => entry.id === button.dataset.splitBatch);
+    if (index === -1) return;
+    const entry = state.batchDrafts[index];
+    const replacements = (entry.draft.photos || []).map((photo) => {
+      const draft = cloneCaptureDraft(entry.draft);
+      draft.photos = [photo];
+      draft.photo = photo.dataUrl;
+      draft.photoSetComplete = true;
+      draft.query = "";
+      return {
+        id: makeId(),
+        status: "captured",
+        source: "smart_bulk_upload",
+        grouping: { confidence: 100, reason: "Vom Nutzer getrennt.", automatic: false },
+        draft
+      };
+    });
+    state.batchDrafts.splice(index, 1, ...replacements);
+    state.importStatus = `Fotos getrennt. ${state.batchDrafts.length} Artikel stehen jetzt zur Prüfung.`;
     render();
   }));
 
